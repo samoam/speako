@@ -1,0 +1,1372 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Speako</title>
+  <style>
+    :root {
+      --bg: #0f0f11; --panel: #17171a; --border: #2a2a2e; --text: #e8e8ea; --muted: #8a8a92;
+      --accent: #6ab0ff; --accent-dim: #2c5a8c; --rec: #f0555f; --ok: #58c27d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+      display: flex;
+    }
+    input, select, button, textarea { font: inherit; color: inherit; }
+
+    /* ---------- Sidebar ---------- */
+    #sidebar {
+      width: 300px; min-width: 300px; background: var(--panel); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    #sidebarHeader { padding: 1rem 1rem 0.75rem; border-bottom: 1px solid var(--border); }
+    #sidebarHeader h1 { font-size: 1.05rem; margin: 0 0 0.85rem; display: flex; align-items: center; gap: 0.4rem; }
+    #sidebarHeader h1::before { content: '🎙️'; font-size: 1.1rem; }
+
+    #newSessionBox { display: flex; flex-direction: column; gap: 0.45rem; }
+    #nameInput, #languageSelect {
+      padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); width: 100%;
+    }
+    #nameInput:focus, #languageSelect:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .primary-btn {
+      padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
+      background: #232327; color: var(--text); font-weight: 600; width: 100%;
+    }
+    .primary-btn:hover { background: #2a2a2f; }
+    #startBtn { border-color: var(--ok); }
+    #stopBtn { border-color: var(--rec); }
+
+    #sessionListHeader {
+      padding: 0.75rem 1rem 0.4rem; font-size: 0.72rem; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--muted);
+    }
+    #sessionList { flex: 1; overflow-y: auto; padding: 0 0.5rem 1rem; }
+    .session-card {
+      padding: 0.65rem 0.7rem; border-radius: 8px; margin-bottom: 0.3rem; cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .session-card:hover { background: #1f1f24; }
+    .session-card.active { background: #1c2a38; border-color: var(--accent-dim); }
+    .session-card-top { display: flex; align-items: center; gap: 0.4rem; }
+    .session-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+    .session-dot.recording { background: var(--rec); animation: pulse 1.4s infinite; }
+    .session-dot.diarized { background: var(--accent); }
+    .session-name { font-size: 0.88rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .session-meta { font-size: 0.73rem; color: var(--muted); margin-top: 0.2rem; margin-left: 0.65rem; }
+    .session-delete {
+      background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.1rem 0.35rem;
+      border-radius: 4px; font-size: 0.85rem; opacity: 0; flex-shrink: 0;
+    }
+    .session-card:hover .session-delete { opacity: 1; }
+    .session-delete:hover { color: var(--rec); background: #2a1f21; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .empty-list { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0.6rem; }
+
+    /* ---------- Main panel ---------- */
+    #main { flex: 1; display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+    #mainHeader {
+      padding: 1.1rem 1.5rem 0.85rem; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 1.5rem;
+    }
+    #mainHeaderText { flex: 1; min-width: 0; }
+    #mainTitle {
+      font-size: 1.25rem; font-weight: 600; margin: 0; outline: none; cursor: text;
+      border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: -0.3rem; display: inline-block; max-width: 100%;
+    }
+    #mainTitle:hover { background: #1c1c20; }
+    #mainTitle:focus { background: #1c1c20; box-shadow: 0 0 0 1px var(--accent); }
+    #mainMeta { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
+    #mainMeta.recording { color: var(--rec); }
+    #mainMeta.recording::before { content: '● '; }
+
+    #toolbar { display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .tool-btn {
+      padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; cursor: pointer;
+    }
+    .tool-btn:hover:not(:disabled) { background: #27272c; }
+    .tool-btn:disabled { opacity: 0.35; cursor: default; }
+    #deleteBtn { color: var(--rec); border-color: #4a2a2c; }
+    #deleteBtn:hover:not(:disabled) { background: #2a1f21; }
+
+    #waveformCanvas {
+      display: none; width: 260px; height: 40px; flex-shrink: 0;
+      background: #0b0b0d; border: 1px solid var(--border); border-radius: 6px;
+    }
+    #tabBar { display: flex; gap: 0.25rem; padding: 0 1.5rem; border-bottom: 1px solid var(--border); }
+    .tab-btn {
+      padding: 0.6rem 0.9rem; border: none; background: none; color: var(--muted); cursor: pointer;
+      border-bottom: 2px solid transparent; font-weight: 500; font-size: 0.9rem;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    #summaryWrap, #actionItemsWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
+    #transcriptWrap { flex: 1; display: flex; min-height: 0; }
+    #transcriptMain { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 0; }
+    #panelResizer {
+      width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative;
+    }
+    #panelResizer::after {
+      content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border);
+    }
+    #panelResizer:hover::after, #panelResizer.dragging::after { left: 0; width: 5px; background: var(--accent-dim); }
+    body.panel-resizing { cursor: col-resize; user-select: none; }
+    #suggestionsPanel {
+      width: 340px; min-width: 220px; flex-shrink: 0; overflow-y: auto;
+      padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem;
+    }
+    #suggestionsPanelHeader, #triggersPanelHeader { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    #triggersPanelHeader { margin-top: 0.6rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+    .suggestion-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; background: #17171a; }
+    .suggestion-card.resolved { opacity: 0.45; }
+    .suggestion-category {
+      font-size: 0.66rem; text-transform: uppercase; padding: 0.1rem 0.4rem; border-radius: 4px;
+      background: #232733; color: var(--accent); display: inline-block; margin-bottom: 0.4rem;
+    }
+    .suggestion-text { font-size: 0.9rem; line-height: 1.4; }
+    .suggestion-citation { font-size: 0.72rem; color: var(--muted); margin-top: 0.4rem; }
+    .suggestion-actions { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+    .suggestion-actions button {
+      flex: 1; padding: 0.3rem; border-radius: 5px; border: 1px solid var(--border); background: #1f1f23;
+      cursor: pointer; font-size: 0.78rem;
+    }
+    .suggestion-actions button.accept:hover:not(:disabled) { border-color: var(--ok); color: var(--ok); }
+    .suggestion-actions button.dismiss:hover:not(:disabled) { border-color: var(--rec); color: var(--rec); }
+    .suggestion-actions button:disabled { opacity: 0.4; cursor: default; }
+    .suggestions-empty { color: var(--muted); font-size: 0.85rem; }
+    .fact-check-card { border: 1px solid #5a2a2a; border-radius: 8px; padding: 0.7rem; background: #241716; }
+    .fact-check-card.resolved { opacity: 0.45; }
+    .fact-check-label {
+      font-size: 0.66rem; text-transform: uppercase; padding: 0.1rem 0.4rem; border-radius: 4px;
+      background: #3a1f1f; color: var(--rec); display: inline-block; margin-bottom: 0.4rem;
+    }
+    .fact-check-row { font-size: 0.85rem; margin-top: 0.3rem; }
+    .fact-check-row .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; display: block; }
+    .fact-check-source { font-size: 0.72rem; color: var(--muted); margin-top: 0.4rem; }
+
+    #qaWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
+    #qaAskRow { display: flex; gap: 0.5rem; max-width: 700px; margin-bottom: 1.25rem; }
+    #qaInput {
+      flex: 1; padding: 0.55rem 0.7rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text);
+    }
+    #qaInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #qaAskBtn { padding: 0.55rem 1rem; border-radius: 6px; border: 1px solid var(--border); background: #232327; cursor: pointer; }
+    #qaAskBtn:disabled { opacity: 0.4; cursor: default; }
+    .qa-pair { max-width: 700px; margin-bottom: 1.2rem; }
+    .qa-question { font-weight: 600; margin-bottom: 0.3rem; }
+    .qa-answer { line-height: 1.5; white-space: pre-wrap; }
+    .qa-sources { font-size: 0.72rem; color: var(--muted); margin-top: 0.4rem; }
+    .trigger-row {
+      border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; background: #17171a; margin-bottom: 0.6rem;
+    }
+    .trigger-row-main { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+    .trigger-category {
+      font-size: 0.66rem; text-transform: uppercase; padding: 0.1rem 0.4rem; border-radius: 4px;
+      background: #232733; color: var(--accent); flex-shrink: 0;
+    }
+    .trigger-reason { flex-basis: 100%; font-size: 0.88rem; line-height: 1.4; order: 3; }
+    .trigger-meta { color: var(--muted); font-size: 0.72rem; flex-shrink: 0; margin-left: auto; }
+    .trigger-claim {
+      display: flex; align-items: center; gap: 0.5rem; margin-top: 0.35rem; padding-left: 0.1rem;
+    }
+    .trigger-claim-text { flex: 1; font-size: 0.85rem; color: var(--muted); font-style: italic; }
+    .claim-edit, .claim-save, .claim-cancel {
+      font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
+      background: #232327; color: inherit; cursor: pointer; flex-shrink: 0;
+    }
+    .claim-input {
+      flex: 1; font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
+      background: #1a1a1d; color: inherit; font-family: inherit;
+    }
+    .claim-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .trigger-claim-edit-wrap { margin-top: 0.35rem; }
+    .trigger-claim-original {
+      font-size: 0.78rem; color: var(--muted); padding-left: 0.1rem; margin-bottom: 0.3rem;
+    }
+    .trigger-claim-original .label {
+      font-size: 0.65rem; text-transform: uppercase; color: var(--muted); opacity: 0.7; margin-right: 0.4rem;
+    }
+    .factcheck-proof {
+      display: flex; align-items: baseline; gap: 0.5rem; margin-top: 0.35rem; padding: 0.4rem 0.6rem;
+      border-radius: 4px; background: #1c3a2a; border: 1px solid #2a5a3d;
+    }
+    .factcheck-proof-label { font-size: 0.68rem; text-transform: uppercase; color: var(--ok); flex-shrink: 0; }
+    .factcheck-proof-text { flex: 1; font-size: 0.85rem; }
+    .factcheck-proof-source { font-size: 0.72rem; color: var(--muted); flex-shrink: 0; }
+    .factcheck-badge {
+      font-size: 0.68rem; padding: 0.15rem 0.5rem; border-radius: 4px; flex-shrink: 0; white-space: nowrap;
+    }
+    .factcheck-badge.fc-pending { background: #2a2a2e; color: var(--muted); }
+    .factcheck-badge.fc-match { background: #1c3a2a; color: var(--ok); }
+    .factcheck-badge.fc-conflict { background: #3a1c1c; color: #e05a5a; }
+    .factcheck-badge.fc-insufficient { background: #2a2a2e; color: var(--muted); }
+    .factcheck-badge.fc-skipped { background: #232327; color: var(--muted); opacity: 0.7; }
+    .factcheck-badge.fc-error { background: #3a1c1c; color: #e0a05a; }
+    .factcheck-badge[title] { cursor: help; }
+    .summary-section { max-width: 760px; margin-bottom: 1.4rem; }
+    .summary-section h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.4rem; }
+    .summary-section p { margin: 0; line-height: 1.6; white-space: pre-wrap; }
+    .summary-meta { font-size: 0.75rem; color: var(--muted); margin-top: 1.5rem; }
+    .ai-table { width: 100%; max-width: 900px; border-collapse: collapse; }
+    .ai-table th { text-align: left; font-size: 0.72rem; text-transform: uppercase; color: var(--muted); padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+    .ai-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 0.9rem; }
+    .ai-table tr.done td { opacity: 0.5; text-decoration: line-through; }
+    .ai-badge { font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px; text-transform: uppercase; }
+    .ai-badge.explicit { background: #1c3a2a; color: var(--ok); }
+    .ai-badge.inferred { background: #3a331c; color: #e0b84a; }
+    #emptyState { color: var(--muted); font-size: 0.95rem; margin-top: 2rem; text-align: center; }
+    .segment { display: flex; gap: 0.65rem; margin: 0.9rem 0; line-height: 1.5; max-width: 760px; }
+    .avatar {
+      width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center;
+      justify-content: center; font-size: 0.78rem; font-weight: 700; color: #0f0f11;
+    }
+    .segment-body { flex: 1; min-width: 0; }
+    .segment-head { display: flex; align-items: baseline; gap: 0.5rem; }
+    .segment-speaker { font-weight: 600; font-size: 0.9rem; }
+    .segment-ts { color: var(--muted); font-size: 0.72rem; }
+    .sentiment-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+    .sentiment-dot.pos { background: var(--ok); }
+    .sentiment-dot.neg { background: var(--rec); }
+    .sentiment-dot.neu { background: var(--muted); }
+    .segment-text { margin-top: 0.15rem; }
+    .interim .segment-text { opacity: 0.55; font-style: italic; }
+
+    .avatar.You, .avatar.c0 { background: #6cf; }
+    .avatar.Others, .avatar.c1 { background: #fc6; }
+    .avatar.c2 { background: #9f6; }
+    .avatar.c3 { background: #f9f; }
+    .avatar.c4 { background: #9cf; }
+    .avatar.c5 { background: #fa6; }
+    .segment-speaker.You, .segment-speaker.c0 { color: #6cf; }
+    .segment-speaker.Others, .segment-speaker.c1 { color: #fc6; }
+    .segment-speaker.c2 { color: #9f6; }
+    .segment-speaker.c3 { color: #f9f; }
+    .segment-speaker.c4 { color: #9cf; }
+    .segment-speaker.c5 { color: #fa6; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <div id="sidebarHeader">
+      <h1>Speako</h1>
+      <div id="newSessionBox">
+        <input id="nameInput" placeholder="Session name (optional)" />
+        <select id="languageSelect"></select>
+        <button id="startBtn" class="primary-btn">● Start new session</button>
+        <button id="stopBtn" class="primary-btn" hidden>■ Stop recording</button>
+      </div>
+    </div>
+    <div id="sessionListHeader">Sessions</div>
+    <div id="sessionList"></div>
+  </div>
+
+  <div id="main">
+    <div id="mainHeader">
+      <div id="mainHeaderText">
+        <h2 id="mainTitle" contenteditable="true" spellcheck="false">No session selected</h2>
+        <div id="mainMeta">Start a new session or pick one from the list</div>
+      </div>
+      <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
+    </div>
+    <div id="toolbar">
+      <button id="saveBtn" class="tool-btn" disabled>Save transcript</button>
+      <button id="identifyBtn" class="tool-btn" disabled>Identify speakers</button>
+      <button id="summarizeBtn" class="tool-btn" disabled>Generate summary</button>
+      <button id="clearBtn" class="tool-btn">Clear view</button>
+      <button id="deleteBtn" class="tool-btn" disabled>Delete session</button>
+    </div>
+    <div id="tabBar">
+      <button class="tab-btn active" data-tab="transcript">Transcript</button>
+      <button class="tab-btn" data-tab="summary">Summary</button>
+      <button class="tab-btn" data-tab="actionItems">Action Items</button>
+      <button class="tab-btn" data-tab="qa">Q&amp;A</button>
+    </div>
+    <div id="transcriptWrap">
+      <div id="transcriptMain">
+        <div id="emptyState">Nothing here yet.</div>
+        <div id="transcript"></div>
+      </div>
+      <div id="panelResizer"></div>
+      <div id="suggestionsPanel">
+        <div id="suggestionsPanelHeader">Suggestions</div>
+        <div id="suggestionsList"></div>
+        <div id="triggersPanelHeader">Triggers</div>
+        <div id="triggersContent"></div>
+      </div>
+    </div>
+    <div id="summaryWrap">
+      <div id="summaryContent"></div>
+    </div>
+    <div id="actionItemsWrap">
+      <div id="actionItemsContent"></div>
+    </div>
+    <div id="qaWrap">
+      <div id="qaAskRow">
+        <input id="qaInput" placeholder="Ask a question grounded in this meeting + past sessions/Bitbucket…" />
+        <button id="qaAskBtn">Ask</button>
+      </div>
+      <div id="qaContent"></div>
+    </div>
+  </div>
+
+  <script>
+    const sessionList = document.getElementById('sessionList');
+    const nameInput = document.getElementById('nameInput');
+    const languageSelect = document.getElementById('languageSelect');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const mainTitle = document.getElementById('mainTitle');
+    const mainMeta = document.getElementById('mainMeta');
+    const saveBtn = document.getElementById('saveBtn');
+    const identifyBtn = document.getElementById('identifyBtn');
+    const summarizeBtn = document.getElementById('summarizeBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const transcriptEl = document.getElementById('transcript');
+    const emptyState = document.getElementById('emptyState');
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const transcriptWrap = document.getElementById('transcriptWrap');
+    const summaryWrap = document.getElementById('summaryWrap');
+    const actionItemsWrap = document.getElementById('actionItemsWrap');
+    const summaryContent = document.getElementById('summaryContent');
+    const actionItemsContent = document.getElementById('actionItemsContent');
+    const triggersContent = document.getElementById('triggersContent');
+    const suggestionsList = document.getElementById('suggestionsList');
+    const qaWrap = document.getElementById('qaWrap');
+    const qaInput = document.getElementById('qaInput');
+    const qaAskBtn = document.getElementById('qaAskBtn');
+    const qaContent = document.getElementById('qaContent');
+    const panelResizer = document.getElementById('panelResizer');
+    const suggestionsPanel = document.getElementById('suggestionsPanel');
+
+    // ---------- Resizable suggestions/triggers panel ----------
+    (function setupPanelResizer() {
+      const MIN_WIDTH = 220;
+      const MAX_WIDTH = 640;
+      const STORAGE_KEY = 'speako.suggestionsPanelWidth';
+
+      const saved = Number(localStorage.getItem(STORAGE_KEY));
+      if (saved) suggestionsPanel.style.width = `${Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, saved))}px`;
+
+      let dragging = false;
+
+      panelResizer.addEventListener('mousedown', (e) => {
+        dragging = true;
+        panelResizer.classList.add('dragging');
+        document.body.classList.add('panel-resizing');
+        e.preventDefault();
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const wrapRect = transcriptWrap.getBoundingClientRect();
+        const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, wrapRect.right - e.clientX));
+        suggestionsPanel.style.width = `${width}px`;
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        panelResizer.classList.remove('dragging');
+        document.body.classList.remove('panel-resizing');
+        localStorage.setItem(STORAGE_KEY, parseInt(suggestionsPanel.style.width, 10));
+      });
+    })();
+
+    // ---------- Live audio waveform ----------
+    // Purely cosmetic (Improvement_LiveAudioWaveform.md): draws the
+    // downsampled min/max envelope points broadcast by the server (see
+    // src/audio-capture/waveform.ts) as a scrolling oscillogram. Only shown
+    // while viewing the session that's actually recording right now — there's
+    // no live audio for a past session, so it's hidden otherwise.
+    const waveformCanvas = document.getElementById('waveformCanvas');
+    const waveformCtx = waveformCanvas.getContext('2d');
+    const WAVEFORM_PX_PER_POINT = 3;
+    let waveformPoints = []; // {min, max}, oldest first
+
+    // Auto-gain: normal speaking volume only uses a few percent of the full
+    // int16 range (confirmed empirically — real envelope values came back
+    // around ±0.02 to ±0.04), so drawing at literal scale looks nearly flat.
+    // Track a decaying peak and scale drawing relative to it instead of a
+    // fixed multiplier, so the wave stays visually readable regardless of
+    // mic gain/distance — same idea as auto-gain on a VU meter. The floor
+    // keeps near-silence from being amplified into visual noise, and the
+    // gain cap keeps a sudden loud spike from clipping the very next frame
+    // (before the peak has had a chance to catch up).
+    let waveformAutoGainPeak = 0.02;
+    const WAVEFORM_GAIN_FLOOR = 0.02;
+    const WAVEFORM_GAIN_DECAY = 0.995;
+    const WAVEFORM_MAX_GAIN = 30;
+
+    function resizeWaveformCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = waveformCanvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      waveformCanvas.width = Math.round(rect.width * dpr);
+      waveformCanvas.height = Math.round(rect.height * dpr);
+      waveformCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawWaveform();
+    }
+    window.addEventListener('resize', resizeWaveformCanvas);
+
+    function drawWaveform() {
+      const rect = waveformCanvas.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      waveformCtx.clearRect(0, 0, width, height);
+      const centerY = height / 2;
+      const halfHeight = height / 2 - 2;
+      const maxPoints = Math.ceil(width / WAVEFORM_PX_PER_POINT);
+      const visible = waveformPoints.slice(-maxPoints);
+      const startX = width - visible.length * WAVEFORM_PX_PER_POINT;
+      const gain = Math.min(WAVEFORM_MAX_GAIN, 1 / waveformAutoGainPeak);
+      waveformCtx.strokeStyle = '#6ab0ff';
+      waveformCtx.lineWidth = 1;
+      waveformCtx.beginPath();
+      visible.forEach((p, i) => {
+        const x = startX + i * WAVEFORM_PX_PER_POINT;
+        const max = Math.max(-1, Math.min(1, p.max * gain));
+        const min = Math.max(-1, Math.min(1, p.min * gain));
+        waveformCtx.moveTo(x, centerY - max * halfHeight);
+        waveformCtx.lineTo(x, centerY - min * halfHeight);
+      });
+      waveformCtx.stroke();
+    }
+
+    function pushWaveformEnvelope(envelope) {
+      const maxPoints = Math.ceil(waveformCanvas.getBoundingClientRect().width / WAVEFORM_PX_PER_POINT) + 5;
+      let batchPeak = 0;
+      for (let i = 0; i < envelope.length; i += 2) {
+        const min = envelope[i];
+        const max = envelope[i + 1];
+        waveformPoints.push({ min, max });
+        batchPeak = Math.max(batchPeak, Math.abs(min), Math.abs(max));
+      }
+      waveformAutoGainPeak = Math.max(batchPeak, waveformAutoGainPeak * WAVEFORM_GAIN_DECAY, WAVEFORM_GAIN_FLOOR);
+      if (waveformPoints.length > maxPoints) waveformPoints = waveformPoints.slice(-maxPoints);
+      drawWaveform();
+    }
+
+    function clearWaveform() {
+      waveformPoints = [];
+      waveformAutoGainPeak = WAVEFORM_GAIN_FLOOR;
+      waveformCtx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+    }
+
+    function updateWaveformVisibility() {
+      const show = !!(activeSessionId && activeSessionId === liveSessionId);
+      waveformCanvas.style.display = show ? 'block' : 'none';
+      if (show) resizeWaveformCanvas();
+    }
+
+    let interimEl = null;
+    let liveSessionId = null; // the session actually recording right now, if any
+    let activeSessionId = null; // the session currently shown in the main panel
+    let sessions = []; // cached list from GET /api/sessions
+    let currentSummary = null;
+    let currentActionItems = [];
+    let currentTriggers = [];
+    let currentSuggestions = [];
+    let currentFactChecks = [];
+    let currentQueries = [];
+    const speakerClassColors = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+    let speakerClassMap = new Map();
+
+    function speakerClassFor(name) {
+      if (name === 'You' || name === 'Others') return name;
+      if (!speakerClassMap.has(name)) {
+        speakerClassMap.set(name, speakerClassColors[speakerClassMap.size % speakerClassColors.length]);
+      }
+      return speakerClassMap.get(name);
+    }
+
+    function initialFor(name) {
+      if (name === 'You') return 'Y';
+      if (name === 'Others') return 'O';
+      const match = name.match(/(\d+)/);
+      return match ? match[1] : name.charAt(0).toUpperCase();
+    }
+
+    fetch('/api/languages')
+      .then((res) => res.json())
+      .then((languages) => {
+        languageSelect.innerHTML = languages.map((l) => `<option value="${l.code}">${l.label}</option>`).join('');
+      });
+
+    function fmt(ms) {
+      const s = Math.floor(ms / 1000);
+      return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    function toDate(sqliteUtc) {
+      return sqliteUtc ? new Date(sqliteUtc.replace(' ', 'T') + 'Z') : null;
+    }
+
+    function relativeTime(sqliteUtc) {
+      const d = toDate(sqliteUtc);
+      if (!d) return '';
+      const diffSec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+      if (diffSec < 60) return 'just now';
+      const diffMin = Math.round(diffSec / 60);
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const diffHr = Math.round(diffMin / 60);
+      if (diffHr < 24) return `${diffHr}h ago`;
+      const diffDay = Math.round(diffHr / 24);
+      if (diffDay < 7) return `${diffDay}d ago`;
+      return d.toLocaleDateString();
+    }
+
+    function displayName(session) {
+      if (session.name) return session.name;
+      const d = toDate(session.startedAt);
+      return d ? `Session — ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : 'Untitled session';
+    }
+
+    function sessionMetaLabel(s) {
+      if (!s.endedAt) return 'recording…';
+      const parts = [];
+      if (s.diarizedAt) parts.push('speakers identified');
+      if (s.hasSummary) parts.push('summarized');
+      return parts.length ? parts.join(', ') : 'stopped';
+    }
+
+    // ---------- Sidebar list ----------
+
+    function refreshSessions() {
+      return fetch('/api/sessions')
+        .then((res) => res.json())
+        .then((list) => {
+          sessions = list;
+          renderSessionList();
+        });
+    }
+
+    function renderSessionList() {
+      sessionList.innerHTML = '';
+      if (sessions.length === 0) {
+        sessionList.innerHTML = '<div class="empty-list">No sessions yet — start one above.</div>';
+        return;
+      }
+      for (const s of sessions) {
+        const card = document.createElement('div');
+        card.className = 'session-card' + (s.id === activeSessionId ? ' active' : '');
+        const dotClass = !s.endedAt ? 'recording' : s.diarizedAt ? 'diarized' : '';
+        card.innerHTML = `
+          <div class="session-card-top">
+            <span class="session-dot ${dotClass}"></span>
+            <span class="session-name">${displayName(s)}</span>
+            <button class="session-delete" title="Delete session">✕</button>
+          </div>
+          <div class="session-meta">${relativeTime(s.startedAt)} · ${s.segmentCount} segment${s.segmentCount === 1 ? '' : 's'} · ${sessionMetaLabel(s)}</div>
+        `;
+        card.addEventListener('click', () => openSession(s.id));
+        card.querySelector('.session-delete').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteSessionById(s.id, displayName(s));
+        });
+        sessionList.appendChild(card);
+      }
+    }
+
+    // ---------- Main panel ----------
+
+    function openSession(id) {
+      activeSessionId = id;
+      renderSessionList();
+      switchTab('transcript');
+      clearWaveform();
+      updateWaveformVisibility();
+
+      fetch(`/api/sessions/${id}/segments`)
+        .then((res) => res.json())
+        .then((segments) => {
+          const session = sessions.find((s) => s.id === id);
+          setMainHeader(session);
+          renderFullTranscript(segments);
+          saveBtn.disabled = false;
+          identifyBtn.disabled = !session || !session.endedAt;
+          summarizeBtn.disabled = !session || !session.endedAt;
+          deleteBtn.disabled = !session || !session.endedAt;
+
+          fetch(`/api/sessions/${id}/sentiment`)
+            .then((r) => r.json())
+            .then((scores) => scores.forEach((s) => applySentiment(s.speaker, s.startMs, s.score)));
+        });
+
+      fetch(`/api/sessions/${id}/summary`)
+        .then((res) => res.json())
+        .then(({ summary, actionItems }) => {
+          renderSummary(summary);
+          renderActionItems(actionItems);
+        });
+
+      fetch(`/api/sessions/${id}/triggers`)
+        .then((res) => res.json())
+        .then((triggers) => renderTriggers(triggers));
+
+      fetch(`/api/sessions/${id}/suggestions`)
+        .then((res) => res.json())
+        .then((suggestions) => renderSuggestions(suggestions));
+
+      fetch(`/api/sessions/${id}/fact-checks`)
+        .then((res) => res.json())
+        .then((factChecks) => renderFactChecks(factChecks));
+
+      fetch(`/api/sessions/${id}/queries`)
+        .then((res) => res.json())
+        .then((queries) => renderQueries(queries));
+    }
+
+    function setMainHeader(session) {
+      if (!session) return;
+      mainTitle.textContent = displayName(session);
+      const recording = !session.endedAt;
+      mainMeta.classList.toggle('recording', recording);
+      mainMeta.textContent = recording
+        ? 'Recording…'
+        : `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`;
+    }
+
+    mainTitle.addEventListener('focus', () => {
+      if (mainTitle.textContent === 'No session selected') mainTitle.textContent = '';
+    });
+    mainTitle.addEventListener('blur', () => {
+      if (!activeSessionId) return;
+      const name = mainTitle.textContent.trim();
+      fetch(`/api/sessions/${activeSessionId}/name`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }).then(() => refreshSessions());
+    });
+    mainTitle.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        mainTitle.blur();
+      }
+    });
+
+    // ---------- Transcript rendering ----------
+
+    function renderSegment(segment) {
+      emptyState.style.display = 'none';
+      if (!segment.isFinal) {
+        if (!interimEl) {
+          interimEl = document.createElement('div');
+          interimEl.className = 'segment interim';
+          transcriptEl.appendChild(interimEl);
+        }
+        interimEl.innerHTML = segmentHtml(segment);
+        return;
+      }
+      if (interimEl) {
+        interimEl.remove();
+        interimEl = null;
+      }
+      const el = document.createElement('div');
+      el.className = 'segment';
+      el.dataset.startMs = segment.startMs;
+      el.dataset.speaker = segment.speaker;
+      el.innerHTML = segmentHtml(segment);
+      transcriptEl.appendChild(el);
+      transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
+    }
+
+    function segmentHtml(segment) {
+      const cls = speakerClassFor(segment.speaker);
+      return `
+        <div class="avatar ${cls}">${initialFor(segment.speaker)}</div>
+        <div class="segment-body">
+          <div class="segment-head">
+            <span class="segment-speaker ${cls}">${segment.speaker}</span>
+            <span class="segment-ts">${fmt(segment.startMs)}</span>
+            <span class="sentiment-dot"></span>
+          </div>
+          <div class="segment-text">${segment.text}</div>
+        </div>
+      `;
+    }
+
+    // Best-effort match: a live 'sentiment' message arrives after its segment
+    // was already rendered, correlated by speaker + start time (no shared id).
+    function applySentiment(speaker, startMs, score) {
+      const el = transcriptEl.querySelector(`.segment[data-speaker="${speaker}"][data-start-ms="${startMs}"]`);
+      const dot = el && el.querySelector('.sentiment-dot');
+      if (!dot) return;
+      const cls = score > 0.25 ? 'pos' : score < -0.25 ? 'neg' : 'neu';
+      dot.className = `sentiment-dot ${cls}`;
+      dot.title = `sentiment: ${score.toFixed(2)}`;
+    }
+
+    function renderFullTranscript(segments) {
+      transcriptEl.innerHTML = '';
+      interimEl = null;
+      speakerClassMap = new Map();
+      emptyState.style.display = segments.length ? 'none' : 'block';
+      emptyState.textContent = 'No speech captured yet.';
+      for (const segment of segments) renderSegment(segment);
+    }
+
+    // ---------- Tabs ----------
+
+    function switchTab(tab) {
+      for (const btn of tabBtns) btn.classList.toggle('active', btn.dataset.tab === tab);
+      transcriptWrap.style.display = tab === 'transcript' ? 'flex' : 'none';
+      summaryWrap.style.display = tab === 'summary' ? 'block' : 'none';
+      actionItemsWrap.style.display = tab === 'actionItems' ? 'block' : 'none';
+      qaWrap.style.display = tab === 'qa' ? 'block' : 'none';
+    }
+    for (const btn of tabBtns) btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+
+    // ---------- Summary & action items ----------
+
+    function renderSummary(summary) {
+      currentSummary = summary;
+      if (!summary) {
+        summaryContent.innerHTML = '<div id="emptyState" style="display:block">No summary yet — click "Generate summary".</div>';
+        return;
+      }
+      const section = (title, text) => `
+        <div class="summary-section">
+          <h3>${title}</h3>
+          <p>${text}</p>
+        </div>
+      `;
+      summaryContent.innerHTML =
+        section('Overview', summary.overview) +
+        section('Key Decisions', summary.keyDecisions) +
+        section('Discussion Topics', summary.discussionTopics) +
+        section('Next Steps', summary.nextSteps) +
+        `<div class="summary-meta">Generated ${toDate(summary.generatedAt)?.toLocaleString() || ''} · ${summary.modelUsed}</div>`;
+    }
+
+    function renderActionItems(items) {
+      currentActionItems = items;
+      if (!items.length) {
+        actionItemsContent.innerHTML = '<div id="emptyState" style="display:block">No action items yet — click "Generate summary".</div>';
+        return;
+      }
+      const rows = items
+        .map(
+          (item) => `
+        <tr class="${item.status === 'done' ? 'done' : ''}" data-id="${item.id}">
+          <td><input type="checkbox" class="ai-check" ${item.status === 'done' ? 'checked' : ''} /></td>
+          <td>${item.owner || 'TBD'}</td>
+          <td>${item.description}</td>
+          <td>${item.dueDate || 'TBD'}</td>
+          <td><span class="ai-badge ${item.confidence}">${item.confidence}</span></td>
+        </tr>
+      `
+        )
+        .join('');
+      actionItemsContent.innerHTML = `
+        <table class="ai-table">
+          <thead><tr><th></th><th>Owner</th><th>Task</th><th>Due</th><th>Confidence</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      actionItemsContent.querySelectorAll('.ai-check').forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          const row = checkbox.closest('tr');
+          const id = Number(row.dataset.id);
+          const status = checkbox.checked ? 'done' : 'open';
+          row.classList.toggle('done', checkbox.checked);
+          fetch(`/api/action-items/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+          }).catch(() => {
+            checkbox.checked = !checkbox.checked;
+            row.classList.toggle('done', checkbox.checked);
+          });
+        });
+      });
+    }
+
+    // ---------- Triggers (raw detection log) ----------
+
+    function categoryLabel(category) {
+      return category.replace(/_/g, ' ');
+    }
+
+    function factCheckBadgeHtml(t) {
+      if (t.category !== 'factual_claim') return '';
+      const fc = t.factCheck;
+      if (fc) {
+        const labels = { match: '✓ Verified', conflict: '⚠ Conflict', insufficient: 'Insufficient info' };
+        const title = `Checked against: ${fc.sourceQueried}${fc.groundTruth ? ' — ' + fc.groundTruth : ''}`;
+        return `<span class="factcheck-badge fc-${fc.result}" title="${title.replace(/"/g, '&quot;')}">${labels[fc.result] || fc.result}</span>`;
+      }
+      const status = t.factCheckStatus;
+      if (status === 'pending') return '<span class="factcheck-badge fc-pending">Checking…</span>';
+      if (status === 'error') return '<span class="factcheck-badge fc-error" title="The check itself failed — see server logs">Check failed</span>';
+      // 'skipped', 'not-configured', or unknown (a past session loaded fresh, no live status received)
+      return '<span class="factcheck-badge fc-skipped">Not checked</span>';
+    }
+
+    function escapeAttr(s) {
+      return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    }
+
+    function triggerClaimHtml(t) {
+      if (t.category !== 'factual_claim') return '';
+      if (t._editing) {
+        // t._originalSegmentText is captured when Edit is clicked (below) so the
+        // original wording stays visible for comparison while typing a fix —
+        // t.segmentText itself isn't overwritten until Recheck is saved.
+        return `
+          <div class="trigger-claim-edit-wrap">
+            <div class="trigger-claim-original"><span class="label">Original</span>${t._originalSegmentText || '(none)'}</div>
+            <div class="trigger-claim">
+              <input type="text" class="claim-input" value="${escapeAttr(t.segmentText || '')}" />
+              <button class="claim-save">Recheck</button>
+              <button class="claim-cancel">Cancel</button>
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="trigger-claim">
+          <span class="trigger-claim-text">${t.segmentText || '(claim text unavailable for this trigger)'}</span>
+          <button class="claim-edit" title="Fix a transcription typo, then recheck">Edit</button>
+        </div>`;
+    }
+
+    function factCheckProofHtml(t) {
+      const fc = t.factCheck;
+      if (!fc || fc.result !== 'match') return '';
+      return `
+        <div class="factcheck-proof">
+          <span class="factcheck-proof-label">✓ Proof</span>
+          <span class="factcheck-proof-text">${fc.groundTruth || '(no supporting detail recorded)'}</span>
+          <span class="factcheck-proof-source">Source: ${fc.sourceQueried}</span>
+        </div>`;
+    }
+
+    function renderTriggers(triggers) {
+      currentTriggers = triggers;
+      if (!triggers.length) {
+        triggersContent.innerHTML = '<div id="emptyState" style="display:block">No triggers detected yet.</div>';
+        return;
+      }
+      triggersContent.innerHTML = triggers
+        .map(
+          (t) => `
+        <div class="trigger-row" data-id="${t.id}">
+          <div class="trigger-row-main">
+            <span class="trigger-category">${categoryLabel(t.category)}</span>
+            <span class="trigger-reason">${t.reason}</span>
+            ${factCheckBadgeHtml(t)}
+            <span class="trigger-meta">${fmt(t.startMs)} · ${(t.confidence * 100).toFixed(0)}%</span>
+          </div>
+          ${triggerClaimHtml(t)}
+          ${factCheckProofHtml(t)}
+        </div>
+      `
+        )
+        .join('');
+      triggersContent.querySelectorAll('.trigger-row').forEach((row) => {
+        const t = currentTriggers.find((x) => x.id === Number(row.dataset.id));
+        if (t) wireTriggerRow(row, t);
+      });
+    }
+
+    function wireTriggerRow(row, t) {
+      const editBtn = row.querySelector('.claim-edit');
+      if (editBtn) {
+        editBtn.addEventListener('click', () => {
+          t._editing = true;
+          t._originalSegmentText = t.segmentText;
+          renderTriggers(currentTriggers);
+        });
+      }
+      const cancelBtn = row.querySelector('.claim-cancel');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+          t._editing = false;
+          renderTriggers(currentTriggers);
+        });
+      }
+      const saveBtn = row.querySelector('.claim-save');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+          const newText = row.querySelector('.claim-input').value.trim();
+          if (!newText) return;
+          t._editing = false;
+          t.segmentText = newText;
+          t.factCheck = null;
+          t.factCheckStatus = 'pending';
+          renderTriggers(currentTriggers);
+          fetch(`/api/triggers/${t.id}/recheck`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ claimText: newText }),
+          }).catch(() => {
+            t.factCheckStatus = 'error';
+            renderTriggers(currentTriggers);
+          });
+        });
+      }
+    }
+
+    function appendTrigger(event) {
+      // Mark factual_claim triggers as "Checking…" until a trigger-fact-check
+      // message resolves it (or tells us it was never applicable) — avoids the
+      // badge looking blank while the async check is still in flight.
+      if (event.category === 'factual_claim' && !event.factCheck) {
+        event.factCheckStatus = 'pending';
+      }
+      currentTriggers.push(event);
+      renderTriggers(currentTriggers);
+    }
+
+    function applyTriggerFactCheck(triggerId, status, factCheck) {
+      const t = currentTriggers.find((t) => t.id === triggerId);
+      if (!t) return;
+      t.factCheck = factCheck;
+      t.factCheckStatus = status;
+      renderTriggers(currentTriggers);
+    }
+
+    // ---------- Suggestions & fact-check panel (shared panel, distinct card styles) ----------
+
+    function suggestionCardHtml(s) {
+      const resolved = s.userAction === 'accepted' || s.userAction === 'dismissed';
+      return `
+        <div class="suggestion-card${resolved ? ' resolved' : ''}" data-id="${s.id}">
+          <span class="suggestion-category">${categoryLabel(s.triggerCategory)}</span>
+          <div class="suggestion-text">${s.suggestionText}</div>
+          ${s.sourceCitation ? `<div class="suggestion-citation">Source: ${s.sourceCitation}</div>` : ''}
+          <div class="suggestion-actions">
+            <button class="accept" ${resolved ? 'disabled' : ''}>${s.userAction === 'accepted' ? 'Accepted ✓' : 'Accept'}</button>
+            <button class="dismiss" ${resolved ? 'disabled' : ''}>${s.userAction === 'dismissed' ? 'Dismissed' : 'Dismiss'}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function wireSuggestionCard(card, s) {
+      card.querySelector('.accept').addEventListener('click', () => resolveSuggestion(s.id, 'accepted'));
+      card.querySelector('.dismiss').addEventListener('click', () => resolveSuggestion(s.id, 'dismissed'));
+    }
+
+    function factCheckCardHtml(fc) {
+      const resolved = fc.userAction === 'accepted' || fc.userAction === 'dismissed';
+      return `
+        <div class="fact-check-card${resolved ? ' resolved' : ''}" data-id="${fc.id}">
+          <span class="fact-check-label">⚠ Possible conflict</span>
+          <div class="fact-check-row"><span class="label">Claim</span>${fc.claimText}</div>
+          <div class="fact-check-row"><span class="label">Ground truth</span>${fc.groundTruth || '(none)'}</div>
+          <div class="fact-check-source">Source: ${fc.sourceQueried}</div>
+          <div class="suggestion-actions">
+            <button class="accept" ${resolved ? 'disabled' : ''}>${fc.userAction === 'accepted' ? 'Accepted ✓' : 'Accept'}</button>
+            <button class="dismiss" ${resolved ? 'disabled' : ''}>${fc.userAction === 'dismissed' ? 'Dismissed' : 'Dismiss'}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function wireFactCheckCard(card, fc) {
+      card.querySelector('.accept').addEventListener('click', () => resolveFactCheck(fc.id, 'accepted'));
+      card.querySelector('.dismiss').addEventListener('click', () => resolveFactCheck(fc.id, 'dismissed'));
+    }
+
+    function renderSuggestionsPanel() {
+      const html = currentFactChecks.map(factCheckCardHtml).join('') + currentSuggestions.map(suggestionCardHtml).join('');
+      if (!html) {
+        suggestionsList.innerHTML = '<div class="suggestions-empty">No suggestions yet.</div>';
+        return;
+      }
+      suggestionsList.innerHTML = html;
+      suggestionsList.querySelectorAll('.fact-check-card').forEach((card) => {
+        const fc = currentFactChecks.find((x) => x.id === Number(card.dataset.id));
+        if (fc) wireFactCheckCard(card, fc);
+      });
+      suggestionsList.querySelectorAll('.suggestion-card').forEach((card) => {
+        const s = currentSuggestions.find((x) => x.id === Number(card.dataset.id));
+        if (s) wireSuggestionCard(card, s);
+      });
+    }
+
+    function renderSuggestions(suggestions) {
+      currentSuggestions = suggestions;
+      renderSuggestionsPanel();
+    }
+
+    function appendSuggestion(suggestion) {
+      currentSuggestions = currentSuggestions.filter((s) => s.id !== suggestion.id);
+      currentSuggestions.push(suggestion);
+      renderSuggestionsPanel();
+    }
+
+    function renderFactChecks(factChecks) {
+      currentFactChecks = factChecks;
+      renderSuggestionsPanel();
+    }
+
+    function appendFactCheck(factCheck) {
+      currentFactChecks = currentFactChecks.filter((f) => f.id !== factCheck.id);
+      currentFactChecks.push(factCheck);
+      renderSuggestionsPanel();
+    }
+
+    async function resolveSuggestion(id, action) {
+      try {
+        const res = await fetch(`/api/suggestions/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const updated = await res.json();
+        currentSuggestions = currentSuggestions.map((s) => (s.id === updated.id ? updated : s));
+        renderSuggestionsPanel();
+      } catch (err) {
+        alert(`Could not update suggestion: ${err.message}`);
+      }
+    }
+
+    async function resolveFactCheck(id, action) {
+      try {
+        const res = await fetch(`/api/fact-checks/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const updated = await res.json();
+        currentFactChecks = currentFactChecks.map((f) => (f.id === updated.id ? updated : f));
+        renderSuggestionsPanel();
+      } catch (err) {
+        alert(`Could not update fact-check: ${err.message}`);
+      }
+    }
+
+    // ---------- Live Q&A ----------
+
+    function qaPairHtml(q) {
+      return `
+        <div class="qa-pair">
+          <div class="qa-question">Q: ${q.questionText}</div>
+          <div class="qa-answer">${q.answerText || '(no answer)'}</div>
+          ${q.sourcesUsed && q.sourcesUsed.length ? `<div class="qa-sources">Sources: ${q.sourcesUsed.join(', ')}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function renderQueries(queries) {
+      currentQueries = queries;
+      qaContent.innerHTML = queries.length
+        ? queries.map(qaPairHtml).join('')
+        : '<div class="suggestions-empty">Ask a question above to get started.</div>';
+    }
+
+    function appendQuery(query) {
+      currentQueries = currentQueries.filter((q) => q.id !== query.id);
+      currentQueries.push(query);
+      renderQueries(currentQueries);
+    }
+
+    async function askQuestion() {
+      const question = qaInput.value.trim();
+      if (!question || !activeSessionId) return;
+      qaAskBtn.disabled = true;
+      qaInput.disabled = true;
+      try {
+        const res = await fetch(`/api/sessions/${activeSessionId}/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`Could not get an answer: ${data.error || res.statusText}`);
+          return;
+        }
+        const query = await res.json();
+        appendQuery(query);
+        qaInput.value = '';
+      } catch (err) {
+        alert(`Could not get an answer: ${err.message}`);
+      } finally {
+        qaAskBtn.disabled = false;
+        qaInput.disabled = false;
+        qaInput.focus();
+      }
+    }
+
+    async function triggerSummarize(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/summarize`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (sessionId === activeSessionId) {
+            mainMeta.textContent = `Summary generation failed: ${data.error || res.statusText}`;
+            summarizeBtn.disabled = false;
+          }
+        }
+      } catch (err) {
+        if (sessionId === activeSessionId) {
+          mainMeta.textContent = `Summary generation failed: ${err.message}`;
+          summarizeBtn.disabled = false;
+        }
+      }
+    }
+
+    // ---------- Recording controls ----------
+
+    function setRecordingUiState(recording) {
+      startBtn.hidden = recording;
+      stopBtn.hidden = !recording;
+      nameInput.disabled = recording;
+      languageSelect.disabled = recording;
+    }
+
+    async function triggerDiarize(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/diarize`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (sessionId === activeSessionId) {
+            mainMeta.textContent = `Speaker identification failed: ${data.error || res.statusText}`;
+            identifyBtn.disabled = false;
+          }
+        }
+      } catch (err) {
+        if (sessionId === activeSessionId) {
+          mainMeta.textContent = `Speaker identification failed: ${err.message}`;
+          identifyBtn.disabled = false;
+        }
+      }
+    }
+
+    function resetMainPanel() {
+      activeSessionId = null;
+      transcriptEl.innerHTML = '';
+      interimEl = null;
+      mainTitle.textContent = 'No session selected';
+      mainMeta.classList.remove('recording');
+      mainMeta.textContent = 'Start a new session or pick one from the list';
+      saveBtn.disabled = true;
+      identifyBtn.disabled = true;
+      summarizeBtn.disabled = true;
+      deleteBtn.disabled = true;
+      emptyState.style.display = 'block';
+      emptyState.textContent = 'Nothing here yet.';
+      renderSummary(null);
+      renderActionItems([]);
+      renderTriggers([]);
+      renderSuggestions([]);
+      renderFactChecks([]);
+      renderQueries([]);
+      clearWaveform();
+      updateWaveformVisibility();
+      switchTab('transcript');
+    }
+
+    async function deleteSessionById(id, label) {
+      if (!confirm(`Delete "${label}"? This permanently removes its transcript and recording.`)) return;
+      try {
+        const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`Could not delete session: ${data.error || res.statusText}`);
+          return;
+        }
+        if (id === activeSessionId) resetMainPanel();
+        refreshSessions();
+      } catch (err) {
+        alert(`Could not delete session: ${err.message}`);
+      }
+    }
+
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      try {
+        const res = await fetch('/api/session/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ languageCode: languageSelect.value, name: nameInput.value.trim() }),
+        });
+        const data = await res.json();
+        liveSessionId = data.sessionId;
+        activeSessionId = data.sessionId;
+        nameInput.value = '';
+        setRecordingUiState(true);
+        transcriptEl.innerHTML = '';
+        interimEl = null;
+        emptyState.style.display = 'block';
+        emptyState.textContent = 'Listening…';
+        await refreshSessions();
+        const session = sessions.find((s) => s.id === liveSessionId);
+        setMainHeader(session);
+        saveBtn.disabled = false;
+        identifyBtn.disabled = true;
+        summarizeBtn.disabled = true;
+        deleteBtn.disabled = true;
+        renderSummary(null);
+        renderActionItems([]);
+        renderTriggers([]);
+        renderSuggestions([]);
+        renderFactChecks([]);
+        renderQueries([]);
+      } catch (err) {
+        mainMeta.textContent = `Error starting: ${err.message}`;
+      } finally {
+        startBtn.disabled = false;
+      }
+    });
+
+    stopBtn.addEventListener('click', async () => {
+      stopBtn.disabled = true;
+      try {
+        await fetch('/api/session/stop', { method: 'POST' });
+      } catch (err) {
+        mainMeta.textContent = `Error stopping: ${err.message}`;
+      } finally {
+        stopBtn.disabled = false;
+      }
+    });
+
+    saveBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      window.location = `/api/sessions/${activeSessionId}/export`;
+    });
+
+    identifyBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      identifyBtn.disabled = true;
+      triggerDiarize(activeSessionId);
+    });
+
+    summarizeBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      summarizeBtn.disabled = true;
+      triggerSummarize(activeSessionId);
+    });
+
+    deleteBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      const session = sessions.find((s) => s.id === activeSessionId);
+      deleteSessionById(activeSessionId, session ? displayName(session) : activeSessionId);
+    });
+
+    clearBtn.addEventListener('click', () => {
+      transcriptEl.innerHTML = '';
+      interimEl = null;
+      emptyState.style.display = 'block';
+      emptyState.textContent = 'Cleared — the saved transcript is untouched.';
+    });
+
+    qaAskBtn.addEventListener('click', askQuestion);
+    qaInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') askQuestion();
+    });
+
+    // ---------- WebSocket live updates ----------
+
+    function connect() {
+      const ws = new WebSocket(`ws://${location.host}`);
+      ws.onclose = () => setTimeout(connect, 1500);
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'status') {
+          liveSessionId = msg.recording ? msg.sessionId : null;
+          setRecordingUiState(msg.recording);
+          if (msg.recording && !activeSessionId) openSession(msg.sessionId);
+          updateWaveformVisibility();
+          refreshSessions();
+        } else if (msg.type === 'session-start') {
+          liveSessionId = msg.sessionId;
+          setRecordingUiState(true);
+          clearWaveform();
+          updateWaveformVisibility();
+        } else if (msg.type === 'session-stop') {
+          liveSessionId = null;
+          setRecordingUiState(false);
+          updateWaveformVisibility();
+          if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
+          refreshSessions();
+        } else if (msg.type === 'waveform') {
+          if (msg.sessionId === activeSessionId && msg.sessionId === liveSessionId) {
+            pushWaveformEnvelope(msg.envelope);
+          }
+        } else if (msg.type === 'segment') {
+          if (msg.segment.sessionId === activeSessionId && msg.segment.sessionId === liveSessionId) {
+            renderSegment(msg.segment);
+          }
+          refreshSessions();
+        } else if (msg.type === 'sentiment') {
+          if (msg.sessionId === activeSessionId) applySentiment(msg.speaker, msg.startMs, msg.score);
+        } else if (msg.type === 'trigger') {
+          if (msg.sessionId === activeSessionId) appendTrigger(msg);
+        } else if (msg.type === 'trigger-fact-check') {
+          if (msg.sessionId === activeSessionId) applyTriggerFactCheck(msg.triggerId, msg.status, msg.factCheck);
+        } else if (msg.type === 'suggestion') {
+          if (msg.suggestion.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
+        } else if (msg.type === 'suggestion-updated') {
+          if (msg.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
+        } else if (msg.type === 'fact-check') {
+          if (msg.factCheck.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
+        } else if (msg.type === 'fact-check-updated') {
+          if (msg.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
+        } else if (msg.type === 'live-query') {
+          if (msg.query.sessionId === activeSessionId) appendQuery(msg.query);
+        } else if (msg.type === 'diarizing') {
+          if (msg.sessionId === activeSessionId) {
+            identifyBtn.disabled = true;
+            mainMeta.textContent = 'Identifying speakers…';
+          }
+        } else if (msg.type === 'diarized') {
+          if (msg.sessionId === activeSessionId) {
+            renderFullTranscript(msg.segments);
+            identifyBtn.disabled = false;
+            mainMeta.textContent = 'Speakers identified';
+          }
+          refreshSessions();
+        } else if (msg.type === 'diarization-failed') {
+          if (msg.sessionId === activeSessionId) {
+            identifyBtn.disabled = false;
+            mainMeta.textContent = `Speaker identification failed: ${msg.error}`;
+          }
+        } else if (msg.type === 'summarizing') {
+          if (msg.sessionId === activeSessionId) {
+            summarizeBtn.disabled = true;
+            mainMeta.textContent = 'Generating summary…';
+          }
+        } else if (msg.type === 'summarized') {
+          if (msg.sessionId === activeSessionId) {
+            renderSummary(msg.summary);
+            renderActionItems(msg.actionItems);
+            summarizeBtn.disabled = false;
+            mainMeta.textContent = 'Summary ready';
+          }
+          refreshSessions();
+        } else if (msg.type === 'summarization-failed') {
+          if (msg.sessionId === activeSessionId) {
+            summarizeBtn.disabled = false;
+            mainMeta.textContent = `Summary generation failed: ${msg.error}`;
+          }
+        } else if (msg.type === 'action-item-updated') {
+          if (msg.sessionId === activeSessionId) {
+            const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
+            if (idx !== -1) currentActionItems[idx] = msg.actionItem;
+          }
+        } else if (msg.type === 'session-renamed') {
+          if (msg.sessionId === activeSessionId) mainTitle.textContent = msg.name || displayName({ startedAt: null });
+          refreshSessions();
+        } else if (msg.type === 'session-deleted') {
+          if (msg.sessionId === activeSessionId) resetMainPanel();
+          refreshSessions();
+        }
+      };
+    }
+
+    refreshSessions();
+    connect();
+  </script>
+</body>
+</html>

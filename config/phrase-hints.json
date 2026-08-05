@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "classes": {
+    "PROJECT_NAMES": ["Speako"],
+    "TECH_TERMS": ["Keycloak", "Qdrant", "PIPEDA", "CI/CD", "RAG", "MCP", "chirp_3", "BatchRecognize", "diarization"]
+  }
+}
