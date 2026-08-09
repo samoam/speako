@@ -1,13 +1,5 @@
 import { config } from '../config';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 const WEB_FACT_CHECK_PROMPT = `You are fact-checking a spoken claim using web search. Judge whether it is correct.
 - "match": search results clearly confirm the claim.
@@ -46,7 +38,7 @@ export function isWebFactCheckConfigured(): boolean {
 export async function webFactCheckClaim(claimText: string): Promise<WebFactCheckOutcome | null> {
   if (!isWebFactCheckConfigured()) return null;
 
-  const response = await getClient().models.generateContent({
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
     contents: `${WEB_FACT_CHECK_PROMPT}\n\nCLAIM: "${claimText}"`,
     config: {

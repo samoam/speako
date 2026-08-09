@@ -1,26 +1,9 @@
 import { config } from '../config';
-import { McpServerClient } from '../mcp/mcpClient';
+import { getAtlassianClient as getClient } from './atlassianMcp';
 
 export interface ConfluenceMatch {
   path: string;
   snippet: string;
-}
-
-let mcpClient: McpServerClient | null = null;
-function getClient(): McpServerClient {
-  if (!mcpClient) {
-    mcpClient = new McpServerClient({
-      command: 'uvx',
-      args: ['mcp-atlassian'],
-      env: {
-        ...process.env,
-        CONFLUENCE_URL: config.confluenceUrl,
-        CONFLUENCE_USERNAME: config.confluenceUsername,
-        CONFLUENCE_API_TOKEN: config.confluenceApiToken,
-      } as Record<string, string>,
-    });
-  }
-  return mcpClient;
 }
 
 export function isConfluenceConfigured(): boolean {

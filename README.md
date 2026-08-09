@@ -208,6 +208,20 @@ toggle if you'd rather turn it off; see `.env.example` for all the knobs.
   log your feedback — useful data for tuning thresholds later, matching
   spec's original idea of using that signal to improve trigger accuracy over time.
 
+### Pre-meeting prep (Personal vs. Work sessions)
+
+New sessions default to **Personal** — the exact one-click flow above, unchanged. Toggling to **Work** before starting reveals a meeting-type picker (Standup, Sprint Planning, Sprint Review, Retro, One-on-One, Design/Dev Discussion, or Other) and a **Prepare session** button instead of Start. Clicking it:
+
+1. Creates the session immediately (shows "preparing…" in the sidebar) — recording is never blocked on prep finishing.
+2. Runs a type-specific workflow in the background: Jira/Confluence/Bitbucket searches relevant to that meeting type, the previous same-type session's notes (auto-matched by name/subtype, see NOTES.md), and — if configured — durable `mem0-cloud` facts (one-on-ones) or `rag-cloud`/MyRAG external references (design/dev discussions).
+3. Synthesizes everything into a **prep brief** via Gemini and seeds it into the session's meeting-state, so live trigger detection and suggestions are grounded from the first segment instead of starting cold.
+
+Once ready, the session card shows a **Start recording** button. The brief itself is visible (and editable) in the **Prep Brief** tab, both before and during the meeting. If Jira/Confluence/Bitbucket are already configured for fact-checking, prep uses the same credentials — no extra setup. `mem0-cloud`/`rag-cloud`/Google Calendar are additional optional integrations (see `.env.example`); everything degrades gracefully to "skipped" if unconfigured, same as every other integration in this project.
+
+#### Local codebase indexing (Design/Dev Discussion prep)
+
+Since most work meetings are software-engineering-focused, Design/Dev Discussion prep can also search source code already checked out on this machine — no cloning, no remote service, no credentials. Set `CODEBASE_LOCAL_PATHS` in `.env` to comma-separated `name=path` pairs (e.g. `officercc=C:\Users\me\dev\officercc`), then click **Index codebase** in the sidebar. This chunks and Gemini-embeds each configured repo's source files into a local SQLite table (`code_chunks`), the same pattern already used for past-meeting RAG. Re-indexing replaces a repo's chunks cleanly. The only network calls made are the Gemini embedding calls — source code itself never leaves this machine. Design/dev prep then surfaces matching snippets under `local_codebase`, alongside (not instead of) `myrag_external_refs`, which stays reserved for one-off external references like linked specs.
+
 ## Troubleshooting
 
 - **"Missing required environment variable"**: check `.env` exists and is filled in.

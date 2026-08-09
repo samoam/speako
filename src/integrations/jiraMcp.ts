@@ -1,25 +1,9 @@
 import { config } from '../config';
-import { McpServerClient } from '../mcp/mcpClient';
+import { getAtlassianClient as getClient } from './atlassianMcp';
 
 export interface JiraMatch {
   path: string;
   snippet: string;
-}
-
-let mcpClient: McpServerClient | null = null;
-function getClient(): McpServerClient {
-  if (!mcpClient) {
-    mcpClient = new McpServerClient({
-      command: 'uvx',
-      args: ['mcp-atlassian'],
-      env: {
-        ...process.env,
-        JIRA_URL: config.jiraUrl,
-        JIRA_PERSONAL_TOKEN: config.jiraPersonalToken,
-      } as Record<string, string>,
-    });
-  }
-  return mcpClient;
 }
 
 export function isJiraConfigured(): boolean {

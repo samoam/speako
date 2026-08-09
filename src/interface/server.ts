@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as path from 'path';
+import { v4 as uuid } from 'uuid';
 import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import {
@@ -12,6 +13,7 @@ import {
   listSessions,
   renameSession,
   deleteSession,
+  setActiveTools,
 } from '../storage/segmentRepository';
 import { diarizeSession, deleteUploadedAudio } from '../diarization/diarize';
 import { SUPPORTED_LANGUAGES } from '../languages';
@@ -33,8 +35,81 @@ import { getSurfacedFactChecksForSession, getFactChecksForSession, getFactCheck,
 import { getLiveQueriesForSession, insertLiveQuery, LiveQuery } from '../storage/liveQueryRepository';
 import { answerLiveQuestion } from '../qa/liveQa';
 import { factCheckClaim } from '../factcheck/factcheck';
+import { createSession as createPrepSession } from '../storage/segmentRepository';
+import { getPrepBrief, updatePrepBriefText } from '../storage/prepBriefRepository';
+import { runPrep } from '../prep/PrepService';
+import { MeetingType } from '../prep/meetingTypes';
+import { listUpcomingEvents } from '../integrations/googleCalendar';
+import { writeSummaryFactsToMem0 } from '../prep/writeMemFacts';
+import { analyzeConversation } from '../coaching/analyzeConversation';
+import { saveCoachingFeedback, getCoachingFeedback, CoachingFeedback } from '../storage/coachingRepository';
+import { runCodebaseIndex } from '../codebase/indexCodebase';
+import { getIndexedRepoSummary } from '../storage/codeRepository';
+import { updateSettings } from '../settingsStore';
+import { ALL_TOOL_KEYS } from '../tools/activeTools';
+import { isBitbucketConfigured } from '../integrations/bitbucketServer';
+import { isJiraConfigured } from '../integrations/jiraMcp';
+import { isConfluenceConfigured } from '../integrations/confluenceMcp';
+import { isMem0Configured } from '../integrations/mem0Client';
+import { isRagConfigured } from '../integrations/ragClient';
+import { isLocalCodebaseConfigured } from '../codebase/indexCodebase';
+import { isWebFactCheckConfigured } from '../factcheck/webFactCheck';
+import { WORKFLOW_STEPS } from '../prep/workflows/workflowSteps';
+import { runExternalMessageIndex } from '../communications/indexExternalMessages';
+import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../storage/externalMessageRepository';
 
-type StartHandler = (languageCode?: string, name?: string) => string;
+const SETTINGS_FIELDS = [
+  'geminiApiKey',
+  'geminiModel',
+  'jiraUrl',
+  'jiraPersonalToken',
+  'confluenceUrl',
+  'confluenceUsername',
+  'confluenceApiToken',
+  'bitbucketServerUrl',
+  'bitbucketServerUsername',
+  'bitbucketServerToken',
+  'bitbucketServerRepos',
+  'mem0McpUrl',
+  'mem0McpApiKey',
+  'ragMcpUrl',
+  'ragMcpApiKey',
+  'googleCalendarCredentialsPath',
+  'googleCalendarTokenPath',
+  'prepWindowMinutes',
+  'codebaseLocalPaths',
+  'prepEnabled',
+  'sentimentEnabled',
+  'triggerDetectionEnabled',
+  'triggerConfidenceThreshold',
+  'triggerCooldownMs',
+  'triggerRateLimitPerMinute',
+  'unansweredQuestionTimeoutMs',
+  'toneShiftDelta',
+  'ragEnabled',
+  'ragTopK',
+  'ragSimilarityThreshold',
+  'liveQaEnabled',
+  'meetingStateEnabled',
+  'meetingStateUpdateEverySegments',
+  'waveformEnabled',
+  'diarizationMinSpeakers',
+  'diarizationMaxSpeakers',
+] as const;
+
+/** Serializes a dynamic config field back to the flat string shape settings are stored/edited as. */
+function serializeSettingValue(key: (typeof SETTINGS_FIELDS)[number]): string {
+  const value = (config as any)[key];
+  if (key === 'codebaseLocalPaths') {
+    return (value as { name: string; path: string }[]).map((p) => `${p.name}=${p.path}`).join(',');
+  }
+  if (key === 'bitbucketServerRepos') {
+    return (value as { project: string; repo: string }[]).map((r) => `${r.project}/${r.repo}`).join(',');
+  }
+  return String(value);
+}
+
+type StartHandler = (languageCode?: string, name?: string, existingSessionId?: string) => string;
 type StopHandler = () => void;
 
 export class InterfaceServer {
@@ -43,6 +118,8 @@ export class InterfaceServer {
   private currentSessionId: string | null = null;
   private onStartHandler: StartHandler | null = null;
   private onStopHandler: StopHandler | null = null;
+  private codebaseIndexInProgress = false;
+  private communicationsIndexInProgress = false;
 
   constructor() {
     const app = express();
@@ -57,6 +134,47 @@ export class InterfaceServer {
       res.json(SUPPORTED_LANGUAGES);
     });
 
+    // Settings page: current effective value of every dynamic config field
+    // (whether sourced from a DB override or an .env fallback — not
+    // distinguished here). PUT persists a flat {key: string} patch; an empty
+    // string for a key clears its override, falling back to .env/default.
+    app.get('/api/settings', (_req, res) => {
+      const settings: Record<string, string> = {};
+      for (const key of SETTINGS_FIELDS) settings[key] = serializeSettingValue(key);
+      res.json(settings);
+    });
+
+    app.put('/api/settings', (req, res) => {
+      const patch: Record<string, string> = {};
+      for (const key of SETTINGS_FIELDS) {
+        if (typeof req.body?.[key] === 'string') patch[key] = req.body[key];
+      }
+      updateSettings(patch);
+      res.json({ saved: true });
+    });
+
+    // Which tools are globally configured — used by the new-session/tools
+    // pickers to grey out toggles that would do nothing if enabled.
+    app.get('/api/tools', (_req, res) => {
+      res.json({
+        jira: isJiraConfigured(),
+        confluence: isConfluenceConfigured(),
+        bitbucket: isBitbucketConfigured(),
+        mem0: isMem0Configured(),
+        ragCloud: isRagConfigured(),
+        localCodebase: isLocalCodebaseConfigured(),
+        webSearch: isWebFactCheckConfigured(),
+        email: hasAnyExternalMessages('email'),
+        teams: hasAnyExternalMessages('teams'),
+      });
+    });
+
+    // Describes what each meeting type's prep workflow gathers — shown in the
+    // new-session UI so picking a type isn't a guess.
+    app.get('/api/prep/workflow-steps', (_req, res) => {
+      res.json(WORKFLOW_STEPS);
+    });
+
     app.post('/api/session/start', (req, res) => {
       if (this.currentSessionId) {
         res.json({ sessionId: this.currentSessionId, alreadyRunning: true });
@@ -68,8 +186,132 @@ export class InterfaceServer {
       }
       const languageCode = typeof req.body?.languageCode === 'string' ? req.body.languageCode : undefined;
       const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 200) : undefined;
-      const sessionId = this.onStartHandler(languageCode, name);
+      const existingSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
+      const sessionId = this.onStartHandler(languageCode, name, existingSessionId);
       res.json({ sessionId });
+    });
+
+    // Pre-meeting prep: creates the session row up front (session_type='work',
+    // prep_status='pending') and kicks off PrepService async — recording can
+    // start (via POST /api/session/start with this sessionId) at any point,
+    // it's never blocked on prep finishing (§7 latency note: surface
+    // "preparing" state, don't gate the record button on it).
+    app.post('/api/session/prepare', (req, res) => {
+      const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 200) : undefined;
+      const meetingType = (typeof req.body?.meetingType === 'string' ? req.body.meetingType : 'generic') as MeetingType;
+      const calendarEventId = typeof req.body?.calendarEventId === 'string' ? req.body.calendarEventId : undefined;
+      const languageCodes = typeof req.body?.languageCode === 'string' ? [req.body.languageCode] : config.languageCodes;
+      const userNotes = typeof req.body?.userNotes === 'string' ? req.body.userNotes.trim().slice(0, 4000) : undefined;
+      const activeTools = Array.isArray(req.body?.activeTools)
+        ? req.body.activeTools.filter((t: unknown) => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
+        : undefined;
+
+      const sessionId = uuid();
+      createPrepSession(sessionId, languageCodes, name, { sessionType: 'work', meetingType, calendarEventId, activeTools });
+
+      runPrep({
+        sessionId,
+        sessionName: name,
+        meetingType,
+        calendarEventId,
+        userNotes,
+        activeTools: activeTools ?? null,
+        onDone: (id, status) => this.broadcast({ type: 'prep-ready', sessionId: id, status }),
+      }).catch((err: any) => console.error(`[prep] unexpected failure for session ${sessionId}:`, err.message));
+
+      res.json({ sessionId });
+    });
+
+    // Editable anytime, independent of prep — affects live fact-checking going
+    // forward but doesn't retroactively change an already-generated prep brief.
+    app.patch('/api/sessions/:id/tools', (req, res) => {
+      const sessionId = req.params.id;
+      if (!getSession(sessionId)) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      const activeTools = Array.isArray(req.body?.activeTools)
+        ? req.body.activeTools.filter((t: unknown) => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
+        : [];
+      setActiveTools(sessionId, activeTools);
+      this.broadcast({ type: 'session-tools-updated', sessionId, activeTools });
+      res.json({ sessionId, activeTools });
+    });
+
+    app.get('/api/sessions/:id/prep-brief', (req, res) => {
+      const brief = getPrepBrief(req.params.id);
+      if (!brief) {
+        res.status(404).json({ error: 'No prep brief for this session.' });
+        return;
+      }
+      res.json(brief);
+    });
+
+    app.patch('/api/sessions/:id/prep-brief', (req, res) => {
+      const sessionId = req.params.id;
+      if (!getPrepBrief(sessionId)) {
+        res.status(404).json({ error: 'No prep brief for this session.' });
+        return;
+      }
+      const text = typeof req.body?.text === 'string' ? req.body.text : '';
+      updatePrepBriefText(sessionId, text);
+      res.json({ sessionId, text });
+    });
+
+    // Never errors on missing calendar config — empty list is the correct
+    // "not set up" response, matching every other optional integration.
+    app.get('/api/calendar/upcoming', async (_req, res) => {
+      try {
+        const events = await listUpcomingEvents(config.prepWindowMinutes);
+        res.json(events);
+      } catch (err: any) {
+        console.error('[calendar] failed to list upcoming events:', err.message);
+        res.json([]);
+      }
+    });
+
+    // Reindexes the whole configured codebase (src/codebase/) — a standalone
+    // action independent of any single session, unlike prep's per-meeting sources.
+    app.post('/api/codebase/index', (_req, res) => {
+      if (this.codebaseIndexInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.codebaseIndexInProgress = true;
+      runCodebaseIndex((p) => this.broadcast({ type: 'codebase-index-progress', ...p }))
+        .catch((err: any) => console.error('[codebase] unexpected indexing failure:', err.message))
+        .finally(() => {
+          this.codebaseIndexInProgress = false;
+          this.broadcast({ type: 'codebase-index-complete', repos: getIndexedRepoSummary() });
+        });
+      res.json({ started: true });
+    });
+
+    app.get('/api/codebase/status', (_req, res) => {
+      res.json({ inProgress: this.codebaseIndexInProgress, repos: getIndexedRepoSummary() });
+    });
+
+    // Chunks + embeds whatever the external daily-indexing task has written
+    // to external_messages since the last run (see
+    // docs/EXTERNAL_INGESTION_PROMPT.md) — Speako never fetches email/Teams
+    // itself, only processes what's already been written locally.
+    app.post('/api/communications/index', (_req, res) => {
+      if (this.communicationsIndexInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.communicationsIndexInProgress = true;
+      runExternalMessageIndex((p) => this.broadcast({ type: 'communications-index-progress', ...p }))
+        .catch((err: any) => console.error('[communications] unexpected indexing failure:', err.message))
+        .finally(() => {
+          this.communicationsIndexInProgress = false;
+          this.broadcast({ type: 'communications-index-complete', sources: getExternalMessageIndexSummary() });
+        });
+      res.json({ started: true });
+    });
+
+    app.get('/api/communications/status', (_req, res) => {
+      res.json({ inProgress: this.communicationsIndexInProgress, sources: getExternalMessageIndexSummary() });
     });
 
     app.post('/api/session/stop', (_req, res) => {
@@ -174,10 +416,54 @@ export class InterfaceServer {
         .then(([summary, actionItems]) => {
           saveSummaryAndActionItems(sessionId, summary, actionItems);
           this.broadcastSummarized(sessionId, getSummary(sessionId)!, getActionItems(sessionId));
+          writeSummaryFactsToMem0(session.name, getSummary(sessionId)!, getActionItems(sessionId)).catch(() => {});
         })
         .catch((err: any) => {
           console.error('[summarization] failed:', err.message);
           this.broadcastSummarizationFailed(sessionId, err.message);
+        });
+    });
+
+    app.get('/api/sessions/:id/coaching', (req, res) => {
+      res.json({ feedback: getCoachingFeedback(req.params.id) || null });
+    });
+
+    // On-demand only, same shape as /summarize — a reflective analysis, not
+    // something that improves live suggestion quality, so it's never automatic.
+    app.post('/api/sessions/:id/coach', (req, res) => {
+      const sessionId = req.params.id;
+      const session = getSession(sessionId);
+      if (!session) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      if (!session.endedAt) {
+        res.status(409).json({ error: 'Session is still recording — stop it first.' });
+        return;
+      }
+      if (!config.geminiApiKey) {
+        res.status(400).json({ error: 'GEMINI_API_KEY is not configured — see NOTES.md.' });
+        return;
+      }
+      const segments = getSegmentsForSession(sessionId);
+      if (segments.length === 0) {
+        res.status(409).json({ error: 'No transcript to analyze.' });
+        return;
+      }
+
+      res.json({ started: true });
+      analyzeConversation(sessionId)
+        .then((analyzed) => {
+          if (!analyzed) {
+            this.broadcastCoachingFailed(sessionId, 'No "You" speech found to analyze in this transcript.');
+            return;
+          }
+          const feedback = saveCoachingFeedback(sessionId, analyzed);
+          this.broadcastCoaching(sessionId, feedback);
+        })
+        .catch((err: any) => {
+          console.error('[coaching] failed:', err.message);
+          this.broadcastCoachingFailed(sessionId, err.message);
         });
     });
 
@@ -441,6 +727,14 @@ export class InterfaceServer {
 
   broadcastSummarizationFailed(sessionId: string, error: string): void {
     this.broadcast({ type: 'summarization-failed', sessionId, error });
+  }
+
+  broadcastCoaching(sessionId: string, feedback: CoachingFeedback): void {
+    this.broadcast({ type: 'coaching', sessionId, feedback });
+  }
+
+  broadcastCoachingFailed(sessionId: string, error: string): void {
+    this.broadcast({ type: 'coaching-failed', sessionId, error });
   }
 
   broadcastSentiment(sessionId: string, speaker: string, startMs: number, endMs: number, score: number, magnitude: number): void {

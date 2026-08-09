@@ -1,13 +1,5 @@
 import { config } from '../config';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 const CLASSIFY_PROMPT = `You are a fast filter watching a live meeting transcript for moments worth
 flagging. You'll be given the most recent one or two spoken lines (a small window, not the whole
@@ -56,11 +48,20 @@ export interface ClassificationResult {
   vagueness: CategoryResult;
 }
 
-/** Stage 1 fast filter (spec §4.2) — one cheap Gemini call per finalized segment/window. */
-export async function classifySegment(text: string): Promise<ClassificationResult> {
-  const response = await getClient().models.generateContent({
+/**
+ * Stage 1 fast filter (spec §4.2) — one cheap Gemini call per finalized
+ * segment/window. `meetingContext`, when present (the session's current
+ * meeting_state.rolling_summary — which pre-meeting prep seeds before any
+ * transcript exists, per PrepService), is prepended so classification isn't
+ * purely reactive to the last line or two — a claim that contradicts a
+ * prepped Jira ticket status, for instance, is easier to flag with that
+ * context in view than without it.
+ */
+export async function classifySegment(text: string, meetingContext?: string): Promise<ClassificationResult> {
+  const contextBlock = meetingContext ? `Meeting context so far:\n${meetingContext}\n\n` : '';
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
-    contents: `${CLASSIFY_PROMPT}\n\nWindow:\n${text}`,
+    contents: `${CLASSIFY_PROMPT}\n\n${contextBlock}Window:\n${text}`,
     config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA },
   });
   return JSON.parse(response.text ?? '{}');

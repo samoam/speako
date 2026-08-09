@@ -7,15 +7,7 @@ import { looksCodeRelated } from '../router';
 import { toPlainText } from '../transcriptFormat';
 import { TranscriptSegment } from '../types';
 import { getMeetingStateSnapshot } from '../state/meetingState';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 export interface LiveQaAnswer {
   answerText: string;
@@ -106,7 +98,7 @@ ${transcriptContext || '(nothing said yet)'}
 Retrieved context:
 ${contextParts.join('\n\n') || '(none found)'}`;
 
-  const response = await getClient().models.generateContent({
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
     contents: prompt,
   });

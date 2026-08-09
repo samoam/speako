@@ -108,6 +108,22 @@ export function setActionItemStatus(id: number, status: 'open' | 'done'): void {
   db.prepare('UPDATE action_items SET status = ? WHERE id = ?').run(status, id);
 }
 
+/** Open action items owned by a given person, across all past sessions — used by the one-on-one prep workflow to surface outstanding commitments with them. Case-insensitive substring match since owner names are free text, not a normalized person id. */
+export function getOpenActionItemsByOwner(ownerNameContains: string): ActionItem[] {
+  const rows = db
+    .prepare("SELECT * FROM action_items WHERE status = 'open' AND owner LIKE ? ORDER BY id DESC LIMIT 20")
+    .all(`%${ownerNameContains}%`) as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    sessionId: r.session_id,
+    owner: r.owner,
+    description: r.description,
+    dueDate: r.due_date,
+    status: r.status,
+    confidence: r.confidence,
+  }));
+}
+
 export function deleteSummaryAndActionItems(sessionId: string): void {
   db.prepare('DELETE FROM action_items WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM summaries WHERE session_id = ?').run(sessionId);

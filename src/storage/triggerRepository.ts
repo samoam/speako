@@ -1,6 +1,12 @@
 import { db } from './db';
 
-export type TriggerCategory = 'factual_claim' | 'decision_point' | 'vagueness' | 'tone_shift' | 'unanswered_question';
+export type TriggerCategory =
+  | 'factual_claim'
+  | 'decision_point'
+  | 'vagueness'
+  | 'tone_shift'
+  | 'unanswered_question'
+  | 'anticipated_answer';
 
 export interface TriggerEvent {
   id: number;

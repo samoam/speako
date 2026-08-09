@@ -147,6 +147,86 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Pre-meeting prep: one row per prepared session, holding the synthesized
+  -- brief plus enough raw context for traceability/debugging. sources_queried
+  -- and raw_context are JSON-encoded strings (same convention as
+  -- sessions.language_codes) rather than normalized tables, since this data
+  -- is written once by PrepService and only ever read back whole.
+  CREATE TABLE IF NOT EXISTS prep_briefs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id),
+    meeting_type TEXT NOT NULL,
+    calendar_event_id TEXT,
+    sources_queried TEXT NOT NULL,
+    prep_brief_text TEXT NOT NULL,
+    raw_context TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+  );
+
+  -- Local codebase index for design/dev prep (src/codebase/) — same shape as
+  -- corpus_chunks, but not session-scoped: one repo can be re-indexed anytime
+  -- (deleteChunksForRepo + reinsert), independent of any meeting.
+  CREATE TABLE IF NOT EXISTS code_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_code_chunks_repo ON code_chunks(repo_name);
+
+  -- Settings-page overrides for config.ts's dynamic fields. Presence of a key
+  -- here wins over its .env value; absence falls back to .env/default (see
+  -- config.ts's str/num/bool helpers). Plaintext, same risk profile as .env.
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Raw ingestion target for a separate, external daily-indexing task (e.g. a
+  -- Claude Desktop agent with Microsoft 365 access) — Speako never writes
+  -- here except to set indexed_at once a row's been chunked+embedded. The
+  -- external task owns inserts/upserts; see docs/EXTERNAL_INGESTION_PROMPT.md.
+  CREATE TABLE IF NOT EXISTS external_messages (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    title TEXT,
+    participants TEXT,
+    occurred_at TEXT NOT NULL,
+    body_text TEXT NOT NULL,
+    ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+    indexed_at TEXT
+  );
+
+  -- Speako's own chunked+embedded index of external_messages — same shape as code_chunks.
+  CREATE TABLE IF NOT EXISTS external_message_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL REFERENCES external_messages(id),
+    source TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_external_message_chunks_source ON external_message_chunks(source);
+
+  -- On-demand post-session conversational-skill coaching (talk-time ratio,
+  -- filler-word count, and qualitative feedback) — same on-demand shape as
+  -- summaries: computed once via POST /api/sessions/:id/coach, not automatic.
+  CREATE TABLE IF NOT EXISTS coaching_feedback (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    talk_time_ratio REAL NOT NULL,
+    filler_word_count INTEGER NOT NULL,
+    filler_word_examples TEXT NOT NULL,
+    feedback_points TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+  );
+
 `);
 
 // Voice-emotion (Imentiv AI) support was removed — drop the table for anyone
@@ -155,13 +235,24 @@ db.exec(`
 db.exec('DROP TABLE IF EXISTS voice_emotion_scores');
 
 const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
-for (const column of ['diarized_at', 'language_codes', 'name']) {
+for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', 'calendar_event_id', 'active_tools']) {
   if (!sessionColumns.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
   }
+}
+if (!sessionColumns.some((c) => c.name === 'session_type')) {
+  db.exec("ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'personal'");
+}
+if (!sessionColumns.some((c) => c.name === 'prep_status')) {
+  db.exec("ALTER TABLE sessions ADD COLUMN prep_status TEXT NOT NULL DEFAULT 'none'");
 }
 
 const triggerColumns = db.prepare('PRAGMA table_info(triggers)').all() as { name: string }[];
 if (!triggerColumns.some((c) => c.name === 'segment_text')) {
   db.exec('ALTER TABLE triggers ADD COLUMN segment_text TEXT');
+}
+
+const prepBriefColumns = db.prepare('PRAGMA table_info(prep_briefs)').all() as { name: string }[];
+if (!prepBriefColumns.some((c) => c.name === 'anticipated_qa')) {
+  db.exec('ALTER TABLE prep_briefs ADD COLUMN anticipated_qa TEXT');
 }

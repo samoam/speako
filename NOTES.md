@@ -483,3 +483,108 @@ the value if disconnects are more/less frequent than expected.
 - Toggle: `WAVEFORM_ENABLED` (default true) — automatic during recording
   like sentiment/triggers, since the whole point is instant "is it actually
   listening" feedback; an on-demand version wouldn't serve that purpose.
+
+## Speako 2.0: pre-meeting prep (calendar detection, type workflows, mem0 + MyRAG)
+
+- **Architecture chosen**: seed `meeting_state.rolling_summary` directly with
+  the synthesized prep brief (via a new `seedMeetingState` helper in
+  `src/state/meetingState.ts`), rather than threading a separate `prepBrief`
+  field through the pipeline. This meant **two** injection points, not one —
+  suggestions (`src/suggestions/generate.ts`) already read meeting-state, so
+  they picked up seeded context for free, but trigger classification
+  (`src/triggers/classify.ts`) never read meeting-state at all before this —
+  had to add that wiring explicitly (`TriggerDetector.onFinalSegment` now
+  fetches the current snapshot and passes `rollingSummary` into
+  `classifySegment`'s prompt). Easy to miss if you assume "seed meeting_state"
+  automatically reaches everything that matters.
+- **Verified end-to-end against real infra**, not just unit-level: prepping a
+  real "standup" session with real Jira credentials configured produced a
+  genuinely useful, correctly-structured brief (grouped by ticket status,
+  real ticket keys) in ~6 seconds, and `meeting_state.rolling_summary` was
+  confirmed seeded before any transcript existed. Latency for a single-source
+  (Jira-only) standup workflow: ~6s from `POST /api/session/prepare` to
+  `prep_status='ready'`. Not yet measured: sprint-review/design-dev workflows
+  with 4-5 sources running concurrently — expect longer, still shouldn't
+  block recording since prep runs fully async.
+- **Partial-source-failure tolerance confirmed working, including the
+  all-sources-empty case**: prepping a one-on-one session with `mem0-cloud`/
+  `rag-cloud` unconfigured and no matching Jira results correctly produced
+  `sourcesQueried: []`, a graceful "no prep context was found" brief, and
+  `prep_status='failed'` — not a crash. Worth knowing: `prep_status='failed'`
+  currently means "prep found nothing useful," not "prep errored" — those are
+  conflated in the current status enum. Doesn't block starting the recording
+  either way (never gated on prep status), but the label may read as more
+  alarming than it is; consider splitting into a separate "empty" status if
+  this causes confusion in practice.
+- **Meeting-type classification** (`src/prep/meetingTypes.ts`) is signal-based
+  (title/description keywords + recurrence + attendee count) against calendar
+  events, defaulting to `generic` with no event at all — not yet validated
+  against real calendar data (no calendar configured during this build/test
+  pass), only unit-shaped. Manual override in the UI is the load-bearing path
+  today, exactly per the "misclassification should fail toward generic"
+  design intent — don't trust auto-classification blindly until it's been
+  run against a real calendar for a while.
+- **Calendar integration is a poller, not a scheduler**: `listUpcomingEvents`
+  + the "prep this meeting" shortcuts only work while Speako is actually
+  running at the time — there's no background service, no OS-level scheduled
+  task. If Speako isn't open 15 minutes before a meeting, the shortcut never
+  appears (you can still prep manually via the meeting-type picker). This was
+  a known, accepted limitation going in, not a bug discovered late.
+- **mem0-cloud/rag-cloud reuse the existing `McpServerClient`**, generalized
+  to a `{transport: 'stdio'|'http'}` discriminated config rather than a
+  parallel class — the SDK's `StreamableHTTPClientTransport` (already present
+  in the installed `@modelcontextprotocol/sdk` version, no new dependency)
+  is a drop-in swap at the one transport-construction call site; `listTools`/
+  `callTool`/lazy-connect memoization needed zero changes.
+- **Post-meeting mem0 write-back is capped at 3 facts per summary** (key
+  decisions + up to 2 explicit-confidence action items), deliberately, to
+  avoid the memory store filling with transcript-derived noise — not yet
+  observed over enough real meetings to judge whether 3 is the right number
+  or whether the fact-quality (one sentence, no meeting-name context beyond
+  a quoted title) is actually useful on recall days/weeks later. Worth
+  revisiting once there's real usage history to look at.
+- **Bug found by the new unit tests, fixed**: `findLikelyPreviousSession`'s
+  `ORDER BY started_at DESC` alone is non-deterministic for sessions created
+  within the same second (SQLite's `datetime('now')` is second-resolution) —
+  ties resolved in an arbitrary order rather than true insertion order,
+  caught by `tests/prep.test.ts` asserting the *actual* most-recent session
+  won. Fixed by adding `, rowid DESC` as a tie-break. Low real-world impact
+  (prepping two same-subtype sessions within the same second is rare) but a
+  genuine correctness bug, not just a test artifact.
+- **Qualitative before/after on suggestion quality**: not yet assessed with a
+  real live recording (this build/test pass only exercised the prep endpoints
+  directly, not a full prepped-session recording start-to-finish) — the
+  meeting-state seed and trigger-context wiring are confirmed *present* in
+  the prompts, but "does this actually make suggestions better" needs a real
+  meeting to judge, not just an API-level check.
+
+## Local codebase indexing for design/dev prep
+
+- **Strategy pivot from an earlier plan**: the first version of this feature
+  cloned Bitbucket repos into `rag-mcp-server`/MyRAG (a remote Cloud Run +
+  Qdrant service), which would have meant provisioning git-clone credentials
+  in GCP and shipping source code to a remote service. Rejected in favor of
+  reusing Speako's own existing RAG pattern (`src/rag/rag.ts`:
+  chunk → Gemini-embed → local SQLite → brute-force cosine search) pointed at
+  local source files instead of transcript segments — no new services, no
+  credentials, source code never leaves the machine except the text sent to
+  Gemini for embedding. The right call given Speako already runs entirely
+  locally on the user's own dev machine, where these repos are already
+  checked out for their actual job.
+- **`local_codebase` is additive to `myrag_external_refs`, not a replacement**
+  in `designDev.ts` — MyRAG keeps its originally-intended role of one-off
+  *external* references (linked specs, competitor docs); the team's own
+  codebase is a distinct, local-only concern with a different trust boundary.
+- **One Gemini embed call per chunk**, same one-at-a-time pattern
+  `indexSessionForRag` already uses — deliberately not batched. This mirrors
+  already-working code rather than reintroducing the 100-item/call Gemini
+  batch cap `rag-mcp-server` had to work around; fine at personal-codebase
+  scale, would need revisiting if this indexed something much larger.
+- **`indexCodebase.ts` isolates failures per configured repo path** (own
+  try/catch per repo, not a single try/catch around the whole loop) — a bad
+  or since-moved path shouldn't block indexing the rest of `CODEBASE_LOCAL_PATHS`.
+- Not yet verified end-to-end against a real checked-out repo in this pass —
+  schema, chunker, indexer, search, wiring, endpoints, and UI are all written
+  and typecheck-clean, but no real `CODEBASE_LOCAL_PATHS` run has confirmed
+  `code_chunks` populates correctly or that `searchCode()` surfaces a real,
+  recognizable function/class from an actual local repo.

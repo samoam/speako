@@ -1,25 +1,17 @@
 import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import { insertChunk, getAllChunksExcludingSession, CorpusChunkWithSessionName } from '../storage/corpusRepository';
+import { getGeminiClient } from '../gemini/geminiClient';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
-
-async function embedText(text: string): Promise<number[]> {
-  const res = await getClient().models.embedContent({
+export async function embedText(text: string): Promise<number[]> {
+  const res = await getGeminiClient().models.embedContent({
     model: config.ragEmbeddingModel,
     contents: text,
   });
   return res.embeddings[0].values;
 }
 
-function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
   let normA = 0;
   let normB = 0;

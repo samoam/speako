@@ -2,15 +2,7 @@ import { config } from '../config';
 import { retrieve } from '../rag/rag';
 import { TriggerEvent } from '../storage/triggerRepository';
 import { getMeetingStateSnapshot } from '../state/meetingState';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 // Category-specific prompts (spec §7.2) — each asks for exactly one thing, matching
 // how differently each trigger category should be handled rather than one generic prompt.
@@ -70,7 +62,7 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
 
   const prompt = `${promptInstruction}\n${suppressionInstruction}\n\nCurrent moment: "${segmentText}"\nWhy this was flagged: ${trigger.reason}\n\nMeeting summary so far:\n${state.rollingSummary || '(nothing yet)'}\n\nOpen items already tracked this meeting:\n${openItemsBlock}\n\nRetrieved context from past sessions:\n${contextBlock}`;
 
-  const response = await getClient().models.generateContent({
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
     contents: prompt,
   });

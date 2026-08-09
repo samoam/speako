@@ -10,7 +10,12 @@
     "start": "node dist/index.js start",
     "dev": "ts-node src/index.ts start",
     "typecheck": "tsc --noEmit",
-    "test": "node -r ts-node/register -r ./tests/setEnv.js --test tests/streamManager.test.ts"
+    "test": "node -r ts-node/register -r ./tests/setEnv.js --test tests/streamManager.test.ts tests/prep.test.ts tests/chunkText.test.ts tests/activeTools.test.ts tests/workflowTypes.test.ts tests/toolCatalog.test.ts tests/coachingRepository.test.ts tests/externalMessageRepository.test.ts tests/prepBriefRepository.test.ts tests/settingsStore.test.ts tests/analyzeConversation.test.ts tests/liveAnticipatedQA.test.ts tests/anticipateQA.test.ts tests/rag.test.ts tests/router.test.ts tests/transcriptFormat.test.ts tests/mcpClient.test.ts tests/geminiClient.test.ts tests/workflows.test.ts",
+    "test:integration": "node -r ts-node/register -r ./tests/integration/setEnv.js --test --test-concurrency=1 tests/integration/jiraConfluence.test.ts tests/integration/bitbucket.test.ts tests/integration/gemini.test.ts tests/integration/prepService.test.ts tests/integration/factcheck.test.ts tests/integration/mem0RagCloud.test.ts",
+    "pretest:e2e": "node tests/e2e/clean-db.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "gcal-auth": "ts-node scripts/gcal-auth.ts"
   },
   "dependencies": {
     "@google-cloud/language": "^7.2.3",
@@ -21,10 +26,12 @@
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "googleapis": "^144.0.0",
     "uuid": "^10.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/express": "^4.17.21",
     "@types/node": "^22.5.0",

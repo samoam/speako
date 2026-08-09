@@ -8,14 +8,17 @@ import { createSession, endSession, insertFinalSegment, getSegmentsForSession } 
 import { insertSentimentScore } from './storage/sentimentRepository';
 import { analyzeSentiment } from './sentiment/sentiment';
 import { TriggerDetector } from './triggers/TriggerDetector';
-import { TriggerEvent } from './storage/triggerRepository';
+import { insertTrigger, TriggerEvent } from './storage/triggerRepository';
 import { indexSessionForRag } from './rag/rag';
 import { generateSuggestion } from './suggestions/generate';
 import { insertSuggestion } from './storage/suggestionRepository';
 import { factCheckClaim } from './factcheck/factcheck';
 import { insertFactCheck } from './storage/factCheckRepository';
 import { isAnyFactCheckSourceConfigured } from './factcheck/factcheck';
-import { updateMeetingState } from './state/meetingState';
+import { updateMeetingState, getMeetingStateSnapshot } from './state/meetingState';
+import { getPrepBrief } from './storage/prepBriefRepository';
+import { QuestionToAsk } from './prep/anticipateQA';
+import { embedLikelyQuestions, matchLikelyQuestion, checkQuestionsToAskRelevance, EmbeddedLikelyQuestion } from './prep/liveAnticipatedQA';
 import { computeWaveformEnvelope } from './audio-capture/waveform';
 import { TranscriptSegment } from './types';
 
@@ -27,9 +30,21 @@ export class Session {
   private triggerDetector: TriggerDetector;
   /** Finalized segments seen since the last meeting-state update — compared against config.meetingStateUpdateEverySegments to decide when to run the next incremental update. */
   private segmentsSinceStateUpdate = 0;
+  /** Prepared "likely questions" from prep, embedded once at session start — see checkAnticipatedAnswer. */
+  private embeddedLikelyQuestions: EmbeddedLikelyQuestion[] = [];
+  /** Question text of every likely question already surfaced this session — each fires at most once. */
+  private surfacedLikelyQuestionTexts = new Set<string>();
+  /** Prepared "questions to ask" not yet surfaced this session — see checkQuestionsToAsk. */
+  private remainingQuestionsToAsk: QuestionToAsk[] = [];
 
-  constructor(private ui: InterfaceServer, private languageCodes: string[], private name?: string) {
-    this.id = uuid();
+  constructor(
+    private ui: InterfaceServer,
+    private languageCodes: string[],
+    private name?: string,
+    /** When set, resumes an already-prepared (session_type='work') session created by POST /api/session/prepare, instead of creating a new row. */
+    private existingSessionId?: string
+  ) {
+    this.id = existingSessionId || uuid();
     this.capture = new SoxCapture();
     this.streamManager = new StreamManager(this.capture.channelCount, languageCodes);
     this.wavRecorder = new WavRecorder(this.id, this.capture.channelCount);
@@ -37,8 +52,20 @@ export class Session {
   }
 
   start(): void {
-    createSession(this.id, this.languageCodes, this.name);
+    if (!this.existingSessionId) {
+      createSession(this.id, this.languageCodes, this.name);
+    }
     this.ui.setSession(this.id, this.name);
+
+    const prepBrief = getPrepBrief(this.id);
+    if (prepBrief?.anticipatedQa) {
+      this.remainingQuestionsToAsk = prepBrief.anticipatedQa.questionsToAsk;
+      embedLikelyQuestions(prepBrief.anticipatedQa.likelyQuestions)
+        .then((embedded) => {
+          this.embeddedLikelyQuestions = embedded;
+        })
+        .catch((err: any) => console.error(`[prep] failed to embed anticipated questions for session ${this.id}:`, err.message));
+    }
 
     this.streamManager.on('segment', (segment: TranscriptSegment) => {
       segment.sessionId = this.id;
@@ -58,13 +85,22 @@ export class Session {
         this.triggerDetector.onFinalSegment(segment).catch((err: any) => {
           console.error(`[triggers] unexpected failure for session ${this.id}:`, err.message);
         });
+        // Someone (not the user) asking something that closely matches a
+        // prepared question — cheap question heuristic (same one
+        // TriggerDetector uses for unanswered_question) keeps this from
+        // running an embedding call on every single segment.
+        if (segment.speaker !== 'You' && segment.text.trim().endsWith('?') && this.embeddedLikelyQuestions.length > 0) {
+          this.checkAnticipatedAnswer(segment);
+        }
       }
       if (config.meetingStateEnabled && config.geminiApiKey) {
         this.segmentsSinceStateUpdate++;
         if (this.segmentsSinceStateUpdate >= config.meetingStateUpdateEverySegments) {
           this.segmentsSinceStateUpdate = 0;
           // Fire-and-forget: never blocks live transcription/triggers on this.
-          updateMeetingState(this.id).catch(() => {});
+          updateMeetingState(this.id)
+            .then(() => this.checkQuestionsToAsk())
+            .catch(() => {});
         }
       }
     });
@@ -149,6 +185,82 @@ export class Session {
       this.ui.broadcastSuggestion(suggestion);
     } catch (err: any) {
       console.error(`[suggestions] failed for session ${this.id}:`, err.message);
+    }
+  }
+
+  /**
+   * Fire-and-forget: checks whether this segment matches a prepared "likely
+   * question" from prep and, if so, surfaces the pre-drafted answer directly
+   * — no RAG retrieval or Gemini generation call, the answer's already
+   * written at prep time. Each prepared question fires at most once per
+   * session (tracked in surfacedLikelyQuestionTexts). Never throws.
+   */
+  private async checkAnticipatedAnswer(segment: TranscriptSegment): Promise<void> {
+    try {
+      const match = await matchLikelyQuestion(segment.text, this.embeddedLikelyQuestions);
+      if (!match || this.surfacedLikelyQuestionTexts.has(match.item.question.question)) return;
+      this.surfacedLikelyQuestionTexts.add(match.item.question.question);
+
+      const reason = `Matches an anticipated question from prep: "${match.item.question.question}"`;
+      const id = insertTrigger({
+        sessionId: this.id,
+        category: 'anticipated_answer',
+        confidence: match.score,
+        reason,
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        segmentText: segment.text,
+      });
+      this.ui.broadcastTrigger({
+        id,
+        sessionId: this.id,
+        category: 'anticipated_answer',
+        confidence: match.score,
+        reason,
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        segmentText: segment.text,
+      });
+
+      const suggestion = insertSuggestion({
+        sessionId: this.id,
+        triggerId: id,
+        triggerCategory: 'anticipated_answer',
+        suggestionText: match.item.question.suggestedAnswer,
+        sourceCitation: match.item.question.basedOn,
+        confidence: match.score,
+      });
+      this.ui.broadcastSuggestion(suggestion);
+    } catch (err: any) {
+      console.error(`[prep] anticipated-answer check failed for session ${this.id}:`, err.message);
+    }
+  }
+
+  /**
+   * Fire-and-forget: checks the session's remaining prepared "questions to
+   * ask" against the current rolling summary, surfacing any that are now
+   * relevant given what's just been discussed. Runs on the same cadence as
+   * updateMeetingState, not per-segment. Never throws.
+   */
+  private async checkQuestionsToAsk(): Promise<void> {
+    if (this.remainingQuestionsToAsk.length === 0) return;
+    try {
+      const { rollingSummary } = getMeetingStateSnapshot(this.id);
+      const relevant = await checkQuestionsToAskRelevance(rollingSummary, this.remainingQuestionsToAsk);
+      for (const q of relevant) {
+        this.remainingQuestionsToAsk = this.remainingQuestionsToAsk.filter((r) => r.question !== q.question);
+        const suggestion = insertSuggestion({
+          sessionId: this.id,
+          triggerId: null,
+          triggerCategory: 'question_to_ask',
+          suggestionText: q.question,
+          sourceCitation: q.why,
+          confidence: 0.7,
+        });
+        this.ui.broadcastSuggestion(suggestion);
+      }
+    } catch (err: any) {
+      console.error(`[prep] questions-to-ask check failed for session ${this.id}:`, err.message);
     }
   }
 

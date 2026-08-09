@@ -3,15 +3,7 @@ import { toPlainText } from '../transcriptFormat';
 import { TranscriptSegment } from '../types';
 import { getMeetingState, upsertMeetingState, OpenItem } from '../storage/meetingStateRepository';
 import { countSegmentsForSession, getSegmentsForSessionSince } from '../storage/segmentRepository';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 const MEETING_STATE_PROMPT = `You maintain running state for a live meeting so later reasoning steps don't have to re-read the whole transcript.
 You'll get the PREVIOUS SUMMARY, the PREVIOUS OPEN ITEMS (each with a stable id), and the NEW TRANSCRIPT said since the last update.
@@ -55,6 +47,18 @@ export function getMeetingStateSnapshot(sessionId: string): MeetingStateSnapshot
 }
 
 /**
+ * Seeds a session's rolling summary with a pre-meeting prep brief, before
+ * any transcript exists — unlike updateMeetingState, which always requires
+ * new segments and returns early with zero. Called once by PrepService when
+ * a prep run completes; lastUpdatedSegmentCount stays 0 so the first real
+ * updateMeetingState call (once segments exist) still picks up from segment
+ * one rather than skipping transcript that predates the seed.
+ */
+export function seedMeetingState(sessionId: string, prepBriefText: string): void {
+  upsertMeetingState(sessionId, prepBriefText, [], 0);
+}
+
+/**
  * Incrementally updates a session's rolling summary + open-items registry
  * (Improvements Phase §2) from whatever transcript has accumulated since the
  * last update. Called on a segment-count cadence (see config.
@@ -79,7 +83,7 @@ export async function updateMeetingState(sessionId: string): Promise<void> {
     const newText = toPlainText(newSegments as TranscriptSegment[]);
     const prompt = `${MEETING_STATE_PROMPT}\n\nPREVIOUS SUMMARY:\n${previousSummary || '(none yet)'}\n\nPREVIOUS OPEN ITEMS:\n${JSON.stringify(previousOpenItems)}\n\nNEW TRANSCRIPT:\n${newText}`;
 
-    const response = await getClient().models.generateContent({
+    const response = await getGeminiClient().models.generateContent({
       model: config.geminiModel,
       contents: prompt,
       config: { responseMimeType: 'application/json', responseSchema: MEETING_STATE_SCHEMA },

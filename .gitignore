@@ -8,3 +8,7 @@ dist/
 gcp-credentials.json
 tools/
 data/audio/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

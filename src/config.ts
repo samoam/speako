@@ -11,6 +11,56 @@ function required(name: string): string {
   return value;
 }
 
+// Settings-page overrides for the "dynamic" fields below, populated by
+// settingsStore.ts from the `settings` table. Kept here (rather than config.ts
+// importing settingsStore) to avoid a config -> settingsStore -> db -> config
+// import cycle — settingsStore pushes values in via _setConfigOverrides
+// instead of config pulling them.
+let overrides: Record<string, string> = {};
+
+/** Internal — called only by settingsStore.ts. */
+export function _setConfigOverrides(next: Record<string, string>): void {
+  overrides = next;
+}
+
+function str(key: string, envVar: string, fallback: string): string {
+  return overrides[key] ?? process.env[envVar] ?? fallback;
+}
+
+function num(key: string, envVar: string, fallback: number): number {
+  const raw = overrides[key] ?? process.env[envVar];
+  const n = raw === undefined ? fallback : Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function bool(key: string, envVar: string, fallback: boolean): boolean {
+  const raw = overrides[key] ?? process.env[envVar];
+  return raw === undefined ? fallback : raw !== 'false' && raw !== '0';
+}
+
+function parseCodebaseLocalPaths(raw: string): { name: string; path: string }[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const [name, ...rest] = s.split('=');
+      return { name: name.trim(), path: rest.join('=').trim() };
+    })
+    .filter((p) => p.name && p.path);
+}
+
+function parseBitbucketServerRepos(raw: string): { project: string; repo: string }[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const [project, repo] = s.split('/');
+      return { project, repo };
+    });
+}
+
 export const config = {
   gcpProjectId: required('GCP_PROJECT_ID'),
   speechLocation: process.env.GCP_SPEECH_LOCATION || 'us',
@@ -30,33 +80,61 @@ export const config = {
 
   /** GCS bucket for post-session diarization audio uploads. Diarization is skipped if unset. */
   gcsBucket: process.env.GCS_BUCKET || '',
-  diarizationMinSpeakers: Number(process.env.DIARIZATION_MIN_SPEAKERS || 1),
-  diarizationMaxSpeakers: Number(process.env.DIARIZATION_MAX_SPEAKERS || 6),
+  get diarizationMinSpeakers(): number {
+    return num('diarizationMinSpeakers', 'DIARIZATION_MIN_SPEAKERS', 1);
+  },
+  get diarizationMaxSpeakers(): number {
+    return num('diarizationMaxSpeakers', 'DIARIZATION_MAX_SPEAKERS', 6);
+  },
   audioDir: process.env.AUDIO_DIR || path.join(process.cwd(), 'data', 'audio'),
 
   /** Gemini API key for on-demand summarization/action-item extraction. Feature is skipped if unset. */
-  geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+  get geminiApiKey(): string {
+    return str('geminiApiKey', 'GEMINI_API_KEY', '');
+  },
+  get geminiModel(): string {
+    return str('geminiModel', 'GEMINI_MODEL', 'gemini-flash-latest');
+  },
 
   /** Versioned domain-vocabulary list biasing streaming recognition. See config/phrase-hints.json. */
   phraseHintsPath: process.env.PHRASE_HINTS_PATH || path.join(process.cwd(), 'config', 'phrase-hints.json'),
 
-  /** Runs Cloud Natural Language sentiment analysis on each finalized live segment. Unlike diarization/summarization this runs automatically during recording — it's only the text of segments already shown live, and is required for the live tone-shift trigger to work at all. Set to "false" to disable. */
-  sentimentEnabled: process.env.SENTIMENT_ENABLED !== 'false',
+  /** Runs Cloud Natural Language sentiment analysis on each finalized live segment. Unlike diarization/summarization this runs automatically during recording — it's only the text of segments already shown live, and is required for the live tone-shift trigger to work at all. */
+  get sentimentEnabled(): boolean {
+    return bool('sentimentEnabled', 'SENTIMENT_ENABLED', true);
+  },
 
   /** Live trigger detection (Phase 3) — same automatic-during-recording rationale as sentiment. */
-  triggerDetectionEnabled: process.env.TRIGGER_DETECTION_ENABLED !== 'false',
-  triggerConfidenceThreshold: Number(process.env.TRIGGER_CONFIDENCE_THRESHOLD || 0.6),
-  triggerCooldownMs: Number(process.env.TRIGGER_COOLDOWN_MS || 45_000),
-  triggerRateLimitPerMinute: Number(process.env.TRIGGER_RATE_LIMIT_PER_MINUTE || 4),
-  unansweredQuestionTimeoutMs: Number(process.env.UNANSWERED_QUESTION_TIMEOUT_MS || 20_000),
-  toneShiftDelta: Number(process.env.TONE_SHIFT_DELTA || 0.5),
+  get triggerDetectionEnabled(): boolean {
+    return bool('triggerDetectionEnabled', 'TRIGGER_DETECTION_ENABLED', true);
+  },
+  get triggerConfidenceThreshold(): number {
+    return num('triggerConfidenceThreshold', 'TRIGGER_CONFIDENCE_THRESHOLD', 0.6);
+  },
+  get triggerCooldownMs(): number {
+    return num('triggerCooldownMs', 'TRIGGER_COOLDOWN_MS', 45_000);
+  },
+  get triggerRateLimitPerMinute(): number {
+    return num('triggerRateLimitPerMinute', 'TRIGGER_RATE_LIMIT_PER_MINUTE', 4);
+  },
+  get unansweredQuestionTimeoutMs(): number {
+    return num('unansweredQuestionTimeoutMs', 'UNANSWERED_QUESTION_TIMEOUT_MS', 20_000);
+  },
+  get toneShiftDelta(): number {
+    return num('toneShiftDelta', 'TONE_SHIFT_DELTA', 0.5);
+  },
 
   /** RAG corpus: past sessions' transcripts, auto-indexed on stop (same rationale as sentiment/triggers — text already stored/shown, needed for the live suggestion feature to work). */
-  ragEnabled: process.env.RAG_ENABLED !== 'false',
+  get ragEnabled(): boolean {
+    return bool('ragEnabled', 'RAG_ENABLED', true);
+  },
   ragEmbeddingModel: process.env.RAG_EMBEDDING_MODEL || 'gemini-embedding-001',
-  ragTopK: Number(process.env.RAG_TOP_K || 3),
-  ragSimilarityThreshold: Number(process.env.RAG_SIMILARITY_THRESHOLD || 0.65),
+  get ragTopK(): number {
+    return num('ragTopK', 'RAG_TOP_K', 3);
+  },
+  get ragSimilarityThreshold(): number {
+    return num('ragSimilarityThreshold', 'RAG_SIMILARITY_THRESHOLD', 0.65);
+  },
 
   /**
    * Bitbucket Server (self-hosted, Basic auth over REST — NOT Bitbucket Cloud).
@@ -65,29 +143,42 @@ export const config = {
    * searching everything. Format: "PROJECT_KEY/repo-slug", comma-separated.
    * Feature is skipped if url/username/token or the repo list is unset.
    */
-  bitbucketServerUrl: process.env.BITBUCKET_SERVER_URL || '',
-  bitbucketServerUsername: process.env.BITBUCKET_SERVER_USERNAME || '',
-  bitbucketServerToken: process.env.BITBUCKET_SERVER_TOKEN || '',
-  bitbucketServerRepos: (process.env.BITBUCKET_SERVER_REPOS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => {
-      const [project, repo] = s.split('/');
-      return { project, repo };
-    }),
+  get bitbucketServerUrl(): string {
+    return str('bitbucketServerUrl', 'BITBUCKET_SERVER_URL', '');
+  },
+  get bitbucketServerUsername(): string {
+    return str('bitbucketServerUsername', 'BITBUCKET_SERVER_USERNAME', '');
+  },
+  get bitbucketServerToken(): string {
+    return str('bitbucketServerToken', 'BITBUCKET_SERVER_TOKEN', '');
+  },
+  get bitbucketServerRepos(): { project: string; repo: string }[] {
+    return parseBitbucketServerRepos(str('bitbucketServerRepos', 'BITBUCKET_SERVER_REPOS', ''));
+  },
 
   /** Jira (Phase 4 fact-check/Q&A source), queried via the existing `mcp-atlassian` MCP server (spawned locally) rather than direct REST. Feature is skipped if url/token are unset. */
-  jiraUrl: process.env.JIRA_URL || '',
-  jiraPersonalToken: process.env.JIRA_PERSONAL_TOKEN || '',
+  get jiraUrl(): string {
+    return str('jiraUrl', 'JIRA_URL', '');
+  },
+  get jiraPersonalToken(): string {
+    return str('jiraPersonalToken', 'JIRA_PERSONAL_TOKEN', '');
+  },
 
   /** Confluence (Phase 4 fact-check/Q&A source), also via `mcp-atlassian`. Feature is skipped if url/username/token are unset. */
-  confluenceUrl: process.env.CONFLUENCE_URL || '',
-  confluenceUsername: process.env.CONFLUENCE_USERNAME || '',
-  confluenceApiToken: process.env.CONFLUENCE_API_TOKEN || '',
+  get confluenceUrl(): string {
+    return str('confluenceUrl', 'CONFLUENCE_URL', '');
+  },
+  get confluenceUsername(): string {
+    return str('confluenceUsername', 'CONFLUENCE_USERNAME', '');
+  },
+  get confluenceApiToken(): string {
+    return str('confluenceApiToken', 'CONFLUENCE_API_TOKEN', '');
+  },
 
   /** Live in-meeting Q&A — same on-demand rationale as diarization/summarization (an explicit user action, not automatic). */
-  liveQaEnabled: process.env.LIVE_QA_ENABLED !== 'false',
+  get liveQaEnabled(): boolean {
+    return bool('liveQaEnabled', 'LIVE_QA_ENABLED', true);
+  },
 
   /**
    * Improvements Phase §2: persistent meeting-state layer (rolling summary +
@@ -98,8 +189,12 @@ export const config = {
    * recording, like sentiment/triggers/RAG, since suggestion/fact-check
    * quality depends on it being current.
    */
-  meetingStateEnabled: process.env.MEETING_STATE_ENABLED !== 'false',
-  meetingStateUpdateEverySegments: Number(process.env.MEETING_STATE_UPDATE_EVERY_SEGMENTS || 6),
+  get meetingStateEnabled(): boolean {
+    return bool('meetingStateEnabled', 'MEETING_STATE_ENABLED', true);
+  },
+  get meetingStateUpdateEverySegments(): number {
+    return num('meetingStateUpdateEverySegments', 'MEETING_STATE_UPDATE_EVERY_SEGMENTS', 6);
+  },
 
   /**
    * Live audio waveform indicator — purely cosmetic (see
@@ -109,7 +204,73 @@ export const config = {
    * and broadcast over the existing WebSocket rather than streaming raw PCM
    * to the browser — no new dependency, no separate audio pipeline.
    */
-  waveformEnabled: process.env.WAVEFORM_ENABLED !== 'false',
+  get waveformEnabled(): boolean {
+    return bool('waveformEnabled', 'WAVEFORM_ENABLED', true);
+  },
+
+  /**
+   * mem0-cloud: durable cross-meeting facts (a remote Streamable-HTTP MCP
+   * server, not a local subprocess like Jira/Confluence). Read during
+   * one-on-one prep, written after a summary is generated. Feature is
+   * skipped if url/key are unset.
+   */
+  get mem0McpUrl(): string {
+    return str('mem0McpUrl', 'MEM0_MCP_URL', '');
+  },
+  get mem0McpApiKey(): string {
+    return str('mem0McpApiKey', 'MEM0_MCP_API_KEY', '');
+  },
+
+  /**
+   * rag-cloud (MyRAG): external reference ingestion (design docs, repos) for
+   * design/dev-discussion prep. Same remote Streamable-HTTP MCP shape as
+   * mem0-cloud above. Feature is skipped if url/key are unset.
+   */
+  get ragMcpUrl(): string {
+    return str('ragMcpUrl', 'RAG_MCP_URL', '');
+  },
+  get ragMcpApiKey(): string {
+    return str('ragMcpApiKey', 'RAG_MCP_API_KEY', '');
+  },
+
+  /**
+   * Pre-meeting prep (type/subtype-driven context gathering before
+   * recording starts). Master toggle for the whole feature; calendar
+   * detection is a separate, independently-optional sub-feature below.
+   */
+  get prepEnabled(): boolean {
+    return bool('prepEnabled', 'PREP_ENABLED', true);
+  },
+
+  /**
+   * Google Calendar (OAuth "installed app" flow — run `npm run gcal-auth`
+   * once to produce the token file). Purely additive: without it, work
+   * sessions still work via manual meeting-type selection, just without
+   * calendar-based auto-detection or the upcoming-meeting poller/shortcuts.
+   */
+  get googleCalendarCredentialsPath(): string {
+    return str('googleCalendarCredentialsPath', 'GOOGLE_CALENDAR_CREDENTIALS_PATH', '');
+  },
+  get googleCalendarTokenPath(): string {
+    return str('googleCalendarTokenPath', 'GOOGLE_CALENDAR_TOKEN_PATH', path.join(process.cwd(), 'data', 'gcal-token.json'));
+  },
+  get prepWindowMinutes(): number {
+    return num('prepWindowMinutes', 'PREP_WINDOW_MINUTES', 15);
+  },
+
+  /**
+   * Local codebase indexing for design/dev prep (src/codebase/) — chunks +
+   * Gemini-embeds source files already checked out on this machine into a
+   * local SQLite table (code_chunks), same pattern as the existing
+   * past-meeting RAG corpus. Deliberately local-only: no remote cloning, no
+   * credentials, source code never leaves this machine except for the text
+   * sent to Gemini for embedding. Format: comma-separated "name=path" pairs,
+   * e.g. "officercc=C:\Users\me\dev\officercc,other=C:\Users\me\dev\other".
+   * Feature is skipped if unset.
+   */
+  get codebaseLocalPaths(): { name: string; path: string }[] {
+    return parseCodebaseLocalPaths(str('codebaseLocalPaths', 'CODEBASE_LOCAL_PATHS', ''));
+  },
 };
 
 export type SpeakoConfig = typeof config;

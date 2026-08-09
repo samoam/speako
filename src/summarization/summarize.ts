@@ -2,19 +2,7 @@ import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import { toPlainText } from '../transcriptFormat';
 import { NewActionItem } from '../storage/summaryRepository';
-
-// @google/genai is ESM-only (package.json "type": "module"); under our CommonJS
-// project's node16 module resolution, a static `import` fails type-checking even
-// though the package ships a working .cjs build for require(). require() sidesteps
-// the ESM/CJS boundary check entirely, so we type the client as `any` here.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
 
 const SUMMARY_SYSTEM_PROMPT = `You are an expert meeting assistant. You will be given a speaker-labeled
 transcript of a recorded conversation or meeting. Produce a concise but comprehensive summary.
@@ -71,7 +59,7 @@ export async function summarizeSession(segments: TranscriptSegment[]): Promise<G
   }
   const transcript = toPlainText(segments);
 
-  const response = await getClient().models.generateContent({
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
     contents: `${SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`,
     config: { responseMimeType: 'application/json', responseSchema: SUMMARY_SCHEMA },
@@ -87,7 +75,7 @@ export async function extractActionItems(segments: TranscriptSegment[]): Promise
   }
   const transcript = toPlainText(segments);
 
-  const response = await getClient().models.generateContent({
+  const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
     contents: `${ACTION_ITEMS_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`,
     config: { responseMimeType: 'application/json', responseSchema: ACTION_ITEMS_SCHEMA },

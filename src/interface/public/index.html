@@ -22,15 +22,62 @@
       display: flex; flex-direction: column; height: 100vh;
     }
     #sidebarHeader { padding: 1rem 1rem 0.75rem; border-bottom: 1px solid var(--border); }
-    #sidebarHeader h1 { font-size: 1.05rem; margin: 0 0 0.85rem; display: flex; align-items: center; gap: 0.4rem; }
-    #sidebarHeader h1::before { content: '🎙️'; font-size: 1.1rem; }
+    #sidebarHeader h1 { font-size: 1.05rem; margin: 0 0 0.85rem; display: flex; align-items: center; gap: 0.4rem; justify-content: space-between; }
+    #sidebarHeader h1::before { content: '🎙️'; font-size: 1.1rem; margin-right: -0.3rem; }
+    #sidebarHeader h1 .title-text { flex: 1; }
+    #settingsBtn { background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; padding: 0.15rem 0.3rem; line-height: 1; }
+    #settingsBtn:hover { color: var(--text); }
+
+    /* ---------- Modals (settings, new session, session tools) ---------- */
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden] { display: none; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
+    #settingsModal { width: 640px; }
+    #newSessionModal, #sessionToolsPopover { width: 420px; }
+    .modal-header, #settingsModalHeader {
+      padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-header h2, #settingsModalHeader h2 { margin: 0; font-size: 1rem; }
+    .modal-header button, #settingsModalClose { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
+    .modal-header button:hover, #settingsModalClose:hover { color: var(--text); }
+    .modal-body { padding: 1rem 1.25rem; overflow-y: auto; }
+    .modal-footer { padding: 0.85rem 1.25rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem; }
+    #newSessionModal .modal-body { display: flex; flex-direction: column; }
+    .tools-hint { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem; line-height: 1.4; }
+    .tools-checklist { margin-top: 0.3rem; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
+    .tools-checklist-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.4rem; }
+    .tool-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; font-size: 0.85rem; }
+    .tool-toggle.unavailable { opacity: 0.4; }
+    .tool-toggle .tool-unavailable-note { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+    #workflowPreview { border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
+    .workflow-preview-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.35rem; }
+    #workflowPreviewList { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.15rem; }
+    #workflowPreviewList li { font-size: 0.83rem; line-height: 1.4; }
+    #workflowPreviewList .workflow-step-tool { color: var(--muted); font-size: 0.74rem; }
+    #settingsModalBody { flex: 1; min-height: 0; padding: 1rem 1.25rem; overflow-y: auto; }
+    #settingsModalBody fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0 0 1rem; padding: 0.75rem 1rem 1rem; }
+    #settingsModalBody legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    .settings-field { margin-bottom: 0.6rem; }
+    .settings-field:last-child { margin-bottom: 0; }
+    .settings-field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .settings-field input[type="text"], .settings-field input[type="password"], .settings-field input[type="number"] {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 0.4rem 0.5rem;
+    }
+    .settings-field.checkbox-field { display: flex; align-items: center; gap: 0.5rem; }
+    .settings-field.checkbox-field label { margin-bottom: 0; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+    #settingsModalFooter { padding: 0.85rem 1.25rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem; }
+    #settingsStatus { margin-right: auto; align-self: center; font-size: 0.8rem; color: var(--muted); }
 
     #newSessionBox { display: flex; flex-direction: column; gap: 0.45rem; }
-    #nameInput, #languageSelect {
+    #nameInput, #languageSelect, #meetingTypeSelect {
       padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
       background: #1f1f23; color: var(--text); width: 100%;
     }
-    #nameInput:focus, #languageSelect:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #nameInput:focus, #languageSelect:focus, #meetingTypeSelect:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #meetingTypeSelect option { background: #1f1f23; color: var(--text); }
     .primary-btn {
       padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
       background: #232327; color: var(--text); font-weight: 600; width: 100%;
@@ -43,14 +90,14 @@
       padding: 0.75rem 1rem 0.4rem; font-size: 0.72rem; text-transform: uppercase;
       letter-spacing: 0.05em; color: var(--muted);
     }
-    #sessionList { flex: 1; overflow-y: auto; padding: 0 0.5rem 1rem; }
+    #sessionList { flex: 1; overflow-y: auto; padding: 0 0.5rem 1rem; display: flex; flex-direction: column; gap: 0.15rem; }
     .session-card {
-      padding: 0.65rem 0.7rem; border-radius: 8px; margin-bottom: 0.3rem; cursor: pointer;
-      border: 1px solid transparent;
+      padding: 0.7rem 0.75rem; border-radius: 10px; cursor: pointer;
+      border: 1px solid transparent; transition: background-color 0.1s ease;
     }
     .session-card:hover { background: #1f1f24; }
     .session-card.active { background: #1c2a38; border-color: var(--accent-dim); }
-    .session-card-top { display: flex; align-items: center; gap: 0.4rem; }
+    .session-card-top { display: flex; align-items: center; gap: 0.45rem; }
     .session-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
     .session-dot.recording { background: var(--rec); animation: pulse 1.4s infinite; }
     .session-dot.diarized { background: var(--accent); }
@@ -62,6 +109,10 @@
     }
     .session-card:hover .session-delete { opacity: 1; }
     .session-delete:hover { color: var(--rec); background: #2a1f21; }
+    .session-start-recording {
+      margin: 0.4rem 0 0 0.65rem; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid var(--ok);
+      background: #1a2620; color: var(--ok); cursor: pointer; font-size: 0.76rem;
+    }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
     .empty-list { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0.6rem; }
 
@@ -82,15 +133,41 @@
     #mainMeta.recording { color: var(--rec); }
     #mainMeta.recording::before { content: '● '; }
 
-    #toolbar { display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
     .tool-btn {
       padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid var(--border);
       background: #1f1f23; cursor: pointer;
     }
     .tool-btn:hover:not(:disabled) { background: #27272c; }
     .tool-btn:disabled { opacity: 0.35; cursor: default; }
-    #deleteBtn { color: var(--rec); border-color: #4a2a2c; }
-    #deleteBtn:hover:not(:disabled) { background: #2a1f21; }
+
+    /* ---------- Main header actions: tools/suggestions/kebab ---------- */
+    #mainHeaderActions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+    .icon-btn {
+      background: none; border: 1px solid transparent; color: var(--text); cursor: pointer;
+      font-size: 1.05rem; padding: 0.35rem 0.5rem; border-radius: 6px; line-height: 1; position: relative;
+    }
+    .icon-btn:hover { background: #1f1f23; border-color: var(--border); }
+    .icon-btn.active { background: #1c2a38; border-color: var(--accent-dim); }
+    #transcriptWrap.suggestions-collapsed #suggestionsPanel,
+    #transcriptWrap.suggestions-collapsed #panelResizer { display: none; }
+    #kebabWrap, #suggestionsToggleWrap { position: relative; }
+    #suggestionsUnreadDot {
+      position: absolute; top: 0.2rem; right: 0.2rem; width: 7px; height: 7px; border-radius: 50%; background: var(--rec);
+    }
+    #kebabMenu {
+      position: absolute; top: 100%; right: 0; margin-top: 0.3rem; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; min-width: 190px; padding: 0.35rem; display: flex; flex-direction: column; gap: 0.15rem; z-index: 50;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    }
+    #kebabMenu[hidden] { display: none; }
+    .kebab-item {
+      text-align: left; background: none; border: none; color: var(--text); padding: 0.5rem 0.6rem;
+      border-radius: 5px; cursor: pointer; font-size: 0.88rem;
+    }
+    .kebab-item:hover:not(:disabled) { background: #232327; }
+    .kebab-item:disabled { opacity: 0.35; cursor: default; }
+    .kebab-item.danger { color: var(--rec); }
+    .kebab-item.danger:hover:not(:disabled) { background: #2a1f21; }
 
     #waveformCanvas {
       display: none; width: 260px; height: 40px; flex-shrink: 0;
@@ -105,6 +182,77 @@
     .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
 
     #summaryWrap, #actionItemsWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
+
+    #sessionTypeToggle { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
+    #codebaseIndexBox, #communicationsIndexBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+    #codebaseIndexBox button, #communicationsIndexBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
+    #codebaseIndexStatus, #communicationsIndexStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .type-btn {
+      flex: 1; padding: 0.35rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--muted); cursor: pointer; font-size: 0.82rem;
+    }
+    .type-btn.active { color: var(--text); border-color: var(--accent); background: #232733; }
+    #workPrepBox[hidden] { display: none; }
+    #workPrepBox { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.3rem; }
+    #calendarShortcuts { display: flex; flex-direction: column; gap: 0.3rem; }
+    #userNotesInput {
+      padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); width: 100%; min-height: 60px;
+      font-family: inherit; font-size: 0.85rem; resize: vertical;
+    }
+    #userNotesInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .calendar-shortcut {
+      text-align: left; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); cursor: pointer; font-size: 0.78rem;
+    }
+    .calendar-shortcut:hover { border-color: var(--accent); }
+    .calendar-shortcut .cs-type { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; }
+    .prep-badge { font-size: 0.68rem; padding: 0.05rem 0.35rem; border-radius: 4px; margin-left: 0.35rem; }
+    .prep-badge.pending { background: #3a2f1f; color: #e0b060; }
+    .prep-badge.ready { background: #1f3a2a; color: var(--ok); }
+    .prep-badge.failed { background: #3a1f1f; color: var(--rec); }
+
+    #prepBriefWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; flex-direction: column; gap: 0.75rem; }
+    #prepUserNotesBox {
+      border: 1px solid var(--accent-dim); border-radius: 8px; padding: 0.8rem 0.9rem; background: #16202b;
+    }
+    #prepUserNotesBox[hidden] { display: none; }
+    .prep-user-notes-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 0.35rem; }
+    #prepUserNotesText { font-size: 0.88rem; line-height: 1.5; white-space: pre-wrap; }
+    #prepLikelyQuestionsBox, #prepQuestionsToAskBox { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 0.9rem; background: #17171a; }
+    #prepLikelyQuestionsBox[hidden], #prepQuestionsToAskBox[hidden] { display: none; }
+    .prep-qa-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.5rem; }
+    .prep-qa-item { padding: 0.55rem 0; border-top: 1px solid var(--border); }
+    .prep-qa-item:first-child { border-top: none; padding-top: 0; }
+    .prep-qa-question { font-weight: 600; font-size: 0.9rem; }
+    .prep-qa-answer { margin-top: 0.25rem; font-size: 0.87rem; line-height: 1.5; }
+    .prep-qa-basedon { margin-top: 0.3rem; font-size: 0.72rem; color: var(--muted); }
+    #prepBriefText {
+      flex: 1; min-height: 300px; padding: 0.9rem; border-radius: 8px; border: 1px solid var(--border);
+      background: #17171a; color: var(--text); font-family: inherit; font-size: 0.88rem; line-height: 1.5; resize: vertical;
+    }
+
+    #coachingWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
+    #coachingEmptyState { color: var(--muted); font-size: 0.95rem; margin-top: 2rem; text-align: center; }
+    #coachingContent { display: flex; flex-direction: column; gap: 1.4rem; max-width: 760px; }
+    #coachingContent[hidden] { display: none; }
+    .coaching-section { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1rem; background: #17171a; }
+    #talkTimeBar { height: 10px; border-radius: 5px; background: #2a2a2e; overflow: hidden; margin-top: 0.3rem; }
+    #talkTimeYou { height: 100%; background: var(--accent); }
+    #talkTimeLabel { margin-top: 0.4rem; font-size: 0.82rem; color: var(--muted); }
+    #fillerWordCount { font-size: 1.4rem; font-weight: 700; }
+    #fillerWordExamples { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
+    #fillerWordExamples .filler-example { font-size: 0.82rem; color: var(--muted); font-style: italic; }
+    .feedback-point { padding: 0.6rem 0; border-top: 1px solid var(--border); }
+    .feedback-point:first-child { border-top: none; padding-top: 0; }
+    .feedback-category {
+      font-size: 0.66rem; text-transform: uppercase; padding: 0.1rem 0.4rem; border-radius: 4px;
+      background: #232733; color: var(--accent); display: inline-block; margin-bottom: 0.4rem;
+    }
+    .feedback-observation { font-size: 0.9rem; line-height: 1.4; }
+    .feedback-quote { margin-top: 0.35rem; font-size: 0.85rem; color: var(--muted); font-style: italic; }
+    .feedback-suggestion { margin-top: 0.35rem; font-size: 0.87rem; }
+    .feedback-suggestion .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; margin-right: 0.4rem; }
     #transcriptWrap { flex: 1; display: flex; min-height: 0; }
     #transcriptMain { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 0; }
     #panelResizer {
@@ -220,20 +368,30 @@
     .ai-badge.explicit { background: #1c3a2a; color: var(--ok); }
     .ai-badge.inferred { background: #3a331c; color: #e0b84a; }
     #emptyState { color: var(--muted); font-size: 0.95rem; margin-top: 2rem; text-align: center; }
+    /* Chat-bubble alignment: "You" bubbles right-aligned/accent-tinted, everyone else left-aligned. */
     .segment { display: flex; gap: 0.65rem; margin: 0.9rem 0; line-height: 1.5; max-width: 760px; }
+    .segment.mine { flex-direction: row-reverse; margin-left: auto; }
     .avatar {
       width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center;
       justify-content: center; font-size: 0.78rem; font-weight: 700; color: #0f0f11;
     }
-    .segment-body { flex: 1; min-width: 0; }
+    .segment-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .segment.mine .segment-body { align-items: flex-end; }
     .segment-head { display: flex; align-items: baseline; gap: 0.5rem; }
+    .segment.mine .segment-head { flex-direction: row-reverse; }
     .segment-speaker { font-weight: 600; font-size: 0.9rem; }
     .segment-ts { color: var(--muted); font-size: 0.72rem; }
     .sentiment-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: transparent; }
     .sentiment-dot.pos { background: var(--ok); }
     .sentiment-dot.neg { background: var(--rec); }
     .sentiment-dot.neu { background: var(--muted); }
-    .segment-text { margin-top: 0.15rem; }
+    .segment-text {
+      margin-top: 0.3rem; padding: 0.55rem 0.8rem; border-radius: 14px; border-bottom-left-radius: 4px;
+      background: #1c1c20; border: 1px solid var(--border); display: inline-block; max-width: 100%;
+    }
+    .segment.mine .segment-text {
+      background: #1c2a38; border-color: var(--accent-dim); border-bottom-left-radius: 14px; border-bottom-right-radius: 4px;
+    }
     .interim .segment-text { opacity: 0.55; font-style: italic; }
 
     .avatar.You, .avatar.c0 { background: #6cf; }
@@ -253,13 +411,9 @@
 <body>
   <div id="sidebar">
     <div id="sidebarHeader">
-      <h1>Speako</h1>
-      <div id="newSessionBox">
-        <input id="nameInput" placeholder="Session name (optional)" />
-        <select id="languageSelect"></select>
-        <button id="startBtn" class="primary-btn">● Start new session</button>
-        <button id="stopBtn" class="primary-btn" hidden>■ Stop recording</button>
-      </div>
+      <h1><span class="title-text">Speako</span><button id="settingsBtn" title="Settings">⚙️</button></h1>
+      <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
+      <button id="stopBtn" class="primary-btn" hidden>■ Stop recording</button>
     </div>
     <div id="sessionListHeader">Sessions</div>
     <div id="sessionList"></div>
@@ -272,19 +426,31 @@
         <div id="mainMeta">Start a new session or pick one from the list</div>
       </div>
       <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
-    </div>
-    <div id="toolbar">
-      <button id="saveBtn" class="tool-btn" disabled>Save transcript</button>
-      <button id="identifyBtn" class="tool-btn" disabled>Identify speakers</button>
-      <button id="summarizeBtn" class="tool-btn" disabled>Generate summary</button>
-      <button id="clearBtn" class="tool-btn">Clear view</button>
-      <button id="deleteBtn" class="tool-btn" disabled>Delete session</button>
+      <div id="mainHeaderActions">
+        <button id="sessionToolsBtn" class="icon-btn" title="Tools for this session">🔧</button>
+        <div id="suggestionsToggleWrap">
+          <button id="suggestionsToggleBtn" class="icon-btn" title="Suggestions &amp; triggers">💡<span id="suggestionsUnreadDot" hidden></span></button>
+        </div>
+        <div id="kebabWrap">
+          <button id="kebabBtn" class="icon-btn" title="More actions">⋯</button>
+          <div id="kebabMenu" hidden>
+            <button id="saveBtn" class="kebab-item" disabled>Save transcript</button>
+            <button id="identifyBtn" class="kebab-item" disabled>Identify speakers</button>
+            <button id="summarizeBtn" class="kebab-item" disabled>Generate summary</button>
+            <button id="coachBtn" class="kebab-item" disabled>Generate coaching feedback</button>
+            <button id="clearBtn" class="kebab-item">Clear view</button>
+            <button id="deleteBtn" class="kebab-item danger" disabled>Delete session</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="tabBar">
       <button class="tab-btn active" data-tab="transcript">Transcript</button>
       <button class="tab-btn" data-tab="summary">Summary</button>
       <button class="tab-btn" data-tab="actionItems">Action Items</button>
       <button class="tab-btn" data-tab="qa">Q&amp;A</button>
+      <button class="tab-btn" data-tab="prepBrief">Prep Brief</button>
+      <button class="tab-btn" data-tab="coaching">Coaching</button>
     </div>
     <div id="transcriptWrap">
       <div id="transcriptMain">
@@ -312,6 +478,213 @@
       </div>
       <div id="qaContent"></div>
     </div>
+    <div id="prepBriefWrap">
+      <div id="prepUserNotesBox" hidden>
+        <div class="prep-user-notes-label">Your notes (given priority when this brief was generated)</div>
+        <div id="prepUserNotesText"></div>
+      </div>
+      <div id="prepLikelyQuestionsBox" hidden>
+        <div class="prep-qa-label">Likely questions &amp; draft answers</div>
+        <div id="prepLikelyQuestionsList"></div>
+      </div>
+      <div id="prepQuestionsToAskBox" hidden>
+        <div class="prep-qa-label">Questions you could ask</div>
+        <div id="prepQuestionsToAskList"></div>
+      </div>
+      <textarea id="prepBriefText" placeholder="No prep brief for this session."></textarea>
+      <button id="prepBriefSaveBtn" class="tool-btn">Save edits</button>
+    </div>
+    <div id="coachingWrap">
+      <div id="coachingEmptyState">No coaching feedback yet — use the ⋯ menu to generate it once the session has ended.</div>
+      <div id="coachingContent" hidden>
+        <div class="coaching-section">
+          <div class="prep-qa-label">Talk time</div>
+          <div id="talkTimeBar">
+            <div id="talkTimeYou"></div>
+          </div>
+          <div id="talkTimeLabel"></div>
+        </div>
+        <div class="coaching-section">
+          <div class="prep-qa-label">Filler words</div>
+          <div id="fillerWordCount"></div>
+          <div id="fillerWordExamples"></div>
+        </div>
+        <div class="coaching-section">
+          <div class="prep-qa-label">Feedback</div>
+          <div id="feedbackPointsList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="newSessionOverlay" hidden>
+    <div id="newSessionModal" class="modal">
+      <div class="modal-header">
+        <h2>New session</h2>
+        <button id="newSessionModalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="newSessionBox">
+          <div id="sessionTypeToggle">
+            <button id="personalTypeBtn" class="type-btn active" data-type="personal">Personal</button>
+            <button id="workTypeBtn" class="type-btn" data-type="work">Work</button>
+          </div>
+          <input id="nameInput" placeholder="Session name (optional)" />
+          <select id="languageSelect"></select>
+          <div id="workPrepBox" hidden>
+            <select id="meetingTypeSelect">
+              <option value="generic">Other</option>
+              <option value="standup">Standup</option>
+              <option value="sprint_planning">Sprint Planning</option>
+              <option value="sprint_review">Sprint Review</option>
+              <option value="retro">Retro</option>
+              <option value="one_on_one">One-on-One</option>
+              <option value="design_dev">Design / Dev Discussion</option>
+            </select>
+            <div id="workflowPreview">
+              <div class="workflow-preview-label">What this prepares</div>
+              <ul id="workflowPreviewList"></ul>
+            </div>
+            <div id="calendarShortcuts"></div>
+            <textarea id="userNotesInput" placeholder="Anything you want prep to focus on (optional) — e.g. &quot;ask about the auth migration timeline&quot;"></textarea>
+            <div class="tools-checklist">
+              <div class="tools-checklist-label">Tools for this session</div>
+              <div id="newSessionToolsChecklist"></div>
+            </div>
+            <button id="prepareBtn" class="primary-btn">Prepare session</button>
+          </div>
+          <button id="startBtn" class="primary-btn">● Start new session</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sessionToolsOverlay" hidden>
+    <div id="sessionToolsPopover" class="modal">
+      <div class="modal-header">
+        <h2>Tools for this session</h2>
+        <button id="sessionToolsClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="tools-hint">Changes apply to live fact-checking going forward. They don't change an already-generated prep brief.</p>
+        <div id="sessionToolsChecklist"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="sessionToolsSaveBtn" class="primary-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsOverlay" hidden>
+    <div id="settingsModal" class="modal">
+      <div id="settingsModalHeader">
+        <h2>Settings</h2>
+        <button id="settingsModalClose">&times;</button>
+      </div>
+      <div id="settingsModalBody">
+        <fieldset>
+          <legend>Gemini</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>API key</label><input type="password" data-key="geminiApiKey" /></div>
+            <div class="settings-field"><label>Model</label><input type="text" data-key="geminiModel" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Jira</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="jiraUrl" /></div>
+            <div class="settings-field"><label>Personal token</label><input type="password" data-key="jiraPersonalToken" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Confluence</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="confluenceUrl" /></div>
+            <div class="settings-field"><label>Username</label><input type="text" data-key="confluenceUsername" /></div>
+            <div class="settings-field"><label>API token</label><input type="password" data-key="confluenceApiToken" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Bitbucket Server</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="bitbucketServerUrl" /></div>
+            <div class="settings-field"><label>Username</label><input type="text" data-key="bitbucketServerUsername" /></div>
+            <div class="settings-field"><label>Token</label><input type="password" data-key="bitbucketServerToken" /></div>
+            <div class="settings-field"><label>Repos (PROJECT/repo, comma-separated)</label><input type="text" data-key="bitbucketServerRepos" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>mem0-cloud</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="mem0McpUrl" /></div>
+            <div class="settings-field"><label>API key</label><input type="password" data-key="mem0McpApiKey" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>rag-cloud (MyRAG)</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="ragMcpUrl" /></div>
+            <div class="settings-field"><label>API key</label><input type="password" data-key="ragMcpApiKey" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Google Calendar</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>Credentials path</label><input type="text" data-key="googleCalendarCredentialsPath" /></div>
+            <div class="settings-field"><label>Token path</label><input type="text" data-key="googleCalendarTokenPath" /></div>
+            <div class="settings-field"><label>Prep window (minutes)</label><input type="number" data-key="prepWindowMinutes" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Local codebase indexing</legend>
+          <div class="settings-field"><label>Paths (name=path, comma-separated)</label><input type="text" data-key="codebaseLocalPaths" /></div>
+          <div class="settings-field" id="codebaseIndexBox">
+            <button id="indexCodebaseBtn" class="tool-btn" type="button">Index codebase</button>
+            <span id="codebaseIndexStatus"></span>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Communications indexing</legend>
+          <p class="tools-hint">Speako doesn't fetch email/Teams itself — a separate daily task writes raw messages into its database (see docs/EXTERNAL_INGESTION_PROMPT.md). This just chunks + embeds whatever's arrived since the last run.</p>
+          <div class="settings-field" id="communicationsIndexBox">
+            <button id="indexCommunicationsBtn" class="tool-btn" type="button">Index communications</button>
+            <span id="communicationsIndexStatus"></span>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Feature toggles</legend>
+          <div class="settings-grid">
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-prepEnabled" data-key="prepEnabled" /><label for="setting-prepEnabled">Pre-meeting prep</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-sentimentEnabled" data-key="sentimentEnabled" /><label for="setting-sentimentEnabled">Sentiment analysis</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-triggerDetectionEnabled" data-key="triggerDetectionEnabled" /><label for="setting-triggerDetectionEnabled">Trigger detection</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-ragEnabled" data-key="ragEnabled" /><label for="setting-ragEnabled">Past-meeting RAG</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-liveQaEnabled" data-key="liveQaEnabled" /><label for="setting-liveQaEnabled">Live Q&amp;A</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-meetingStateEnabled" data-key="meetingStateEnabled" /><label for="setting-meetingStateEnabled">Meeting-state tracking</label></div>
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-waveformEnabled" data-key="waveformEnabled" /><label for="setting-waveformEnabled">Live waveform</label></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Tuning parameters</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>Trigger confidence threshold</label><input type="number" step="0.05" data-key="triggerConfidenceThreshold" /></div>
+            <div class="settings-field"><label>Trigger cooldown (ms)</label><input type="number" data-key="triggerCooldownMs" /></div>
+            <div class="settings-field"><label>Trigger rate limit (per minute)</label><input type="number" data-key="triggerRateLimitPerMinute" /></div>
+            <div class="settings-field"><label>Unanswered question timeout (ms)</label><input type="number" data-key="unansweredQuestionTimeoutMs" /></div>
+            <div class="settings-field"><label>Tone-shift delta</label><input type="number" step="0.05" data-key="toneShiftDelta" /></div>
+            <div class="settings-field"><label>RAG top K</label><input type="number" data-key="ragTopK" /></div>
+            <div class="settings-field"><label>RAG similarity threshold</label><input type="number" step="0.05" data-key="ragSimilarityThreshold" /></div>
+            <div class="settings-field"><label>Meeting-state update cadence (segments)</label><input type="number" data-key="meetingStateUpdateEverySegments" /></div>
+            <div class="settings-field"><label>Diarization min speakers</label><input type="number" data-key="diarizationMinSpeakers" /></div>
+            <div class="settings-field"><label>Diarization max speakers</label><input type="number" data-key="diarizationMaxSpeakers" /></div>
+          </div>
+        </fieldset>
+      </div>
+      <div id="settingsModalFooter">
+        <span id="settingsStatus"></span>
+        <button id="settingsCancelBtn" class="tool-btn">Cancel</button>
+        <button id="settingsSaveBtn" class="primary-btn">Save</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -325,6 +698,7 @@
     const saveBtn = document.getElementById('saveBtn');
     const identifyBtn = document.getElementById('identifyBtn');
     const summarizeBtn = document.getElementById('summarizeBtn');
+    const coachBtn = document.getElementById('coachBtn');
     const clearBtn = document.getElementById('clearBtn');
     const deleteBtn = document.getElementById('deleteBtn');
     const transcriptEl = document.getElementById('transcript');
@@ -343,6 +717,132 @@
     const qaContent = document.getElementById('qaContent');
     const panelResizer = document.getElementById('panelResizer');
     const suggestionsPanel = document.getElementById('suggestionsPanel');
+    const personalTypeBtn = document.getElementById('personalTypeBtn');
+    const workTypeBtn = document.getElementById('workTypeBtn');
+    const workPrepBox = document.getElementById('workPrepBox');
+    const meetingTypeSelect = document.getElementById('meetingTypeSelect');
+    const userNotesInput = document.getElementById('userNotesInput');
+    const calendarShortcuts = document.getElementById('calendarShortcuts');
+    const prepareBtn = document.getElementById('prepareBtn');
+    const prepBriefWrap = document.getElementById('prepBriefWrap');
+    const prepUserNotesBox = document.getElementById('prepUserNotesBox');
+    const prepUserNotesText = document.getElementById('prepUserNotesText');
+    const prepLikelyQuestionsBox = document.getElementById('prepLikelyQuestionsBox');
+    const prepLikelyQuestionsList = document.getElementById('prepLikelyQuestionsList');
+    const prepQuestionsToAskBox = document.getElementById('prepQuestionsToAskBox');
+    const prepQuestionsToAskList = document.getElementById('prepQuestionsToAskList');
+    const prepBriefText = document.getElementById('prepBriefText');
+    const prepBriefSaveBtn = document.getElementById('prepBriefSaveBtn');
+    const coachingWrap = document.getElementById('coachingWrap');
+    const coachingEmptyState = document.getElementById('coachingEmptyState');
+    const coachingContent = document.getElementById('coachingContent');
+    const talkTimeYou = document.getElementById('talkTimeYou');
+    const talkTimeLabel = document.getElementById('talkTimeLabel');
+    const fillerWordCount = document.getElementById('fillerWordCount');
+    const fillerWordExamples = document.getElementById('fillerWordExamples');
+    const feedbackPointsList = document.getElementById('feedbackPointsList');
+    const indexCodebaseBtn = document.getElementById('indexCodebaseBtn');
+    const codebaseIndexStatus = document.getElementById('codebaseIndexStatus');
+    const indexCommunicationsBtn = document.getElementById('indexCommunicationsBtn');
+    const communicationsIndexStatus = document.getElementById('communicationsIndexStatus');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsOverlay = document.getElementById('settingsOverlay');
+    const settingsModalClose = document.getElementById('settingsModalClose');
+    const settingsCancelBtn = document.getElementById('settingsCancelBtn');
+    const settingsSaveBtn = document.getElementById('settingsSaveBtn');
+    const settingsStatus = document.getElementById('settingsStatus');
+    const settingsInputs = Array.from(document.querySelectorAll('#settingsModalBody [data-key]'));
+    const newSessionOpenBtn = document.getElementById('newSessionOpenBtn');
+    const newSessionOverlay = document.getElementById('newSessionOverlay');
+    const newSessionModalClose = document.getElementById('newSessionModalClose');
+    const newSessionToolsChecklist = document.getElementById('newSessionToolsChecklist');
+    const sessionToolsOverlay = document.getElementById('sessionToolsOverlay');
+    const sessionToolsClose = document.getElementById('sessionToolsClose');
+    const sessionToolsChecklist = document.getElementById('sessionToolsChecklist');
+    const sessionToolsSaveBtn = document.getElementById('sessionToolsSaveBtn');
+    const sessionToolsBtn = document.getElementById('sessionToolsBtn');
+    const suggestionsToggleBtn = document.getElementById('suggestionsToggleBtn');
+    const suggestionsUnreadDot = document.getElementById('suggestionsUnreadDot');
+    const kebabBtn = document.getElementById('kebabBtn');
+    const kebabMenu = document.getElementById('kebabMenu');
+    let sessionType = 'personal';
+    let selectedCalendarEventId = null;
+    let availableTools = null; // cached GET /api/tools response: { jira, confluence, bitbucket, mem0, ragCloud, localCodebase, webSearch }
+    let currentSessionActiveTools = null; // activeTools of whichever session is open in the main panel
+
+    // ---------- Tools checklist (shared: new-session modal + per-session popover) ----------
+
+    const TOOL_LABELS = {
+      jira: 'Jira', confluence: 'Confluence', bitbucket: 'Bitbucket', mem0: 'mem0 (memory)',
+      ragCloud: 'MyRAG', localCodebase: 'Local codebase', webSearch: 'Web search',
+      email: 'Email', teams: 'Teams',
+    };
+
+    async function loadAvailableTools() {
+      if (availableTools) return availableTools;
+      try {
+        availableTools = await fetch('/api/tools').then((r) => r.json());
+      } catch {
+        availableTools = {};
+      }
+      return availableTools;
+    }
+
+    function renderToolsChecklist(container, activeTools, available) {
+      container.innerHTML = '';
+      for (const key of Object.keys(TOOL_LABELS)) {
+        const configured = !!available[key];
+        const checked = activeTools === null ? configured : activeTools.includes(key);
+        const row = document.createElement('label');
+        row.className = 'tool-toggle' + (configured ? '' : ' unavailable');
+        row.innerHTML = `
+          <input type="checkbox" data-tool="${key}" ${checked ? 'checked' : ''} ${configured ? '' : 'disabled'} />
+          <span>${TOOL_LABELS[key]}</span>
+          ${configured ? '' : '<span class="tool-unavailable-note">not configured</span>'}
+        `;
+        container.appendChild(row);
+      }
+    }
+
+    function checkedTools(container) {
+      const inputs = container.querySelectorAll('input[data-tool]');
+      if (inputs.length === 0) return undefined; // checklist hasn't rendered yet — omit so the server defaults to "all tools"
+      return Array.from(inputs).filter((el) => el.checked).map((el) => el.dataset.tool);
+    }
+
+    // ---------- Workflow preview (what each meeting type prepares) ----------
+
+    let workflowStepsCache = null;
+    const workflowPreviewList = document.getElementById('workflowPreviewList');
+
+    async function loadWorkflowSteps() {
+      if (workflowStepsCache) return workflowStepsCache;
+      try {
+        workflowStepsCache = await fetch('/api/prep/workflow-steps').then((r) => r.json());
+      } catch {
+        workflowStepsCache = {};
+      }
+      return workflowStepsCache;
+    }
+
+    async function updateWorkflowPreview() {
+      const steps = await loadWorkflowSteps();
+      const forType = steps[meetingTypeSelect.value] || [];
+      workflowPreviewList.innerHTML = '';
+      for (const step of forType) {
+        const li = document.createElement('li');
+        li.textContent = step.label;
+        if (step.tool) {
+          const span = document.createElement('span');
+          span.className = 'workflow-step-tool';
+          span.textContent = ` — ${TOOL_LABELS[step.tool] || step.tool}`;
+          li.appendChild(span);
+        }
+        workflowPreviewList.appendChild(li);
+      }
+    }
+
+    meetingTypeSelect.addEventListener('change', updateWorkflowPreview);
 
     // ---------- Resizable suggestions/triggers panel ----------
     (function setupPanelResizer() {
@@ -377,6 +877,33 @@
         localStorage.setItem(STORAGE_KEY, parseInt(suggestionsPanel.style.width, 10));
       });
     })();
+
+    // ---------- Collapsible suggestions/triggers panel ----------
+    const SUGGESTIONS_COLLAPSED_KEY = 'speako.suggestionsPanelCollapsed';
+    let suggestionsPanelCollapsed = localStorage.getItem(SUGGESTIONS_COLLAPSED_KEY) === 'true';
+    let suggestionsUnread = false;
+
+    function applySuggestionsPanelState() {
+      transcriptWrap.classList.toggle('suggestions-collapsed', suggestionsPanelCollapsed);
+      suggestionsToggleBtn.classList.toggle('active', !suggestionsPanelCollapsed);
+    }
+    applySuggestionsPanelState();
+
+    function setSuggestionsUnread(unread) {
+      suggestionsUnread = unread;
+      suggestionsUnreadDot.hidden = !unread;
+    }
+
+    function markSuggestionsUnreadIfCollapsed() {
+      if (suggestionsPanelCollapsed) setSuggestionsUnread(true);
+    }
+
+    suggestionsToggleBtn.addEventListener('click', () => {
+      suggestionsPanelCollapsed = !suggestionsPanelCollapsed;
+      localStorage.setItem(SUGGESTIONS_COLLAPSED_KEY, String(suggestionsPanelCollapsed));
+      applySuggestionsPanelState();
+      if (!suggestionsPanelCollapsed) setSuggestionsUnread(false);
+    });
 
     // ---------- Live audio waveform ----------
     // Purely cosmetic (Improvement_LiveAudioWaveform.md): draws the
@@ -528,7 +1055,11 @@
     }
 
     function sessionMetaLabel(s) {
-      if (!s.endedAt) return 'recording…';
+      if (!s.endedAt) {
+        if (s.id === liveSessionId) return 'recording…';
+        if (s.sessionType === 'work') return s.prepStatus === 'pending' ? 'preparing…' : 'ready — not yet started';
+        return 'not started';
+      }
       const parts = [];
       if (s.diarizedAt) parts.push('speakers identified');
       if (s.hasSummary) parts.push('summarized');
@@ -555,20 +1086,35 @@
       for (const s of sessions) {
         const card = document.createElement('div');
         card.className = 'session-card' + (s.id === activeSessionId ? ' active' : '');
-        const dotClass = !s.endedAt ? 'recording' : s.diarizedAt ? 'diarized' : '';
+        const dotClass = s.id === liveSessionId ? 'recording' : s.diarizedAt ? 'diarized' : '';
+        const notYetStarted = !s.endedAt && s.id !== liveSessionId && s.sessionType === 'work';
+        const badge = notYetStarted ? `<span class="prep-badge ${s.prepStatus}">${s.prepStatus}</span>` : '';
         card.innerHTML = `
           <div class="session-card-top">
             <span class="session-dot ${dotClass}"></span>
-            <span class="session-name">${displayName(s)}</span>
+            <span class="session-name">${displayName(s)}${badge}</span>
             <button class="session-delete" title="Delete session">✕</button>
           </div>
           <div class="session-meta">${relativeTime(s.startedAt)} · ${s.segmentCount} segment${s.segmentCount === 1 ? '' : 's'} · ${sessionMetaLabel(s)}</div>
+          ${notYetStarted ? '<button class="session-start-recording">● Start recording</button>' : ''}
         `;
         card.addEventListener('click', () => openSession(s.id));
         card.querySelector('.session-delete').addEventListener('click', (e) => {
           e.stopPropagation();
           deleteSessionById(s.id, displayName(s));
         });
+        const startRecordingBtn = card.querySelector('.session-start-recording');
+        if (startRecordingBtn) {
+          startRecordingBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await fetch('/api/session/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: s.id, languageCode: s.languageCodes?.[0] }),
+            });
+            openSession(s.id);
+          });
+        }
         sessionList.appendChild(card);
       }
     }
@@ -581,6 +1127,7 @@
       switchTab('transcript');
       clearWaveform();
       updateWaveformVisibility();
+      setSuggestionsUnread(false);
 
       fetch(`/api/sessions/${id}/segments`)
         .then((res) => res.json())
@@ -591,6 +1138,7 @@
           saveBtn.disabled = false;
           identifyBtn.disabled = !session || !session.endedAt;
           summarizeBtn.disabled = !session || !session.endedAt;
+          coachBtn.disabled = !session || !session.endedAt;
           deleteBtn.disabled = !session || !session.endedAt;
 
           fetch(`/api/sessions/${id}/sentiment`)
@@ -630,6 +1178,7 @@
       mainMeta.textContent = recording
         ? 'Recording…'
         : `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`;
+      currentSessionActiveTools = session.activeTools ?? null;
     }
 
     mainTitle.addEventListener('focus', () => {
@@ -655,10 +1204,11 @@
 
     function renderSegment(segment) {
       emptyState.style.display = 'none';
+      const alignmentClass = segment.speaker === 'You' ? 'mine' : 'theirs';
       if (!segment.isFinal) {
         if (!interimEl) {
           interimEl = document.createElement('div');
-          interimEl.className = 'segment interim';
+          interimEl.className = `segment interim ${alignmentClass}`;
           transcriptEl.appendChild(interimEl);
         }
         interimEl.innerHTML = segmentHtml(segment);
@@ -669,7 +1219,7 @@
         interimEl = null;
       }
       const el = document.createElement('div');
-      el.className = 'segment';
+      el.className = `segment ${alignmentClass}`;
       el.dataset.startMs = segment.startMs;
       el.dataset.speaker = segment.speaker;
       el.innerHTML = segmentHtml(segment);
@@ -720,8 +1270,378 @@
       summaryWrap.style.display = tab === 'summary' ? 'block' : 'none';
       actionItemsWrap.style.display = tab === 'actionItems' ? 'block' : 'none';
       qaWrap.style.display = tab === 'qa' ? 'block' : 'none';
+      prepBriefWrap.style.display = tab === 'prepBrief' ? 'flex' : 'none';
+      if (tab === 'prepBrief' && activeSessionId) loadPrepBrief(activeSessionId);
+      coachingWrap.style.display = tab === 'coaching' ? 'block' : 'none';
+      if (tab === 'coaching' && activeSessionId) loadCoachingFeedback(activeSessionId);
     }
     for (const btn of tabBtns) btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+
+    // ---------- Pre-meeting prep ----------
+
+    function setSessionType(type) {
+      sessionType = type;
+      personalTypeBtn.classList.toggle('active', type === 'personal');
+      workTypeBtn.classList.toggle('active', type === 'work');
+      workPrepBox.hidden = type !== 'work';
+      startBtn.hidden = type === 'work';
+      if (type === 'work') {
+        loadCalendarShortcuts();
+        loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
+        updateWorkflowPreview();
+      }
+    }
+    personalTypeBtn.addEventListener('click', () => setSessionType('personal'));
+    workTypeBtn.addEventListener('click', () => setSessionType('work'));
+
+    async function loadCalendarShortcuts() {
+      calendarShortcuts.innerHTML = '';
+      try {
+        const events = await fetch('/api/calendar/upcoming').then((r) => r.json());
+        for (const event of events) {
+          const btn = document.createElement('button');
+          btn.className = 'calendar-shortcut';
+          btn.innerHTML = `<div class="cs-type">upcoming</div>${event.title}`;
+          btn.addEventListener('click', () => {
+            nameInput.value = event.title;
+            selectedCalendarEventId = event.id;
+          });
+          calendarShortcuts.appendChild(btn);
+        }
+      } catch {
+        // Calendar not configured or unreachable — silently show no shortcuts, same "skip, don't error" pattern as every other optional integration.
+      }
+    }
+
+    prepareBtn.addEventListener('click', async () => {
+      prepareBtn.disabled = true;
+      try {
+        const res = await fetch('/api/session/prepare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: nameInput.value.trim() || undefined,
+            languageCode: languageSelect.value || undefined,
+            meetingType: meetingTypeSelect.value,
+            calendarEventId: selectedCalendarEventId || undefined,
+            userNotes: userNotesInput.value.trim() || undefined,
+            activeTools: checkedTools(newSessionToolsChecklist),
+          }),
+        });
+        const { sessionId } = await res.json();
+        nameInput.value = '';
+        userNotesInput.value = '';
+        selectedCalendarEventId = null;
+        closeNewSessionModal();
+        await refreshSessions();
+        openSession(sessionId);
+      } finally {
+        prepareBtn.disabled = false;
+      }
+    });
+
+    function formatCodebaseSummary(repos) {
+      if (!repos.length) return 'Not indexed yet';
+      return repos.map((r) => `${r.repoName}: ${r.chunkCount} chunks`).join(' · ');
+    }
+
+    async function refreshCodebaseStatus() {
+      try {
+        const res = await fetch('/api/codebase/status');
+        const { inProgress, repos } = await res.json();
+        indexCodebaseBtn.disabled = inProgress;
+        if (!inProgress) codebaseIndexStatus.textContent = formatCodebaseSummary(repos);
+      } catch {
+        // Feature unset/unreachable — leave status blank, same as other optional integrations.
+      }
+    }
+
+    indexCodebaseBtn.addEventListener('click', async () => {
+      indexCodebaseBtn.disabled = true;
+      codebaseIndexStatus.textContent = 'Starting…';
+      const res = await fetch('/api/codebase/index', { method: 'POST' });
+      const { started, alreadyRunning } = await res.json();
+      if (!started && alreadyRunning) {
+        codebaseIndexStatus.textContent = 'Already indexing…';
+      }
+    });
+
+    refreshCodebaseStatus();
+
+    function formatCommunicationsSummary(sources) {
+      if (!sources.length) return 'Not indexed yet';
+      return sources.map((s) => `${s.source}: ${s.chunkCount} chunks`).join(' · ');
+    }
+
+    async function refreshCommunicationsStatus() {
+      try {
+        const res = await fetch('/api/communications/status');
+        const { inProgress, sources } = await res.json();
+        indexCommunicationsBtn.disabled = inProgress;
+        if (!inProgress) communicationsIndexStatus.textContent = formatCommunicationsSummary(sources);
+      } catch {
+        // Feature unset/unreachable — leave status blank, same as other optional integrations.
+      }
+    }
+
+    indexCommunicationsBtn.addEventListener('click', async () => {
+      indexCommunicationsBtn.disabled = true;
+      communicationsIndexStatus.textContent = 'Starting…';
+      const res = await fetch('/api/communications/index', { method: 'POST' });
+      const { started, alreadyRunning } = await res.json();
+      if (!started && alreadyRunning) {
+        communicationsIndexStatus.textContent = 'Already indexing…';
+      }
+    });
+
+    refreshCommunicationsStatus();
+
+    // ---------- Settings modal ----------
+
+    function openSettingsModal() {
+      settingsOverlay.hidden = false;
+      settingsStatus.textContent = 'Loading…';
+      refreshCodebaseStatus();
+      refreshCommunicationsStatus();
+      fetch('/api/settings')
+        .then((res) => res.json())
+        .then((settings) => {
+          for (const input of settingsInputs) {
+            const key = input.dataset.key;
+            const raw = settings[key] ?? '';
+            if (input.type === 'checkbox') input.checked = raw !== 'false';
+            else input.value = raw;
+          }
+          settingsStatus.textContent = '';
+        })
+        .catch(() => {
+          settingsStatus.textContent = 'Failed to load settings.';
+        });
+    }
+
+    function closeSettingsModal() {
+      settingsOverlay.hidden = true;
+    }
+
+    settingsBtn.addEventListener('click', openSettingsModal);
+    settingsModalClose.addEventListener('click', closeSettingsModal);
+    settingsCancelBtn.addEventListener('click', closeSettingsModal);
+    settingsOverlay.addEventListener('click', (e) => {
+      if (e.target === settingsOverlay) closeSettingsModal();
+    });
+
+    settingsSaveBtn.addEventListener('click', async () => {
+      const patch = {};
+      for (const input of settingsInputs) {
+        patch[input.dataset.key] = input.type === 'checkbox' ? String(input.checked) : input.value.trim();
+      }
+      settingsSaveBtn.disabled = true;
+      settingsStatus.textContent = 'Saving…';
+      try {
+        await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        settingsStatus.textContent = '';
+        closeSettingsModal();
+        refreshCodebaseStatus();
+      } catch {
+        settingsStatus.textContent = 'Failed to save settings.';
+      } finally {
+        settingsSaveBtn.disabled = false;
+      }
+    });
+
+    // ---------- New-session modal ----------
+
+    function openNewSessionModal() {
+      newSessionOverlay.hidden = false;
+      if (sessionType === 'work') {
+        loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
+        updateWorkflowPreview();
+      }
+    }
+
+    function closeNewSessionModal() {
+      newSessionOverlay.hidden = true;
+    }
+
+    newSessionOpenBtn.addEventListener('click', openNewSessionModal);
+    newSessionModalClose.addEventListener('click', closeNewSessionModal);
+    newSessionOverlay.addEventListener('click', (e) => {
+      if (e.target === newSessionOverlay) closeNewSessionModal();
+    });
+
+    // ---------- Per-session tools popover ----------
+
+    function openSessionToolsPopover() {
+      if (!activeSessionId) return;
+      sessionToolsOverlay.hidden = false;
+      loadAvailableTools().then((available) => renderToolsChecklist(sessionToolsChecklist, currentSessionActiveTools, available));
+    }
+
+    function closeSessionToolsPopover() {
+      sessionToolsOverlay.hidden = true;
+    }
+
+    sessionToolsClose.addEventListener('click', closeSessionToolsPopover);
+    sessionToolsOverlay.addEventListener('click', (e) => {
+      if (e.target === sessionToolsOverlay) closeSessionToolsPopover();
+    });
+    sessionToolsBtn.addEventListener('click', openSessionToolsPopover);
+
+    // ---------- Kebab menu (Save/Identify/Summarize/Clear/Delete) ----------
+
+    kebabBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      kebabMenu.hidden = !kebabMenu.hidden;
+    });
+    document.addEventListener('click', (e) => {
+      if (!kebabMenu.hidden && !kebabMenu.contains(e.target) && e.target !== kebabBtn) kebabMenu.hidden = true;
+    });
+    for (const item of kebabMenu.querySelectorAll('.kebab-item')) {
+      item.addEventListener('click', () => {
+        kebabMenu.hidden = true;
+      });
+    }
+
+    sessionToolsSaveBtn.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      sessionToolsSaveBtn.disabled = true;
+      try {
+        const activeTools = checkedTools(sessionToolsChecklist) ?? [];
+        await fetch(`/api/sessions/${activeSessionId}/tools`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ activeTools }),
+        });
+        currentSessionActiveTools = activeTools;
+        closeSessionToolsPopover();
+      } finally {
+        sessionToolsSaveBtn.disabled = false;
+      }
+    });
+
+    function renderAnticipatedQA(anticipatedQa) {
+      if (!anticipatedQa) {
+        prepLikelyQuestionsBox.hidden = true;
+        prepQuestionsToAskBox.hidden = true;
+        return;
+      }
+
+      const likely = anticipatedQa.likelyQuestions || [];
+      prepLikelyQuestionsBox.hidden = likely.length === 0;
+      prepLikelyQuestionsList.innerHTML = likely
+        .map(
+          (q) => `
+            <div class="prep-qa-item">
+              <div class="prep-qa-question">${q.question}</div>
+              <div class="prep-qa-answer">${q.suggestedAnswer}</div>
+              ${q.basedOn ? `<div class="prep-qa-basedon">Based on: ${q.basedOn}</div>` : ''}
+            </div>
+          `
+        )
+        .join('');
+
+      const toAsk = anticipatedQa.questionsToAsk || [];
+      prepQuestionsToAskBox.hidden = toAsk.length === 0;
+      prepQuestionsToAskList.innerHTML = toAsk
+        .map(
+          (q) => `
+            <div class="prep-qa-item">
+              <div class="prep-qa-question">${q.question}</div>
+              <div class="prep-qa-answer">${q.why}</div>
+            </div>
+          `
+        )
+        .join('');
+    }
+
+    async function loadPrepBrief(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/prep-brief`);
+        if (!res.ok) {
+          prepBriefText.value = '';
+          prepBriefText.placeholder = 'No prep brief for this session.';
+          prepUserNotesBox.hidden = true;
+          renderAnticipatedQA(null);
+          return;
+        }
+        const brief = await res.json();
+        prepBriefText.value = brief.prepBriefText;
+        const userNotes = Array.isArray(brief.rawContext) ? brief.rawContext.find((s) => s.name === 'user_notes') : null;
+        prepUserNotesBox.hidden = !userNotes;
+        if (userNotes) prepUserNotesText.textContent = userNotes.content;
+        renderAnticipatedQA(brief.anticipatedQa);
+      } catch {
+        prepBriefText.value = '';
+        prepUserNotesBox.hidden = true;
+        renderAnticipatedQA(null);
+      }
+    }
+
+    function renderCoachingFeedback(feedback) {
+      if (!feedback) {
+        coachingEmptyState.hidden = false;
+        coachingContent.hidden = true;
+        return;
+      }
+      coachingEmptyState.hidden = true;
+      coachingContent.hidden = false;
+
+      const youPct = Math.round(feedback.talkTimeRatio * 100);
+      talkTimeYou.style.width = `${youPct}%`;
+      talkTimeLabel.textContent = `You: ${youPct}% · Others: ${100 - youPct}%`;
+
+      fillerWordCount.textContent = feedback.fillerWordCount;
+      fillerWordExamples.innerHTML = feedback.fillerWordExamples
+        .map((ex) => `<div class="filler-example">"${ex}"</div>`)
+        .join('');
+
+      feedbackPointsList.innerHTML = feedback.feedbackPoints.length
+        ? feedback.feedbackPoints
+            .map(
+              (p) => `
+                <div class="feedback-point">
+                  <span class="feedback-category">${categoryLabel(p.category)}</span>
+                  <div class="feedback-observation">${p.observation}</div>
+                  ${p.quote ? `<div class="feedback-quote">"${p.quote}"</div>` : ''}
+                  <div class="feedback-suggestion"><span class="label">Suggestion</span>${p.suggestion}</div>
+                </div>
+              `
+            )
+            .join('')
+        : '<div class="suggestions-empty">No specific feedback points — nothing stood out to flag.</div>';
+    }
+
+    // Bumped on every load and on every WS 'coaching' push — guards against a
+    // slower tab-switch GET resolving after a WS push already rendered the
+    // real result (e.g. clicking "Generate coaching feedback" then switching
+    // to the tab to watch it finish) and clobbering it back to empty.
+    let coachingFetchToken = 0;
+
+    async function loadCoachingFeedback(sessionId) {
+      const token = ++coachingFetchToken;
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/coaching`);
+        const { feedback } = await res.json();
+        if (token !== coachingFetchToken) return;
+        renderCoachingFeedback(feedback);
+      } catch {
+        if (token !== coachingFetchToken) return;
+        renderCoachingFeedback(null);
+      }
+    }
+
+    prepBriefSaveBtn.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      await fetch(`/api/sessions/${activeSessionId}/prep-brief`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: prepBriefText.value }),
+      });
+    });
 
     // ---------- Summary & action items ----------
 
@@ -922,6 +1842,7 @@
       }
       currentTriggers.push(event);
       renderTriggers(currentTriggers);
+      markSuggestionsUnreadIfCollapsed();
     }
 
     function applyTriggerFactCheck(triggerId, status, factCheck) {
@@ -936,11 +1857,13 @@
 
     function suggestionCardHtml(s) {
       const resolved = s.userAction === 'accepted' || s.userAction === 'dismissed';
+      // question_to_ask's sourceCitation holds a "why" rationale, not a source — same field, different meaning for that one category.
+      const citationLabel = s.triggerCategory === 'question_to_ask' ? 'Why' : 'Source';
       return `
         <div class="suggestion-card${resolved ? ' resolved' : ''}" data-id="${s.id}">
           <span class="suggestion-category">${categoryLabel(s.triggerCategory)}</span>
           <div class="suggestion-text">${s.suggestionText}</div>
-          ${s.sourceCitation ? `<div class="suggestion-citation">Source: ${s.sourceCitation}</div>` : ''}
+          ${s.sourceCitation ? `<div class="suggestion-citation">${citationLabel}: ${s.sourceCitation}</div>` : ''}
           <div class="suggestion-actions">
             <button class="accept" ${resolved ? 'disabled' : ''}>${s.userAction === 'accepted' ? 'Accepted ✓' : 'Accept'}</button>
             <button class="dismiss" ${resolved ? 'disabled' : ''}>${s.userAction === 'dismissed' ? 'Dismissed' : 'Dismiss'}</button>
@@ -1001,6 +1924,7 @@
       currentSuggestions = currentSuggestions.filter((s) => s.id !== suggestion.id);
       currentSuggestions.push(suggestion);
       renderSuggestionsPanel();
+      markSuggestionsUnreadIfCollapsed();
     }
 
     function renderFactChecks(factChecks) {
@@ -1012,6 +1936,7 @@
       currentFactChecks = currentFactChecks.filter((f) => f.id !== factCheck.id);
       currentFactChecks.push(factCheck);
       renderSuggestionsPanel();
+      markSuggestionsUnreadIfCollapsed();
     }
 
     async function resolveSuggestion(id, action) {
@@ -1115,10 +2040,28 @@
       }
     }
 
+    async function triggerCoach(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/coach`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (sessionId === activeSessionId) {
+            mainMeta.textContent = `Coaching feedback failed: ${data.error || res.statusText}`;
+            coachBtn.disabled = false;
+          }
+        }
+      } catch (err) {
+        if (sessionId === activeSessionId) {
+          mainMeta.textContent = `Coaching feedback failed: ${err.message}`;
+          coachBtn.disabled = false;
+        }
+      }
+    }
+
     // ---------- Recording controls ----------
 
     function setRecordingUiState(recording) {
-      startBtn.hidden = recording;
+      newSessionOpenBtn.hidden = recording;
       stopBtn.hidden = !recording;
       nameInput.disabled = recording;
       languageSelect.disabled = recording;
@@ -1152,6 +2095,7 @@
       saveBtn.disabled = true;
       identifyBtn.disabled = true;
       summarizeBtn.disabled = true;
+      coachBtn.disabled = true;
       deleteBtn.disabled = true;
       emptyState.style.display = 'block';
       emptyState.textContent = 'Nothing here yet.';
@@ -1161,6 +2105,7 @@
       renderSuggestions([]);
       renderFactChecks([]);
       renderQueries([]);
+      renderCoachingFeedback(null);
       clearWaveform();
       updateWaveformVisibility();
       switchTab('transcript');
@@ -1194,6 +2139,7 @@
         liveSessionId = data.sessionId;
         activeSessionId = data.sessionId;
         nameInput.value = '';
+        closeNewSessionModal();
         setRecordingUiState(true);
         transcriptEl.innerHTML = '';
         interimEl = null;
@@ -1205,6 +2151,7 @@
         saveBtn.disabled = false;
         identifyBtn.disabled = true;
         summarizeBtn.disabled = true;
+        coachBtn.disabled = true;
         deleteBtn.disabled = true;
         renderSummary(null);
         renderActionItems([]);
@@ -1212,6 +2159,7 @@
         renderSuggestions([]);
         renderFactChecks([]);
         renderQueries([]);
+        renderCoachingFeedback(null);
       } catch (err) {
         mainMeta.textContent = `Error starting: ${err.message}`;
       } finally {
@@ -1245,6 +2193,12 @@
       if (!activeSessionId) return;
       summarizeBtn.disabled = true;
       triggerSummarize(activeSessionId);
+    });
+
+    coachBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      coachBtn.disabled = true;
+      triggerCoach(activeSessionId);
     });
 
     deleteBtn.addEventListener('click', () => {
@@ -1288,8 +2242,13 @@
           liveSessionId = null;
           setRecordingUiState(false);
           updateWaveformVisibility();
-          if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
-          refreshSessions();
+          // openSession() reads the session's endedAt from the in-memory
+          // `sessions` array via sessions.find(...) — refreshSessions() must
+          // resolve first, or openSession() sees a stale endedAt:null and
+          // the main panel's "recording" state never clears.
+          refreshSessions().then(() => {
+            if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
+          });
         } else if (msg.type === 'waveform') {
           if (msg.sessionId === activeSessionId && msg.sessionId === liveSessionId) {
             pushWaveformEnvelope(msg.envelope);
@@ -1350,6 +2309,18 @@
             summarizeBtn.disabled = false;
             mainMeta.textContent = `Summary generation failed: ${msg.error}`;
           }
+        } else if (msg.type === 'coaching') {
+          if (msg.sessionId === activeSessionId) {
+            coachingFetchToken++;
+            renderCoachingFeedback(msg.feedback);
+            coachBtn.disabled = false;
+            mainMeta.textContent = 'Coaching feedback ready';
+          }
+        } else if (msg.type === 'coaching-failed') {
+          if (msg.sessionId === activeSessionId) {
+            coachBtn.disabled = false;
+            mainMeta.textContent = `Coaching feedback failed: ${msg.error}`;
+          }
         } else if (msg.type === 'action-item-updated') {
           if (msg.sessionId === activeSessionId) {
             const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
@@ -1361,6 +2332,31 @@
         } else if (msg.type === 'session-deleted') {
           if (msg.sessionId === activeSessionId) resetMainPanel();
           refreshSessions();
+        } else if (msg.type === 'prep-ready') {
+          if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
+          refreshSessions();
+        } else if (msg.type === 'codebase-index-progress') {
+          if (msg.status === 'started') {
+            codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
+          } else if (msg.status === 'done') {
+            codebaseIndexStatus.textContent = `Indexed ${msg.repo} (${msg.fileCount} files, ${msg.chunkCount} chunks)`;
+          } else if (msg.status === 'failed') {
+            codebaseIndexStatus.textContent = `${msg.repo} failed: ${msg.error}`;
+          }
+        } else if (msg.type === 'codebase-index-complete') {
+          indexCodebaseBtn.disabled = false;
+          codebaseIndexStatus.textContent = formatCodebaseSummary(msg.repos);
+        } else if (msg.type === 'communications-index-progress') {
+          if (msg.status === 'started') {
+            communicationsIndexStatus.textContent = `Indexing message ${msg.messageId}…`;
+          } else if (msg.status === 'done') {
+            communicationsIndexStatus.textContent = `Indexed message ${msg.messageId} (${msg.chunkCount} chunks)`;
+          } else if (msg.status === 'failed') {
+            communicationsIndexStatus.textContent = `Message ${msg.messageId} failed: ${msg.error}`;
+          }
+        } else if (msg.type === 'communications-index-complete') {
+          indexCommunicationsBtn.disabled = false;
+          communicationsIndexStatus.textContent = formatCommunicationsSummary(msg.sources);
         }
       };
     }

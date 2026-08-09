@@ -5,15 +5,9 @@ import { searchConfluence, isConfluenceConfigured } from '../integrations/conflu
 import { webFactCheckClaim, isWebFactCheckConfigured } from './webFactCheck';
 import { looksCodeRelated } from '../router';
 import { getMeetingStateSnapshot } from '../state/meetingState';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { GoogleGenAI } = require('@google/genai');
-
-let client: any = null;
-function getClient(): any {
-  if (!client) client = new GoogleGenAI({ apiKey: config.geminiApiKey });
-  return client;
-}
+import { getGeminiClient } from '../gemini/geminiClient';
+import { getSession } from '../storage/segmentRepository';
+import { isToolActive } from '../tools/activeTools';
 
 const FACT_CHECK_PROMPT = `You are checking a spoken claim against ground truth retrieved from Bitbucket (code/commits), Jira (tickets), and/or Confluence (docs). The CONTEXT below is organized into sections labeled by source.
 Compare the CLAIM to the CONTEXT and judge whether it is correct.
@@ -74,8 +68,9 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
   // name the model reports it relied on, so the final result only cites the
   // source(s) that actually mattered, not everything that happened to be tried.
   const contextSources: string[] = [];
+  const activeTools = getSession(sessionId)?.activeTools ?? null;
 
-  if (isBitbucketConfigured() && looksCodeRelated(claimText)) {
+  if (isBitbucketConfigured() && isToolActive(activeTools, 'bitbucket') && looksCodeRelated(claimText)) {
     try {
       const matches = await searchBitbucketServer(claimText);
       sourcesAttempted.push('bitbucket');
@@ -88,7 +83,7 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
     }
   }
 
-  if (isJiraConfigured()) {
+  if (isJiraConfigured() && isToolActive(activeTools, 'jira')) {
     try {
       const matches = await searchJira(claimText);
       sourcesAttempted.push('jira');
@@ -101,7 +96,7 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
     }
   }
 
-  if (isConfluenceConfigured()) {
+  if (isConfluenceConfigured() && isToolActive(activeTools, 'confluence')) {
     try {
       const matches = await searchConfluence(claimText);
       sourcesAttempted.push('confluence');
@@ -126,7 +121,7 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
   let internalGroundTruth: string | null = null;
   if (contextParts.length > 0) {
     const meetingSummary = getMeetingStateSnapshot(sessionId).rollingSummary;
-    const response = await getClient().models.generateContent({
+    const response = await getGeminiClient().models.generateContent({
       model: config.geminiModel,
       contents: `${FACT_CHECK_PROMPT}\n\nMEETING SO FAR (for context only — if this claim/conflict was already established and discussed earlier in the meeting, note that in groundTruth rather than treating it as a fresh discovery):\n${meetingSummary || '(nothing yet)'}\n\nCLAIM: "${claimText}"\n\nCONTEXT:\n${contextParts.join('\n\n')}`,
       config: { responseMimeType: 'application/json', responseSchema: FACT_CHECK_SCHEMA },
@@ -144,7 +139,7 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
     }
   }
 
-  if (isWebFactCheckConfigured()) {
+  if (isWebFactCheckConfigured() && isToolActive(activeTools, 'webSearch')) {
     try {
       const webOutcome = await webFactCheckClaim(claimText);
       if (webOutcome) {

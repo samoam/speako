@@ -17,9 +17,9 @@ function main(): void {
   let currentSession: Session | null = null;
 
   ui.setHandlers({
-    onStart: (languageCode, name) => {
+    onStart: (languageCode, name, existingSessionId) => {
       const languageCodes = languageCode ? [languageCode] : config.languageCodes;
-      currentSession = new Session(ui, languageCodes, name);
+      currentSession = new Session(ui, languageCodes, name, existingSessionId);
       currentSession.start();
       return currentSession.id;
     },

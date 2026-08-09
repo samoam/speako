@@ -1,12 +1,80 @@
 import { db } from './db';
 import { TranscriptSegment } from '../types';
 
-export function createSession(sessionId: string, languageCodes: string[], name?: string): void {
-  db.prepare("INSERT INTO sessions (id, started_at, language_codes, name) VALUES (?, datetime('now'), ?, ?)").run(
+export interface CreateSessionOptions {
+  sessionType?: 'personal' | 'work';
+  meetingType?: string;
+  calendarEventId?: string;
+  /** Which tools/integrations are active for this session (see src/tools/activeTools.ts). Omitted/undefined means "all globally-configured tools" — preserves existing behavior. */
+  activeTools?: string[];
+}
+
+export function createSession(
+  sessionId: string,
+  languageCodes: string[],
+  name?: string,
+  options?: CreateSessionOptions
+): void {
+  db.prepare(
+    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools)
+     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
     sessionId,
     JSON.stringify(languageCodes),
-    name || null
+    name || null,
+    options?.sessionType || 'personal',
+    options?.meetingType || null,
+    options?.calendarEventId || null,
+    options?.sessionType === 'work' ? 'pending' : 'none',
+    options?.activeTools ? JSON.stringify(options.activeTools) : null
   );
+}
+
+export function setPrepStatus(sessionId: string, status: 'none' | 'pending' | 'ready' | 'failed'): void {
+  db.prepare('UPDATE sessions SET prep_status = ? WHERE id = ?').run(status, sessionId);
+}
+
+export function setActiveTools(sessionId: string, tools: string[]): void {
+  db.prepare('UPDATE sessions SET active_tools = ? WHERE id = ?').run(JSON.stringify(tools), sessionId);
+}
+
+/**
+ * Finds the most likely "previous instance" of a recurring work meeting, for
+ * prep workflows that want last time's notes (standup, retro, 1:1, etc).
+ * Prefers an exact case-insensitive name match among past sessions of the
+ * same meeting_type; falls back to the most recent session of that type with
+ * any name. Always overridable in the UI — this is a best-effort default,
+ * not a guarantee.
+ */
+export interface PreviousSessionMatch {
+  id: string;
+  name: string | null;
+  endedAt: string | null;
+}
+
+export function findLikelyPreviousSession(
+  meetingType: string,
+  name: string | undefined,
+  excludeSessionId: string
+): PreviousSessionMatch | undefined {
+  const candidates = db
+    .prepare(
+      `SELECT id, name, ended_at
+       FROM sessions
+       WHERE session_type = 'work' AND meeting_type = ? AND id != ? AND ended_at IS NOT NULL
+       ORDER BY started_at DESC, rowid DESC`
+    )
+    .all(meetingType, excludeSessionId) as { id: string; name: string | null; ended_at: string | null }[];
+
+  if (candidates.length === 0) return undefined;
+
+  const normalizedName = name?.trim().toLowerCase();
+  const exactMatch = normalizedName
+    ? candidates.find((c) => c.name?.trim().toLowerCase() === normalizedName)
+    : undefined;
+  const row = exactMatch || candidates[0];
+
+  return { id: row.id, name: row.name, endedAt: row.ended_at };
 }
 
 export function endSession(sessionId: string): void {
@@ -60,6 +128,8 @@ export const deleteSession = db.transaction((sessionId: string) => {
   db.prepare('DELETE FROM triggers WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM live_queries WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM meeting_state WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM prep_briefs WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM coaching_feedback WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 });
 
@@ -68,11 +138,32 @@ export interface SessionRow {
   languageCodes: string[];
   endedAt: string | null;
   name: string | null;
+  sessionType: 'personal' | 'work';
+  meetingType: string | null;
+  calendarEventId: string | null;
+  prepStatus: 'none' | 'pending' | 'ready' | 'failed';
+  /** null means "all globally-configured tools active" — see src/tools/activeTools.ts. */
+  activeTools: string[] | null;
 }
 
 export function getSession(sessionId: string): SessionRow | undefined {
-  const row = db.prepare('SELECT id, ended_at, language_codes, name FROM sessions WHERE id = ?').get(sessionId) as
-    | { id: string; ended_at: string | null; language_codes: string | null; name: string | null }
+  const row = db
+    .prepare(
+      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools
+       FROM sessions WHERE id = ?`
+    )
+    .get(sessionId) as
+    | {
+        id: string;
+        ended_at: string | null;
+        language_codes: string | null;
+        name: string | null;
+        session_type: 'personal' | 'work';
+        meeting_type: string | null;
+        calendar_event_id: string | null;
+        prep_status: 'none' | 'pending' | 'ready' | 'failed';
+        active_tools: string | null;
+      }
     | undefined;
   if (!row) return undefined;
   return {
@@ -80,6 +171,11 @@ export function getSession(sessionId: string): SessionRow | undefined {
     endedAt: row.ended_at,
     languageCodes: row.language_codes ? JSON.parse(row.language_codes) : ['en-US'],
     name: row.name,
+    sessionType: row.session_type,
+    meetingType: row.meeting_type,
+    calendarEventId: row.calendar_event_id,
+    prepStatus: row.prep_status,
+    activeTools: row.active_tools ? JSON.parse(row.active_tools) : null,
   };
 }
 
@@ -116,12 +212,17 @@ export interface SessionSummary {
   languageCodes: string[];
   segmentCount: number;
   hasSummary: boolean;
+  sessionType: 'personal' | 'work';
+  meetingType: string | null;
+  prepStatus: 'none' | 'pending' | 'ready' | 'failed';
+  activeTools: string[] | null;
 }
 
 export function listSessions(): SessionSummary[] {
   const rows = db
     .prepare(
       `SELECT s.id, s.name, s.started_at, s.ended_at, s.diarized_at, s.language_codes,
+              s.session_type, s.meeting_type, s.prep_status, s.active_tools,
               (SELECT COUNT(*) FROM transcript_segments t WHERE t.session_id = s.id) AS segment_count,
               (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary
        FROM sessions s
@@ -138,6 +239,10 @@ export function listSessions(): SessionSummary[] {
     languageCodes: r.language_codes ? JSON.parse(r.language_codes) : [],
     segmentCount: r.segment_count,
     hasSummary: !!r.has_summary,
+    sessionType: r.session_type,
+    meetingType: r.meeting_type,
+    prepStatus: r.prep_status,
+    activeTools: r.active_tools ? JSON.parse(r.active_tools) : null,
   }));
 }
 

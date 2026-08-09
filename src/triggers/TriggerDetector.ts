@@ -3,6 +3,7 @@ import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import { classifySegment, CategoryResult } from './classify';
 import { insertTrigger, TriggerCategory, TriggerEvent } from '../storage/triggerRepository';
+import { getMeetingStateSnapshot } from '../state/meetingState';
 
 const SENTIMENT_WINDOW_SIZE = 5;
 
@@ -44,7 +45,8 @@ export class TriggerDetector extends EventEmitter {
 
     let classification;
     try {
-      classification = await classifySegment(segment.text);
+      const { rollingSummary } = getMeetingStateSnapshot(this.sessionId);
+      classification = await classifySegment(segment.text, rollingSummary || undefined);
     } catch (err: any) {
       console.error(`[triggers] classification failed for session ${this.sessionId}:`, err.message);
       return;

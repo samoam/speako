@@ -1,3 +1,5 @@
+import { execFile } from 'child_process';
+
 // @modelcontextprotocol/sdk is ESM-only ("type": "module") but ships a working
 // .cjs build for require() — same situation as @google/genai elsewhere in this
 // project. require() sidesteps the ESM/CJS boundary that a static `import`
@@ -6,12 +8,12 @@
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 
-export interface McpServerConfig {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-}
+export type McpServerConfig =
+  | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+  | { transport: 'http'; url: string; apiKey: string };
 
 export interface McpTool {
   name: string;
@@ -28,6 +30,7 @@ export interface McpTool {
 export class McpServerClient {
   private client: any = null;
   private connecting: Promise<any> | null = null;
+  private stdioTransport: any = null;
 
   constructor(private config: McpServerConfig) {}
 
@@ -36,11 +39,19 @@ export class McpServerClient {
     if (this.connecting) return this.connecting;
 
     this.connecting = (async () => {
-      const transport = new StdioClientTransport({
-        command: this.config.command,
-        args: this.config.args,
-        env: this.config.env,
-      });
+      const transport =
+        this.config.transport === 'http'
+          ? new StreamableHTTPClientTransport(new URL(this.config.url), {
+              requestInit: { headers: { Authorization: `Bearer ${this.config.apiKey}` } },
+            })
+          : new StdioClientTransport({
+              command: this.config.command,
+              args: this.config.args,
+              env: this.config.env,
+            });
+      if (this.config.transport === 'stdio') {
+        this.stdioTransport = transport;
+      }
       const client = new Client({ name: 'speako', version: '1.0.0' });
       await client.connect(transport);
       this.client = client;
@@ -59,5 +70,23 @@ export class McpServerClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<any> {
     const client = await this.getClient();
     return client.callTool({ name, arguments: args });
+  }
+
+  /** Closes the underlying transport (kills the stdio subprocess, if any) and drops the cached client so the next call reconnects fresh. */
+  close(): void {
+    const pid = this.stdioTransport?.pid ?? null;
+    this.client?.close?.();
+    this.client = null;
+    this.connecting = null;
+    this.stdioTransport = null;
+
+    // On Windows, child.kill() (used internally by the SDK's transport.close())
+    // only signals the immediately-spawned process. Tools launched via `uvx`
+    // spawn a chain of further descendants (uv -> mcp-atlassian.exe -> python.exe)
+    // that don't relay the signal and survive as orphans. taskkill /T force-kills
+    // the whole tree; POSIX process groups don't have this problem.
+    if (pid && process.platform === 'win32') {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {});
+    }
   }
 }
