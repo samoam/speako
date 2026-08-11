@@ -976,3 +976,58 @@ the value if disconnects are more/less frequent than expected.
   with "You"/"Assistant" speaker labels, and confirmed the migration
   backfill correctly recovered a pre-existing real `"Practice: session"`
   (63 segments) into the Practice tab on first load after the schema change.
+
+## Speako is work-only — "Personal" one-click mode removed
+
+- **Explicit product decision, not a refactor of convenience** — the user
+  asked directly for Speako to be work-only. Removed the Personal/Work
+  toggle from the new-session modal entirely (`#sessionTypeToggle`,
+  `#personalTypeBtn`/`#workTypeBtn`, the `setSessionType()` function, the
+  `sessionType` JS state var) along with the one-click "Start new session"
+  button/handler (`#startBtn` and its click listener) — `#workPrepBox`
+  (meeting-type picker, prep) is now unconditionally visible and is the
+  only path to creating a new session.
+- **Real latent bug this surfaced and fixed**: `createSession()`'s
+  `prep_status` was derived from `options?.sessionType === 'work' ? 'pending'
+  : 'none'` — i.e., `sessionType` doubled as "does this session want prep."
+  Once every session became `'work'`, that check would have made
+  `session.ts`'s direct-start path (`POST /api/session/start` with no prior
+  `/api/session/prepare`) permanently show `prep_status: 'pending'` with no
+  prep workflow ever running to resolve it — a stuck "preparing…" badge
+  forever. Fixed by adding an explicit, independent `prepStatus` option to
+  `CreateSessionOptions` (defaults `'none'`) — only `/api/session/prepare`'s
+  call site passes `'pending'` now; `sessionType` no longer has any
+  side-channel meaning beyond the label itself. This is exactly the kind of
+  bug that's invisible in a diff (both old and new code "looked reasonable")
+  and would only have surfaced once `session.ts`'s path was actually
+  exercised without prep — caught by tracing through the logic during this
+  change, not by a test failure.
+- **`sessionType: 'personal'` retained as a historical value only** — the
+  TypeScript union (`'personal' | 'work'`) still includes it (existing rows
+  need to remain representable/readable), and `createSession()`'s default
+  changed from `'personal'` to `'work'`. Practice/chat session creation
+  (`server.ts`) had its explicit `sessionType: 'personal'` removed entirely
+  now that it's vestigial — `sessionType` never drove any behavior for
+  those two kinds (confirmed by `sessionKind` being the real discriminator
+  for the sidebar tabs), so they now just default to `'work'` like
+  everything else, simplifying those two call sites.
+- **Existing personal *meeting* rows deleted per explicit user request** —
+  29 rows matching `session_type = 'personal' AND session_kind = 'meeting'`
+  were removed via a one-off script that called the real `deleteSession()`
+  transaction per row (not a raw `DELETE FROM sessions`), so every related
+  table (segments, summaries, action items, sentiment, triggers,
+  suggestions, fact-checks, live queries, meeting-state, prep briefs,
+  coaching feedback, chapters) was cleaned up consistently — same
+  cascading-delete logic the single-session UI delete button already uses.
+  **Deliberately filtered on `session_kind = 'meeting'` too, not just
+  `session_type = 'personal'`** — practice/chat rows also carried
+  `session_type = 'personal'` at the time (before the simplification above),
+  and a naive `session_type`-only filter would have deleted the one real
+  practice session from recent testing along with the intended stale
+  meetings. Verified via `GET /api/sessions` before and after: 29 deleted,
+  the 1 practice row and all 4 real work meetings confirmed untouched.
+- Google Calendar's `classifyMeetingType()` has zero dependency on
+  `sessionType` (confirmed via code inspection before making this change,
+  not assumed) — nothing in the meeting-type-classification or prep-workflow
+  logic needed to change; the only real wiring was the UI/creation-path
+  change plus the `prep_status` decoupling above.

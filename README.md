@@ -118,11 +118,12 @@ npm start
 ```
 
 Then open **http://localhost:3210** (or your configured `HTTP_PORT`). The
-server starts with nothing recording — use the page's **Start recording**
-button to begin a session, **Stop** to end it, and **Save transcript** to
-download the finalized transcript as a `.txt` file (add `?format=json` to the
-export URL for JSON instead). `Ctrl+C` in the terminal stops everything,
-including any in-progress session.
+server starts with nothing recording — click **+ New session**, pick a
+meeting type, and **Prepare session** (see "Pre-meeting prep" below); once
+ready, click **Start recording** on the session card to begin. **Stop** ends
+it, and **Save transcript** downloads the finalized transcript as a `.txt`
+file (add `?format=json` to the export URL for JSON instead). `Ctrl+C` in
+the terminal stops everything, including any in-progress session.
 
 Transcript segments are persisted to `./data/speako.db` (SQLite) as they're
 finalized, tagged with the session ID shown in the UI while recording.
@@ -208,9 +209,9 @@ toggle if you'd rather turn it off; see `.env.example` for all the knobs.
   log your feedback — useful data for tuning thresholds later, matching
   spec's original idea of using that signal to improve trigger accuracy over time.
 
-### Pre-meeting prep (Personal vs. Work sessions)
+### Pre-meeting prep
 
-New sessions default to **Personal** — the exact one-click flow above, unchanged. Toggling to **Work** before starting reveals a meeting-type picker (Standup, Sprint Planning, Sprint Review, Retro, One-on-One, Design/Dev Discussion, or Other) and a **Prepare session** button instead of Start. Clicking it:
+Speako is work-only — there's no "Personal" one-click mode anymore. Every new session goes through a meeting-type picker (Standup, Sprint Planning, Sprint Review, Retro, One-on-One, Design/Dev Discussion, or Other) and a **Prepare session** step before recording starts. Clicking **Prepare session**:
 
 1. Creates the session immediately (shows "preparing…" in the sidebar) — recording is never blocked on prep finishing.
 2. Runs a type-specific workflow in the background: Jira/Confluence/Bitbucket searches relevant to that meeting type, the previous same-type session's notes (auto-matched by name/subtype, see NOTES.md), and — if configured — durable `mem0-cloud` facts (one-on-ones) or `rag-cloud`/MyRAG external references (design/dev discussions).
@@ -220,7 +221,7 @@ Once ready, the session card shows a **Start recording** button. The brief itsel
 
 ### Sidebar history tabs (Meetings / Practice / Chat)
 
-The sidebar's session list is split into three tabs by `session_kind`: **Meetings** (real recordings, Personal or Work — unchanged), **Practice** (roleplay runs against a prep brief), and **Chat** (ad-hoc voice-chat sessions). Both voice chat and practice now persist a real session + transcript (previously chat was fully ephemeral — nothing was saved), so both show up in history and can be reopened to view their transcript, same as any recorded meeting. Practice sessions still get coaching feedback on stop, same as before; chat sessions don't (there's nothing to score — it's a Q&A log, not a roleplay).
+The sidebar's session list is split into three tabs by `session_kind`: **Meetings** (real recordings), **Practice** (roleplay runs against a prep brief), and **Chat** (ad-hoc voice-chat sessions). Both voice chat and practice now persist a real session + transcript (previously chat was fully ephemeral — nothing was saved), so both show up in history and can be reopened to view their transcript, same as any recorded meeting. Practice sessions still get coaching feedback on stop, same as before; chat sessions don't (there's nothing to score — it's a Q&A log, not a roleplay).
 
 #### Pull request reviews (Bitbucket Server)
 

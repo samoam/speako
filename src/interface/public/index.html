@@ -237,7 +237,6 @@
     }
     .primary-btn:hover { background: #2a2a2f; }
     .primary-btn[hidden] { display: none; }
-    #startBtn { border-color: var(--ok); }
     #stopBtn { border-color: var(--rec); }
 
     #sessionListHeader {
@@ -359,16 +358,9 @@
 
     #summaryWrap, #actionItemsWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
-    #sessionTypeToggle { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
     #codebaseIndexBox, #communicationsIndexBox, #msGraphSyncBox, #outlookDesktopSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
     #codebaseIndexBox button, #communicationsIndexBox button, #msGraphSyncBox button, #outlookDesktopSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
     #codebaseIndexStatus, #communicationsIndexStatus, #msGraphSyncStatus, #outlookDesktopSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-    .type-btn {
-      flex: 1; padding: 0.35rem; border-radius: 6px; border: 1px solid var(--border);
-      background: #1f1f23; color: var(--muted); cursor: pointer; font-size: 0.82rem;
-    }
-    .type-btn.active { color: var(--text); border-color: var(--accent); background: #232733; }
-    #workPrepBox[hidden] { display: none; }
     #workPrepBox { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.3rem; }
     #calendarShortcuts { display: flex; flex-direction: column; gap: 0.3rem; }
     #userNotesInput {
@@ -770,17 +762,13 @@
       </div>
       <div class="modal-body">
         <div id="newSessionBox">
-          <div id="sessionTypeToggle">
-            <button id="personalTypeBtn" class="type-btn active" data-type="personal">Personal</button>
-            <button id="workTypeBtn" class="type-btn" data-type="work">Work</button>
-          </div>
           <input id="nameInput" placeholder="Session name (optional)" />
           <select id="languageSelect"></select>
           <div class="tools-checklist">
             <div class="tools-checklist-label">Heavy features for this session</div>
             <div id="newSessionFeaturesChecklist"></div>
           </div>
-          <div id="workPrepBox" hidden>
+          <div id="workPrepBox">
             <select id="meetingTypeSelect">
               <option value="generic">Other</option>
               <option value="standup">Standup</option>
@@ -840,7 +828,6 @@
             </div>
             <button id="prepareBtn" class="primary-btn">Prepare session</button>
           </div>
-          <button id="startBtn" class="primary-btn"><svg class="icon icon-filled" style="color:var(--rec)"><use href="#icon-circle-fill"></use></svg> Start new session</button>
         </div>
       </div>
     </div>
@@ -1051,7 +1038,6 @@
     const sessionKindTabBtns = document.querySelectorAll('.kind-tab-btn');
     const nameInput = document.getElementById('nameInput');
     const languageSelect = document.getElementById('languageSelect');
-    const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const mainTitle = document.getElementById('mainTitle');
     const mainMeta = document.getElementById('mainMeta');
@@ -1079,8 +1065,6 @@
     const qaContent = document.getElementById('qaContent');
     const panelResizer = document.getElementById('panelResizer');
     const suggestionsPanel = document.getElementById('suggestionsPanel');
-    const personalTypeBtn = document.getElementById('personalTypeBtn');
-    const workTypeBtn = document.getElementById('workTypeBtn');
     const workPrepBox = document.getElementById('workPrepBox');
     const meetingTypeSelect = document.getElementById('meetingTypeSelect');
     const userNotesInput = document.getElementById('userNotesInput');
@@ -1174,7 +1158,6 @@
     const suggestionsUnreadDot = document.getElementById('suggestionsUnreadDot');
     const kebabBtn = document.getElementById('kebabBtn');
     const kebabMenu = document.getElementById('kebabMenu');
-    let sessionType = 'personal';
     let selectedCalendarEventId = null;
     let availableTools = null; // cached GET /api/tools response: { jira, confluence, bitbucket, mem0, ragCloud, localCodebase, webSearch }
     let currentSessionActiveTools = null; // activeTools of whichever session is open in the main panel
@@ -1833,21 +1816,6 @@
 
     // ---------- Pre-meeting prep ----------
 
-    function setSessionType(type) {
-      sessionType = type;
-      personalTypeBtn.classList.toggle('active', type === 'personal');
-      workTypeBtn.classList.toggle('active', type === 'work');
-      workPrepBox.hidden = type !== 'work';
-      startBtn.hidden = type === 'work';
-      if (type === 'work') {
-        loadCalendarShortcuts();
-        loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
-        updateWorkflowPreview();
-      }
-    }
-    personalTypeBtn.addEventListener('click', () => setSessionType('personal'));
-    workTypeBtn.addEventListener('click', () => setSessionType('work'));
-
     async function loadCalendarShortcuts() {
       calendarShortcuts.innerHTML = '';
       calendarShortcutsBox.hidden = true;
@@ -2374,10 +2342,9 @@
     function openNewSessionModal() {
       newSessionOverlay.hidden = false;
       loadAvailableFeatures().then((available) => renderFeaturesChecklist(newSessionFeaturesChecklist, null, available));
-      if (sessionType === 'work') {
-        loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
-        updateWorkflowPreview();
-      }
+      loadCalendarShortcuts();
+      loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
+      updateWorkflowPreview();
     }
 
     function closeNewSessionModal() {
@@ -3185,52 +3152,6 @@
         alert(`Could not delete session: ${err.message}`);
       }
     }
-
-    startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
-      try {
-        const res = await fetch('/api/session/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            languageCode: languageSelect.value,
-            name: nameInput.value.trim(),
-            activeFeatures: checkedFeatures(newSessionFeaturesChecklist),
-          }),
-        });
-        const data = await res.json();
-        liveSessionId = data.sessionId;
-        activeSessionId = data.sessionId;
-        nameInput.value = '';
-        closeNewSessionModal();
-        setRecordingUiState(true);
-        clearTranscriptDom();
-        emptyState.style.display = 'block';
-        emptyState.textContent = 'Listening…';
-        await refreshSessions();
-        const session = sessions.find((s) => s.id === liveSessionId);
-        setMainHeader(session);
-        saveBtn.disabled = false;
-        identifyBtn.disabled = true;
-        summarizeBtn.disabled = true;
-        coachBtn.disabled = true;
-        chaptersBtn.disabled = true;
-        deleteBtn.disabled = true;
-        renderSummary(null);
-        renderActionItems([]);
-        renderTriggers([]);
-        renderSuggestions([]);
-        renderFactChecks([]);
-        renderQueries([]);
-        renderCoachingFeedback(null);
-        renderChapters(null);
-        renderRelationshipTrend([]);
-      } catch (err) {
-        mainMeta.textContent = `Error starting: ${err.message}`;
-      } finally {
-        startBtn.disabled = false;
-      }
-    });
 
     stopBtn.addEventListener('click', async () => {
       stopBtn.disabled = true;

@@ -64,7 +64,10 @@ export class Session {
 
   start(): void {
     if (!this.existingSessionId) {
-      createSession(this.id, this.languageCodes, this.name, { activeFeatures: this.initialActiveFeatures ?? undefined });
+      // Speako is work-only now — every session is 'work', even one started
+      // directly via POST /api/session/start without going through
+      // /api/session/prepare first (which itself always creates 'work').
+      createSession(this.id, this.languageCodes, this.name, { sessionType: 'work', activeFeatures: this.initialActiveFeatures ?? undefined });
     } else {
       // Resuming a session created by POST /api/session/prepare — clear any
       // scheduled auto-start time now that it's actually recording, whether

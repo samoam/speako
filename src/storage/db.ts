@@ -273,7 +273,11 @@ for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', '
   }
 }
 if (!sessionColumns.some((c) => c.name === 'session_type')) {
-  db.exec("ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'personal'");
+  // 'work' default matches createSession()'s own default (segmentRepository.ts)
+  // now that Speako is work-only — this column-level default only matters
+  // for a raw INSERT that omits the column outright, which the app itself
+  // never does (createSession always supplies it explicitly).
+  db.exec("ALTER TABLE sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'work'");
 }
 if (!sessionColumns.some((c) => c.name === 'prep_status')) {
   db.exec("ALTER TABLE sessions ADD COLUMN prep_status TEXT NOT NULL DEFAULT 'none'");

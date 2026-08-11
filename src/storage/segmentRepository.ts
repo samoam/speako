@@ -2,9 +2,22 @@ import { db } from './db';
 import { TranscriptSegment } from '../types';
 
 export interface CreateSessionOptions {
+  /** Speako is work-only — defaults to 'work'. 'personal' is retained only as a historical value for pre-existing rows created before this became work-only; nothing creates it anymore. */
   sessionType?: 'personal' | 'work';
   /** Distinguishes real recorded meetings from voice-chat/practice sessions for the sidebar history tabs — orthogonal to sessionType (personal/work only applies to 'meeting'). Defaults to 'meeting'. */
   sessionKind?: 'meeting' | 'practice' | 'chat';
+  /**
+   * Explicit signal for whether this row wants the pre-meeting prep workflow
+   * to run — deliberately NOT derived from sessionType anymore. Before
+   * Speako went work-only, sessionType === 'work' doubled as "this session
+   * wants prep," which broke the moment every session became 'work': a
+   * directly-started session (POST /api/session/start with no prior
+   * /api/session/prepare call) would otherwise get prep_status='pending'
+   * forever with no prep workflow ever running to resolve it, showing a
+   * permanently-stuck "preparing…" badge. Defaults to 'none' (no prep
+   * intended) — only /api/session/prepare's call site passes 'pending'.
+   */
+  prepStatus?: 'none' | 'pending';
   meetingType?: string;
   calendarEventId?: string;
   /** Which tools/integrations are active for this session (see src/tools/activeTools.ts). Omitted/undefined means "all globally-configured tools" — preserves existing behavior. */
@@ -28,11 +41,11 @@ export function createSession(
     sessionId,
     JSON.stringify(languageCodes),
     name || null,
-    options?.sessionType || 'personal',
+    options?.sessionType || 'work',
     options?.sessionKind || 'meeting',
     options?.meetingType || null,
     options?.calendarEventId || null,
-    options?.sessionType === 'work' ? 'pending' : 'none',
+    options?.prepStatus || 'none',
     options?.activeTools ? JSON.stringify(options.activeTools) : null,
     options?.scheduledStartAt || null,
     options?.activeFeatures ? JSON.stringify(options.activeFeatures) : null

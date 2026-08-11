@@ -312,7 +312,7 @@ export class InterfaceServer {
 
       const sessionId = uuid();
       createPrepSession(sessionId, languageCodes, name, {
-        sessionType: 'work',
+        prepStatus: 'pending',
         meetingType,
         calendarEventId,
         activeTools,
@@ -1010,12 +1010,12 @@ export class InterfaceServer {
 
       persistedSessionId = uuid();
       persistedSessionKind = 'practice';
-      createPrepSession(persistedSessionId, source.languageCodes, `Practice: ${source.name ?? 'session'}`, { sessionType: 'personal', sessionKind: 'practice' });
+      createPrepSession(persistedSessionId, source.languageCodes, `Practice: ${source.name ?? 'session'}`, { sessionKind: 'practice' });
       systemInstruction = buildPracticeInstruction(brief, source.meetingType ?? 'generic', source.name);
     } else {
       persistedSessionId = uuid();
       persistedSessionKind = 'chat';
-      createPrepSession(persistedSessionId, config.languageCodes, `Chat ${new Date().toLocaleString()}`, { sessionType: 'personal', sessionKind: 'chat' });
+      createPrepSession(persistedSessionId, config.languageCodes, `Chat ${new Date().toLocaleString()}`, { sessionKind: 'chat' });
       systemInstruction = buildChatInstruction();
     }
 
