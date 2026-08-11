@@ -588,3 +588,391 @@ the value if disconnects are more/less frequent than expected.
   and typecheck-clean, but no real `CODEBASE_LOCAL_PATHS` run has confirmed
   `code_chunks` populates correctly or that `searchCode()` surfaces a real,
   recognizable function/class from an actual local repo.
+
+## Native Microsoft Graph ingestion (Outlook + Teams)
+
+- **Replaces the need for the external daily-agent** described in
+  `docs/EXTERNAL_INGESTION_PROMPT.md` for anyone who can register their own
+  Azure AD app — `src/integrations/msGraphSync.ts` fetches directly and
+  upserts into the same `external_messages` table via the same
+  insert-then-`ON CONFLICT`-reset-`indexed_at` contract that doc specifies,
+  so the existing chunk/embed step (`indexExternalMessages.ts`, "Index
+  communications" button) needed zero changes. Both paths can run
+  side-by-side — kept the doc rather than deleting it, since not everyone can
+  create an app registration, and it's the only option for sources Graph
+  doesn't cover.
+- **Device-code flow, not the redirect-server flow `gcal-auth.ts` uses** —
+  deliberately different from the Google Calendar precedent. A device code
+  only needs the app registration to allow "public client flows"; no redirect
+  URI to register, no local port to coordinate. Traded a slightly less slick
+  one-time setup (copy a code, open a URL) for one fewer moving part.
+- **Chat.Read only, not `ChannelMessage.Read.All`** — deliberately scoped to
+  1:1/group chats, not Teams channel posts. In most Microsoft 365 tenants,
+  channel-message permissions require a tenant admin to grant consent before
+  any user can authorize them; `Chat.Read` (and `Mail.Read`) are both
+  user-consentable, so the one-time `npm run msgraph-auth` sign-in doesn't
+  block on IT. Revisit if channel coverage turns out to matter — it would be
+  an additive scope + a second fetch function, not a rewrite.
+- **msal-node has no built-in persistent token cache** (unlike `googleapis`,
+  which just wants a plain JSON token blob on disk) — needed a small
+  `ICachePlugin` (`msGraphAuth.ts`'s `fileCachePlugin`) that serializes
+  MSAL's cache to `MS_GRAPH_TOKEN_PATH` on change and deserializes it back in
+  on every `PublicClientApplication` construction. `isMsGraphConfigured()`
+  just checks that file exists — mirrors `isCalendarConfigured()`'s
+  credentials-file-exists check.
+- **Teams chat message fetching has no server-side date filter** — the
+  `/chats/{id}/messages` endpoint doesn't support `$filter` on
+  `createdDateTime` the way `/me/messages` does for email, so
+  `fetchRecentChatMessages` fetches one page (`$top=50`) per chat and filters
+  client-side. A chat with more unread-since-cutoff messages than that in one
+  poll window will miss the overflow — accepted for a 15-minute default poll
+  cadence (`MS_GRAPH_POLL_MINUTES`); would need real pagination if the
+  interval were made much longer.
+- **Overlap-window polling, not since-last-sync** — every run looks back
+  `MS_GRAPH_LOOKBACK_HOURS` (default 48) regardless of when the previous run
+  succeeded, same rationale `EXTERNAL_INGESTION_PROMPT.md` already gives for
+  the manual path: a missed run (token expired, app closed) shouldn't create
+  a silent gap, and re-upserting an already-seen message is a no-op cost
+  since `upsertExternalMessage`'s `ON CONFLICT` update is idempotent.
+- **Now verified against a real Azure AD app registration + real tenant** —
+  found and fixed two real issues, both worth knowing about before anyone
+  else sets this up:
+  - **`MS_GRAPH_TENANT_ID=common` fails device-code sign-in with
+    `AADSTS50059` ("No tenant-identifying information found") for a
+    single-tenant app registration** ("Accounts in this organizational
+    directory only"). `common` only works for *multi-tenant* app
+    registrations. Confirmed by calling the `/common/oauth2/v2.0/devicecode`
+    endpoint directly and comparing against the same call with a specific
+    tenant GUID — the fix is to set `MS_GRAPH_TENANT_ID` to the tenant ID
+    shown on the app registration's Overview page (not the tenant implied by
+    the user's email domain, which can differ from where the app itself is
+    registered — this bit us during setup: `login.microsoftonline.com/{mail-domain}/v2.0/.well-known/openid-configuration`
+    resolved to a *different* tenant GUID than the app registration lives
+    in). config.ts's default stays `common` since most people registering
+    fresh will pick single-tenant and hit this immediately — worth calling
+    out prominently in setup docs, which was added to README.md.
+  - **`msal-node`'s `DeviceCodeClient.getDeviceCode()` silently swallows the
+    real AAD error body** on the initial device-code request — it
+    destructures the expected `user_code`/`verification_uri`/etc. fields
+    directly out of the response without checking for an `error` field
+    first, so a 400 error response (like the `AADSTS50059` above) becomes a
+    `DeviceCodeResponse` of all-`undefined` fields instead of a thrown
+    error. The failure only surfaces later, confusingly, as
+    `post_request_failed: invalid_grant` from the *token polling* step
+    (since it ends up polling with an undefined device code). Worked around
+    by calling the device-code endpoint directly with `Invoke-RestMethod`
+    to see the real error body when this class of failure ever recurs —
+    `scripts/msgraph-auth.ts`'s catch block also now logs
+    `err.errorCode`/`err.subError`/`err.errorMessage` for whatever detail
+    msal-node does surface.
+  - **Real-account finding, root-caused (not a code bug): both mail and
+    Teams failures traced to a single cause — signing in as a B2B guest**.
+    Email sync failed with `MailboxNotEnabledForRESTAPI` ("mailbox
+    is...hosted on-premise") and Teams chat sync failed with a bare `401
+    Unauthorized` on `/me/chats` despite the token verifiably having
+    `Chat.Read` granted (confirmed via `acquireTokenSilent(...).scopes`).
+    Initially suspected as two independent causes (hybrid Exchange; missing
+    Teams license) — actually one cause, confirmed by adding `User.Read` to
+    `MS_GRAPH_SCOPES` and calling `GET /me`: the signed-in account's
+    `userPrincipalName` was `...#EXT#@<tenant>.onmicrosoft.com` — the `#EXT#`
+    marker means this identity is a **B2B guest** in that tenant, not a
+    native member. `GET /me/licenseDetails` confirmed zero licenses, which
+    is expected for a guest (licenses live in the guest's home tenant, not
+    the one they're a guest in). A guest identity has no real mailbox or
+    first-class Teams presence in the host tenant, so both failures are
+    downstream of the same identity mismatch — the fix is signing in with
+    the account's actual home-tenant credentials, not an org-account
+    reachable only as a guest elsewhere. `msGraphSync.ts`'s per-source
+    try/catch (email failing independently of Teams) is what let both
+    symptoms surface cleanly enough to spot they shared one root cause
+    instead of one failure masking the other.
+  - **`User.Read` added to `MS_GRAPH_SCOPES`** specifically to make this kind
+    of self-service diagnosis possible next time (`GET /me`,
+    `GET /me/licenseDetails`) — not used by the sync itself. Virtually always
+    pre-approved on an app registration, so it doesn't add real consent
+    friction.
+  - `graphGet()` in `msGraphSync.ts` was updated to include the response
+    body text in thrown errors (previously just status/statusText) — the
+    body is where AAD/Graph's actual error code and human-readable message
+    live, and status alone (e.g. bare "401 Unauthorized") isn't actionable.
+
+## Outlook desktop COM automation fallback
+
+- **Why this exists at all**: the guest-account finding above means Graph's
+  Mail API is a dead end for this specific setup no matter which scopes are
+  requested — the account has no real mailbox in that tenant, full stop. A
+  genuinely different mechanism was needed: `scripts/outlookExport.ps1` +
+  `src/integrations/outlookDesktop.ts` read mail through classic desktop
+  Outlook's own COM automation object model instead of any cloud API, so it
+  rides whatever connection the locally-configured Outlook profile already
+  has — irrelevant whether that's Exchange Online, hybrid, on-prem, or a
+  guest-tenant quirk, since it's not going through Graph at all.
+- **"New Outlook" has no COM automation support** — Microsoft's newer
+  PWA-style Outlook client doesn't expose the classic `Outlook.Application`
+  COM object at all, so this fallback only works with classic desktop
+  Outlook. There's no cheap way to detect which one is installed from
+  Node/PowerShell short of actually trying `New-Object -ComObject
+  Outlook.Application` and seeing what happens — `isOutlookDesktopConfigured()`
+  only checks `process.platform === 'win32'`, a necessary-but-not-sufficient
+  gate; a real mismatch surfaces as a clear failure when the sync actually runs.
+- **Shells out to `powershell.exe`, doesn't use a Node COM binding** —
+  deliberately, to avoid adding a native-binding dependency (`winax`,
+  `edge-js`, etc.) that would need node-gyp/native compilation and could
+  break across Node/Electron version bumps. Matches this codebase's existing
+  precedent of shelling out to external tools (bundled SoX binary, `uvx
+  mcp-atlassian`) rather than binding to them in-process.
+- **Outlook's "Object Model Guard" shows an interactive security prompt**
+  ("A program is trying to access e-mail information...") the first time an
+  external process touches mail via COM in a session — this is why the
+  sync is manual-button-only (Settings' "Sync via Outlook desktop"), not a
+  background poll like the Graph sync. An unattended timer could stall
+  indefinitely behind a prompt nobody's watching for.
+- **Iterate-and-break instead of a DASL `Items.Restrict()` filter** for the
+  date cutoff — `Restrict()`'s date-filter syntax is locale-dependent
+  (`"[ReceivedTime] >= 'mm/dd/yyyy h:mm AM/PM'"` in the *Outlook client's*
+  locale, not ISO), which is exactly the kind of environment-fragile string
+  formatting worth avoiding. `Items.Sort("[ReceivedTime]", true)` (descending)
+  + breaking on the first item older than the cutoff is locale-proof and
+  plenty fast for a 48h inbox window.
+- **Resolves SMTP addresses via `GetExchangeUser().PrimarySmtpAddress`**,
+  falling back to `.Address` — Exchange accounts' raw `.Address`/
+  `.SenderEmailAddress` is often an internal Exchange DN
+  (`/O=.../CN=RECIPIENTS/CN=...`), not a usable SMTP address, for on-prem/
+  hybrid mailboxes especially. Not yet verified against a real hybrid
+  mailbox in this pass (built and unit-tested against synthetic item shapes
+  only) — worth confirming the DN-resolution path actually fires correctly
+  the first time this runs against real mail.
+- **Per-item try/catch inside the PowerShell loop**, matching
+  `indexCodebase.ts`/`bitbucketServer.ts`'s per-unit resilience convention —
+  one malformed/corrupted mail item shouldn't abort the whole export.
+- Mail body comes back already-plain-text (`MailItem.Body`), unlike Graph's
+  HTML bodies — no `htmlToPlainText()` equivalent needed for this path.
+- **Verified end-to-end against real Outlook — found and fixed two real
+  `ConvertTo-Json` bugs specific to Windows PowerShell 5.1** (`powershell.exe`,
+  not the `pwsh` 7+ used elsewhere in this project):
+  - `-AsArray` (the obvious fix for "a 1-item array gets serialized as a bare
+    scalar, not `[x]`") doesn't exist before PowerShell 6.2 — using it against
+    `powershell.exe` throws `ParameterBindingException` immediately.
+  - The next-obvious fix, prefixing with a leading comma (`,$results |
+    ConvertTo-Json`, the standard array-preserving idiom on 6.2+), is
+    actively **wrong** on 5.1 — confirmed by direct reproduction: it
+    serializes the array as `{"value":[...],"Count":n}` instead of a plain
+    JSON array, for *any* size (tested with 2 and 10 items, not just 0/1).
+    Converting from `ArrayList` to a real `Object[]` via `.ToArray()` first
+    didn't help either — same wrapped shape.
+  - The actual, empirically-confirmed 5.1 behavior: piping a 2+-item array
+    directly serializes correctly (`[1,2,3]`); piping a 1-item array
+    unwraps to a bare scalar (`1`); piping an empty array produces empty
+    output (not `[]`). No single idiom covers all three sizes on this
+    PowerShell version, so `outlookExport.ps1` branches explicitly on
+    `$results.Count` (0 → literal `"[]"`; 1 → manually bracket one
+    `ConvertTo-Json` call; 2+ → pipe directly) instead of trusting a trick.
+  - Also found via a real run: `([DateTimeOffset]$item.ReceivedTime).UtcDateTime.ToString("o")`
+    (round-trip format) emits 7 fractional-second digits
+    (`...42.3620000Z`), which sorts incorrectly as TEXT against other
+    sources' 3-digit/no-fraction timestamps (Graph's `receivedDateTime`,
+    JS's `toISOString()`) — a longer digit string isn't a valid
+    lexicographic continuation of a shorter one at the same position. Fixed
+    by formatting explicitly as `"yyyy-MM-ddTHH:mm:ss.fffZ"` (3-digit ms,
+    matching `toISOString()`) instead of relying on `"o"`.
+  - End-to-end verified for real: 10 real inbox emails synced correctly into
+    `external_messages` (unindexed, correct titles/SMTP participants/UTC
+    timestamps) via the actual `POST`-route code path
+    (`syncOutlookDesktop()`), not just the raw PowerShell script in
+    isolation.
+
+## Teams chat via local client cache — investigated, shelved
+
+- Confirmed the new (MSix-packaged, `MSTeams_8wekyb3d8bbwe`) Teams client
+  does cache conversation data locally: an ~88MB IndexedDB LevelDB store for
+  `teams.microsoft.com` under
+  `%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\IndexedDB\`.
+  This was explored as a fallback for Teams chat after Microsoft Graph's
+  `/me/chats` turned out to be blocked by the guest-account issue (see the
+  native-Graph-ingestion section above) and there's no Outlook-equivalent
+  COM automation object model for Teams.
+- **Deliberately not built**: extracting readable messages from this store
+  requires two separate hard problems, neither of which is a stable public
+  API like Outlook's object model — (1) a native LevelDB reader dependency,
+  and (2) decoding Chromium/Blink's internal IndexedDB value serialization
+  format (V8's structured-clone wire format), which is undocumented by
+  Microsoft/Google for this purpose and tied to whatever internal object
+  shape the Teams web client happens to use for its conversation cache —
+  liable to silently break on any Teams update with zero warning. A
+  known-good open-source forensic parser for this exact format exists
+  (`ccl_chromium_reader` / `ccl_chrome_indexeddb` on GitHub, Python,
+  installed successfully via `pip install
+  git+https://github.com/cclgroupltd/ccl_chrome_indexeddb.git` during
+  investigation) — reusing it would have been far more reliable than a
+  from-scratch TypeScript reimplementation of an undocumented binary format
+  from memory.
+- **Stopped before extracting any real data**: the next step (copying the
+  live IndexedDB files to a safe temp location, since they're locked while
+  Teams is running) was blocked by Claude Code's auto-mode safety
+  classifier — reading/copying out of another app's private
+  Windows-app-container sandboxed data directory is a reasonable thing to
+  flag, and the user chose to shelve the whole approach rather than grant
+  an exception. No code exists for this in the repo; this note exists so a
+  future attempt doesn't have to re-derive the recon from scratch.
+- If revisited: the pragmatic path is almost certainly shelling out to a
+  Python script using `ccl_chromium_reader` (matching this codebase's
+  existing "shell out to an external tool" convention — SoX, PowerShell for
+  Outlook) rather than porting the parser to TypeScript, and it should only
+  ever run against a **copy** of the IndexedDB files, never the live
+  directory, to avoid any risk of corrupting Teams' actual data while it's
+  running.
+
+## Bitbucket pull-request review activity
+
+- **Extends the existing REST integration, not a new auth mechanism** —
+  reuses `BITBUCKET_SERVER_URL`/`USERNAME`/`TOKEN` as-is. Motivated by a
+  specific ask: "PRs assigned to me as reviewer, and comments from
+  reviewers on my PRs or where I'm mentioned."
+- **`/rest/api/1.0/dashboard/pull-requests?role=X&state=Y` is repo-agnostic**
+  — unlike `searchBitbucketServer`'s commit/file search, this doesn't need
+  `BITBUCKET_SERVER_REPOS` at all; it returns PRs across every repo the
+  authenticated user (whichever account the configured token belongs to)
+  can see, filtered by their role (`REVIEWER`/`AUTHOR`) on each PR. Much
+  simpler than iterating configured repos.
+- **No true "mentioned in comments" search exists on this API** — Bitbucket
+  Server has no cross-repo/global comment search (consistent with the
+  already-broken server-wide code search noted in the Phase 4 section
+  above). `bitbucketReviews.ts`'s `mentionsMe()` is a heuristic:
+  case-insensitive `@username` substring match over comments on PRs the
+  user is *already* involved in (authored, or asked to review) — a real
+  limitation, documented in the README, not a bug. Someone mentioning you
+  on a PR you have zero involvement in would be missed entirely.
+- **Approval status is looked up by matching `bitbucketServerUsername`
+  against each PR's `reviewers[].user.name`** (Bitbucket's internal account
+  name, not display name/email) — case-insensitive, since Bitbucket Server
+  account names have historically been case-insensitive for auth purposes
+  and there's no guarantee the configured username's casing matches exactly
+  what the API echoes back.
+- **New `ToolKey` (`bitbucketReviews`), separate from the existing
+  `bitbucket` key** — deliberately not folded into `searchBitbucketServer`,
+  because it isn't a keyword search over commits/files; it's a fixed
+  "what's my current PR activity" lookup (same shape as `webSearch`
+  ignoring its `limit` argument — `TOOL_CATALOG.bitbucketReviews` ignores
+  both `query` and `limit`). Wired into both the voice-chat tool catalog
+  (`VOICE_TOOL_KEYS`) and the Sprint Planning/Sprint Review prep workflows,
+  per the explicit ask to cover both.
+- **Verified against real Bitbucket PR/reviewer data**: the documented,
+  stable, versioned Bitbucket Server REST API 1.0 shapes
+  (`dashboard/pull-requests`, per-PR `activities`) worked correctly on the
+  first real run — 6 real open PRs assigned as reviewer came back
+  correctly-shaped via `tests/integration/bitbucket.test.ts`, no empirical
+  recon needed first (unlike the Teams IndexedDB case above, an
+  undocumented format).
+
+## Outlook desktop calendar fallback (meeting auto-detection)
+
+- **Same COM automation rationale as the email fallback** —
+  `scripts/outlookCalendarExport.ps1` reads classic Outlook's Calendar
+  folder (`GetDefaultFolder(9)`), returning the exact `CalendarEvent` shape
+  `googleCalendar.ts`'s `listUpcomingEvents` already returns, so
+  `classifyMeetingType()` and every other consumer of "upcoming events"
+  work unchanged regardless of which source produced them.
+- **Deliberately not merged with Google Calendar** — per explicit
+  direction, this is a standalone fallback: `server.ts`'s
+  `/api/calendar/upcoming` tries Google Calendar first if configured, and
+  only falls back to Outlook desktop if Google isn't set up. No dedup, no
+  combined view of both sources at once. `googleCalendar.ts` itself was not
+  touched.
+- **Real, significant performance bug found and fixed via direct
+  measurement, not assumption**: a naive `foreach` + early-break over
+  `Items` with `IncludeRecurrences = $true` took **over a minute** on a
+  real calendar with years of recurring meetings (SCRUM standups, etc.) —
+  confirmed by timing it directly, not by reading Microsoft's docs and
+  guessing. Root cause: enabling `IncludeRecurrences` forces Outlook to
+  expand every recurring series before any iteration can happen, and
+  walking a `Sort`-ascending collection from the *earliest* expanded
+  occurrence forward means passing through **every past occurrence ever**
+  before reaching "now," regardless of how small the actual look-ahead
+  window is or where the loop's `break` condition sits. Fixed by calling
+  `Items.Restrict()` **after** `IncludeRecurrences`/`Sort` (Microsoft's
+  documented required ordering) so Outlook filters by date range
+  internally instead of the script walking every historical instance —
+  confirmed via direct timing: **same query, same real data, ~9 seconds**
+  (and this cost doesn't scale with window size — a 15-minute window and a
+  7-day window both took ~8-9s, confirming it's a fixed per-call COM/folder-
+  scan cost, not proportional to what's returned).
+- **`Items.Restrict()`'s date filter is locale-dependent** (`.ToString("g")`,
+  the current user's short date/time format) — a deliberate, documented
+  exception to the locale-proof "iterate and break" approach the email
+  export uses (`outlookExport.ps1`). Recurrence expansion makes `Restrict`
+  a practical necessity for Calendar specifically, not just an
+  optimization; email's Inbox doesn't have this problem since a
+  descending-sorted, non-recurring Inbox never requires walking years of
+  history to find "recent."
+- Verified end-to-end for real: 16 real upcoming meetings (SCRUM standups,
+  design meetings, cancelled series, etc.) returned correctly — right
+  titles, correctly-expanded recurring instances, correct UTC start times,
+  correct attendee counts — via the actual PowerShell script directly (not
+  yet via the full `listUpcomingOutlookEvents()` → `/api/calendar/upcoming`
+  path in this pass; `tests/integration/outlookCalendar.test.ts` covers
+  that layer, gated on `isOutlookDesktopConfigured()`).
+
+## Sidebar history tabs (Meetings / Practice / Chat)
+
+- **New `session_kind` column, orthogonal to the existing `session_type`**
+  (`personal`/`work`, meetings-only) — `'meeting' | 'practice' | 'chat'`,
+  defaulting to `'meeting'`. Deliberately a separate column rather than
+  overloading `session_type`'s existing two values, since `session_type`'s
+  personal/work distinction still means something specific for real
+  meetings (Work sessions get pre-meeting prep) and doesn't apply to
+  chat/practice at all.
+- **Chat sessions used to be fully ephemeral by design** — `startVoiceSession`'s
+  own doc-comment said so outright ("mode 'chat': ephemeral, no session
+  created"). Explicitly changed after confirming with the user: chat now
+  persists a real session + transcript the same way practice already did,
+  specifically so it has something to show in a history tab at all. This is
+  a real behavior change (chat sessions now leave a permanent transcript
+  record on disk, same privacy posture as any recorded meeting) — not a
+  pure UI addition.
+- **Generalized practice-only persistence into one shared code path** —
+  `startVoiceSession`/`stopVoiceSession` used to have `practiceSessionId`/
+  `flushPracticeTranscript` fields hardcoded to the practice case only. Now
+  `persistedSessionId`/`persistedSessionKind`/`flushTranscript` cover both
+  modes identically (same debounced-flush transcript buffering, same
+  `insertFinalSegment` calls), branching only on `persistedSessionKind` for
+  the two things that actually differ: the assistant's speaker label
+  ("Practice Partner" vs "Assistant") and whether to run
+  `analyzeConversation`/coaching feedback on stop (practice only — a chat
+  session is a Q&A log, not a roleplay run to critique).
+- **Migration backfills existing practice sessions** using the only signal
+  that existed before this column: `UPDATE sessions SET session_kind =
+  'practice' WHERE name LIKE 'Practice: %'` (the cosmetic name prefix
+  `startVoiceSession` has always used). One-time, best-effort recovery for
+  whatever's already in a real `speako.db` — not a permanent
+  identification mechanism (a real session named literally "Practice: ..."
+  by the user would also match, a rare but real false-positive risk judged
+  acceptable for a one-time backfill).
+- **No source-session link column added** — a practice session's only
+  connection to the meeting it was practicing for is still the cosmetic
+  `"Practice: ${source.name}"` name prefix; there's no structured
+  `source_session_id` anywhere in the schema. Out of scope for this
+  specific ask (tabs to *see* chat/practice history), flagged here as a
+  gap worth closing later if "jump from a practice session back to the
+  meeting it was based on" ever becomes a real ask.
+- Sidebar tab bar (`#sessionKindTabs`, `.kind-tab-btn`) filters the
+  already-fetched `sessions` array client-side by `sessionKind` rather than
+  adding a server-side query param — consistent with `listSessions()`'s
+  existing "fetch everything, filter in memory" simplicity (personal-scale
+  session counts don't justify a new filtered endpoint).
+- **Real bug found via live browser testing, fixed**: `stopVoice()`'s
+  `refreshSessions()` call was gated on `wasPractice && practiceId` only —
+  a leftover from when chat was ephemeral and had nothing to refresh for.
+  After making chat persist too, stopping a chat session left the sidebar
+  showing "No chat sessions yet." until a manual page reload, even though
+  the session was correctly saved server-side the whole time (confirmed via
+  `GET /api/sessions` directly during debugging — this was a pure frontend
+  staleness bug, not a persistence bug). Fixed by refreshing on stop for
+  *any* voice session (`wasVoiceSession = !!voiceMode`), keeping the
+  practice-only Coaching-tab jump as the one thing that still branches on
+  `wasPractice` specifically.
+- Verified end-to-end for real via a live browser: started and stopped two
+  actual chat sessions, confirmed each appeared immediately in the Chat tab
+  post-fix (no reload needed), confirmed the transcript rendered correctly
+  with "You"/"Assistant" speaker labels, and confirmed the migration
+  backfill correctly recovered a pre-existing real `"Practice: session"`
+  (63 segments) into the Practice tab on first load after the schema change.

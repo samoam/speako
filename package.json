@@ -10,14 +10,16 @@
     "start": "node dist/index.js start",
     "dev": "ts-node src/index.ts start",
     "typecheck": "tsc --noEmit",
-    "test": "node -r ts-node/register -r ./tests/setEnv.js --test tests/streamManager.test.ts tests/prep.test.ts tests/chunkText.test.ts tests/activeTools.test.ts tests/workflowTypes.test.ts tests/toolCatalog.test.ts tests/coachingRepository.test.ts tests/externalMessageRepository.test.ts tests/prepBriefRepository.test.ts tests/settingsStore.test.ts tests/analyzeConversation.test.ts tests/liveAnticipatedQA.test.ts tests/anticipateQA.test.ts tests/rag.test.ts tests/router.test.ts tests/transcriptFormat.test.ts tests/mcpClient.test.ts tests/geminiClient.test.ts tests/workflows.test.ts tests/scheduledSession.test.ts tests/liveVoiceSession.test.ts tests/systemInstructions.test.ts tests/geminiUsage.test.ts tests/contextCache.test.ts tests/liveQa.test.ts tests/perfRegression.test.ts tests/activeFeatures.test.ts tests/countInterruptions.test.ts tests/chapters.test.ts tests/chaptersRepository.test.ts tests/topicTrend.test.ts tests/relationshipTrend.test.ts tests/crossSessionQa.test.ts tests/crossSessionQueryRepository.test.ts",
-    "test:integration": "node -r ts-node/register -r ./tests/integration/setEnv.js --test --test-concurrency=1 tests/integration/jiraConfluence.test.ts tests/integration/bitbucket.test.ts tests/integration/gemini.test.ts tests/integration/prepService.test.ts tests/integration/factcheck.test.ts tests/integration/mem0RagCloud.test.ts tests/integration/liveVoice.test.ts",
+    "test": "node -r ts-node/register -r ./tests/setEnv.js --test tests/streamManager.test.ts tests/prep.test.ts tests/chunkText.test.ts tests/activeTools.test.ts tests/workflowTypes.test.ts tests/toolCatalog.test.ts tests/coachingRepository.test.ts tests/externalMessageRepository.test.ts tests/prepBriefRepository.test.ts tests/settingsStore.test.ts tests/analyzeConversation.test.ts tests/liveAnticipatedQA.test.ts tests/anticipateQA.test.ts tests/rag.test.ts tests/router.test.ts tests/transcriptFormat.test.ts tests/mcpClient.test.ts tests/geminiClient.test.ts tests/workflows.test.ts tests/scheduledSession.test.ts tests/liveVoiceSession.test.ts tests/systemInstructions.test.ts tests/geminiUsage.test.ts tests/contextCache.test.ts tests/liveQa.test.ts tests/perfRegression.test.ts tests/activeFeatures.test.ts tests/countInterruptions.test.ts tests/chapters.test.ts tests/chaptersRepository.test.ts tests/topicTrend.test.ts tests/relationshipTrend.test.ts tests/crossSessionQa.test.ts tests/crossSessionQueryRepository.test.ts tests/msGraphSync.test.ts tests/msGraphAuth.test.ts tests/outlookDesktop.test.ts tests/bitbucketReviews.test.ts tests/outlookDesktopCalendar.test.ts tests/sessionKind.test.ts",
+    "test:integration": "node -r ts-node/register -r ./tests/integration/setEnv.js --test --test-concurrency=1 tests/integration/jiraConfluence.test.ts tests/integration/bitbucket.test.ts tests/integration/gemini.test.ts tests/integration/prepService.test.ts tests/integration/factcheck.test.ts tests/integration/mem0RagCloud.test.ts tests/integration/liveVoice.test.ts tests/integration/msgraph.test.ts tests/integration/outlookCalendar.test.ts",
     "pretest:e2e": "node tests/e2e/clean-db.js",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "gcal-auth": "ts-node scripts/gcal-auth.ts"
+    "gcal-auth": "ts-node scripts/gcal-auth.ts",
+    "msgraph-auth": "ts-node scripts/msgraph-auth.ts"
   },
   "dependencies": {
+    "@azure/msal-node": "^5.5.0",
     "@google-cloud/language": "^7.2.3",
     "@google-cloud/speech": "^7.5.0",
     "@google-cloud/storage": "^7.21.0",

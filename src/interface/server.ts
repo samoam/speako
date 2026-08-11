@@ -46,7 +46,8 @@ import { createSession as createPrepSession } from '../storage/segmentRepository
 import { getPrepBrief, updatePrepBriefText } from '../storage/prepBriefRepository';
 import { runPrep } from '../prep/PrepService';
 import { MeetingType } from '../prep/meetingTypes';
-import { listUpcomingEvents } from '../integrations/googleCalendar';
+import { listUpcomingEvents, isCalendarConfigured } from '../integrations/googleCalendar';
+import { listUpcomingOutlookEvents } from '../integrations/outlookDesktopCalendar';
 import { writeSummaryFactsToMem0 } from '../prep/writeMemFacts';
 import { analyzeConversation } from '../coaching/analyzeConversation';
 import { saveCoachingFeedback, getCoachingFeedback, CoachingFeedback } from '../storage/coachingRepository';
@@ -71,6 +72,9 @@ import { isWebFactCheckConfigured } from '../factcheck/webFactCheck';
 import { WORKFLOW_STEPS } from '../prep/workflows/workflowSteps';
 import { runExternalMessageIndex } from '../communications/indexExternalMessages';
 import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../storage/externalMessageRepository';
+import { isMsGraphConfigured } from '../integrations/msGraphAuth';
+import { syncOutlookAndTeams } from '../integrations/msGraphSync';
+import { isOutlookDesktopConfigured, syncOutlookDesktop } from '../integrations/outlookDesktop';
 
 const SETTINGS_FIELDS = [
   'geminiApiKey',
@@ -95,6 +99,11 @@ const SETTINGS_FIELDS = [
   'prepWindowMinutes',
   'codebaseLocalPaths',
   'voiceToolKeys',
+  'msGraphClientId',
+  'msGraphTenantId',
+  'msGraphPollMinutes',
+  'msGraphLookbackHours',
+  'outlookDesktopLookbackHours',
   'prepEnabled',
   'sentimentEnabled',
   'triggerDetectionEnabled',
@@ -138,12 +147,26 @@ export class InterfaceServer {
   /** Voice (chat/practice) is per-client, unlike currentSessionId's single-global-recording model — each connected browser tab can have at most one active Live session. */
   private voiceSessions = new Map<
     WebSocket,
-    { session: LiveVoiceSession; practiceSessionId?: string; flushPracticeTranscript?: () => void; lastActivityAt: number }
+    {
+      session: LiveVoiceSession;
+      /** Set for both 'practice' and 'chat' modes — both persist a real session + transcript now, so they show up in the sidebar's Practice/Chat history tabs. */
+      persistedSessionId?: string;
+      persistedSessionKind?: 'practice' | 'chat';
+      flushTranscript?: () => void;
+      lastActivityAt: number;
+    }
   >();
   private codebaseIndexInProgress = false;
   private communicationsIndexInProgress = false;
+  private msGraphSyncInProgress = false;
+  private msGraphLastSyncAt: string | null = null;
+  private msGraphLastError: string | null = null;
+  private outlookDesktopSyncInProgress = false;
+  private outlookDesktopLastSyncAt: string | null = null;
+  private outlookDesktopLastError: string | null = null;
   private scheduleTimer: NodeJS.Timeout | null = null;
   private voiceIdleCheckTimer: NodeJS.Timeout | null = null;
+  private msGraphSyncTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     const app = express();
@@ -184,6 +207,7 @@ export class InterfaceServer {
         jira: isJiraConfigured(),
         confluence: isConfluenceConfigured(),
         bitbucket: isBitbucketConfigured(),
+        bitbucketReviews: isBitbucketConfigured(),
         mem0: isMem0Configured(),
         ragCloud: isRagConfigured(),
         localCodebase: isLocalCodebaseConfigured(),
@@ -379,9 +403,14 @@ export class InterfaceServer {
 
     // Never errors on missing calendar config — empty list is the correct
     // "not set up" response, matching every other optional integration.
+    // Google Calendar first if configured; Outlook desktop COM automation as
+    // a fallback (its own separate integration, not merged/deduped with
+    // Google's events — see NOTES.md) for calendars Google can't see at all.
     app.get('/api/calendar/upcoming', async (_req, res) => {
       try {
-        const events = await listUpcomingEvents(config.prepWindowMinutes);
+        const events = isCalendarConfigured()
+          ? await listUpcomingEvents(config.prepWindowMinutes)
+          : await listUpcomingOutlookEvents(config.prepWindowMinutes);
         res.json(events);
       } catch (err: any) {
         console.error('[calendar] failed to list upcoming events:', err.message);
@@ -431,6 +460,77 @@ export class InterfaceServer {
 
     app.get('/api/communications/status', (_req, res) => {
       res.json({ inProgress: this.communicationsIndexInProgress, sources: getExternalMessageIndexSummary() });
+    });
+
+    // Native Outlook/Teams ingestion (Microsoft Graph) — writes raw rows into
+    // the same external_messages table the manual daily-agent path
+    // (docs/EXTERNAL_INGESTION_PROMPT.md) writes to; a separate background
+    // timer (see start()) also calls this automatically every
+    // config.msGraphPollMinutes when configured. This route lets Settings'
+    // "Sync now" button trigger an out-of-cadence run the same way "Index
+    // codebase"/"Index communications" do.
+    app.post('/api/msgraph/sync', (_req, res) => {
+      if (!isMsGraphConfigured()) {
+        res.status(400).json({ error: 'Microsoft Graph is not configured — run `npm run msgraph-auth` first.' });
+        return;
+      }
+      if (this.msGraphSyncInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.runMsGraphSync();
+      res.json({ started: true });
+    });
+
+    app.get('/api/msgraph/status', (_req, res) => {
+      res.json({
+        configured: isMsGraphConfigured(),
+        inProgress: this.msGraphSyncInProgress,
+        lastSyncAt: this.msGraphLastSyncAt,
+        lastError: this.msGraphLastError,
+      });
+    });
+
+    // Classic-Outlook-desktop COM automation fallback — see
+    // src/integrations/outlookDesktop.ts's comment for why this exists
+    // alongside the Graph sync above (hybrid/on-prem mailboxes and B2B-guest
+    // identities can't be reached via Graph's cloud-only Mail API). Manual
+    // only, no background timer — Outlook's Object Model Guard can show an
+    // interactive security prompt on first use in a session, so an
+    // unattended poll could silently stall behind it.
+    app.post('/api/outlook-desktop/sync', (_req, res) => {
+      if (!isOutlookDesktopConfigured()) {
+        res.status(400).json({ error: 'Outlook desktop sync is only available on Windows.' });
+        return;
+      }
+      if (this.outlookDesktopSyncInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.outlookDesktopSyncInProgress = true;
+      syncOutlookDesktop()
+        .then((result) => {
+          this.outlookDesktopLastSyncAt = new Date().toISOString();
+          this.outlookDesktopLastError = null;
+          console.log(`[outlook-desktop] synced ${result.emailCount} email(s)`);
+        })
+        .catch((err: any) => {
+          this.outlookDesktopLastError = err.message;
+          console.error('[outlook-desktop] sync failed:', err.message);
+        })
+        .finally(() => {
+          this.outlookDesktopSyncInProgress = false;
+        });
+      res.json({ started: true });
+    });
+
+    app.get('/api/outlook-desktop/status', (_req, res) => {
+      res.json({
+        configured: isOutlookDesktopConfigured(),
+        inProgress: this.outlookDesktopSyncInProgress,
+        lastSyncAt: this.outlookDesktopLastSyncAt,
+        lastError: this.outlookDesktopLastError,
+      });
     });
 
     app.post('/api/session/stop', (_req, res) => {
@@ -867,7 +967,7 @@ export class InterfaceServer {
     });
   }
 
-  /** mode 'chat': ephemeral, no session created. mode 'practice': creates a new session (grounded by sourceSessionId's prep brief) so the roleplay gets full history + real coaching feedback afterward, same as any real meeting. */
+  /** mode 'practice': creates a new session (grounded by sourceSessionId's prep brief) so the roleplay gets full history + real coaching feedback afterward, same as any real meeting. mode 'chat': also creates a real session now (session_kind='chat'), so it shows up in the sidebar's Chat history tab — no coaching analysis, since it's not a roleplay run. */
   private async startVoiceSession(client: WebSocket, mode: 'chat' | 'practice', sourceSessionId?: string): Promise<void> {
     if (this.voiceSessions.has(client)) return;
     if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
@@ -888,6 +988,8 @@ export class InterfaceServer {
           return isRagConfigured();
         case 'bitbucket':
           return isBitbucketConfigured();
+        case 'bitbucketReviews':
+          return isBitbucketConfigured();
         case 'localCodebase':
           return isLocalCodebaseConfigured();
         default:
@@ -896,8 +998,8 @@ export class InterfaceServer {
     });
 
     let systemInstruction: string;
-    let practiceSessionId: string | undefined;
-    let flushPracticeTranscript: (() => void) | undefined;
+    let persistedSessionId: string | undefined;
+    let persistedSessionKind: 'practice' | 'chat' | undefined;
 
     if (mode === 'practice') {
       if (!sourceSessionId) throw new Error('Practice mode requires sourceSessionId.');
@@ -906,10 +1008,14 @@ export class InterfaceServer {
       const brief = getPrepBrief(sourceSessionId);
       if (!brief) throw new Error('No prep brief for this session yet — prepare it first.');
 
-      practiceSessionId = uuid();
-      createPrepSession(practiceSessionId, source.languageCodes, `Practice: ${source.name ?? 'session'}`, { sessionType: 'personal' });
+      persistedSessionId = uuid();
+      persistedSessionKind = 'practice';
+      createPrepSession(persistedSessionId, source.languageCodes, `Practice: ${source.name ?? 'session'}`, { sessionType: 'personal', sessionKind: 'practice' });
       systemInstruction = buildPracticeInstruction(brief, source.meetingType ?? 'generic', source.name);
     } else {
+      persistedSessionId = uuid();
+      persistedSessionKind = 'chat';
+      createPrepSession(persistedSessionId, config.languageCodes, `Chat ${new Date().toLocaleString()}`, { sessionType: 'personal', sessionKind: 'chat' });
       systemInstruction = buildChatInstruction();
     }
 
@@ -950,8 +1056,11 @@ export class InterfaceServer {
       if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-turn-complete' }));
     });
 
-    if (practiceSessionId) {
-      const finalPracticeId = practiceSessionId;
+    let flushTranscript: (() => void) | undefined;
+
+    if (persistedSessionId) {
+      const finalSessionId = persistedSessionId;
+      const assistantLabel = persistedSessionKind === 'practice' ? 'Practice Partner' : 'Assistant';
       const sessionStart = Date.now();
       let lastEndMs = 0;
       // Confirmed via real Live API traffic: transcription deltas never carry
@@ -969,22 +1078,22 @@ export class InterfaceServer {
       const persistTurn = (speaker: string, text: string) => {
         if (!text.trim()) return;
         const now = Date.now() - sessionStart;
-        insertFinalSegment({ sessionId: finalPracticeId, speaker, startMs: lastEndMs, endMs: now, text: text.trim(), isFinal: true });
+        insertFinalSegment({ sessionId: finalSessionId, speaker, startMs: lastEndMs, endMs: now, text: text.trim(), isFinal: true });
         lastEndMs = now;
       };
-      flushPracticeTranscript = () => {
+      flushTranscript = () => {
         if (flushTimer) {
           clearTimeout(flushTimer);
           flushTimer = null;
         }
         persistTurn('You', inputBuffer);
-        persistTurn('Practice Partner', outputBuffer);
+        persistTurn(assistantLabel, outputBuffer);
         inputBuffer = '';
         outputBuffer = '';
       };
       const scheduleFlush = () => {
         if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = setTimeout(() => flushPracticeTranscript!(), 800);
+        flushTimer = setTimeout(() => flushTranscript!(), 800);
       };
 
       liveSession.on('inputTranscript', (text: string) => {
@@ -1030,13 +1139,13 @@ export class InterfaceServer {
       connected.catch(() => {}); // the abort rejects `connected` too — already handled above, don't crash on an unhandled rejection
       throw err;
     }
-    this.voiceSessions.set(client, { session: liveSession, practiceSessionId, flushPracticeTranscript, lastActivityAt: Date.now() });
+    this.voiceSessions.set(client, { session: liveSession, persistedSessionId, persistedSessionKind, flushTranscript, lastActivityAt: Date.now() });
 
     if (client.readyState === WebSocket.OPEN) {
       client.send(
-        practiceSessionId
-          ? JSON.stringify({ type: 'voice-practice-ready', sessionId: practiceSessionId })
-          : JSON.stringify({ type: 'voice-ready' })
+        persistedSessionKind === 'practice'
+          ? JSON.stringify({ type: 'voice-practice-ready', sessionId: persistedSessionId })
+          : JSON.stringify({ type: 'voice-ready', sessionId: persistedSessionId })
       );
     }
   }
@@ -1047,20 +1156,25 @@ export class InterfaceServer {
     this.voiceSessions.delete(client);
     state.session.close();
 
-    if (state.practiceSessionId) {
-      const practiceId = state.practiceSessionId;
-      state.flushPracticeTranscript?.(); // don't lose whatever's still buffered when the user stops mid-debounce
-      endSession(practiceId);
-      analyzeConversation(practiceId)
-        .then((analyzed) => {
-          if (!analyzed) return; // no "You" speech captured this run — nothing to score, not worth erroring on
-          const feedback = saveCoachingFeedback(practiceId, analyzed);
-          this.broadcastCoaching(practiceId, feedback);
-        })
-        .catch((err: any) => {
-          console.error('[voice] practice coaching failed:', err.message);
-          this.broadcastCoachingFailed(practiceId, err.message);
-        });
+    if (state.persistedSessionId) {
+      const sessionId = state.persistedSessionId;
+      state.flushTranscript?.(); // don't lose whatever's still buffered when the user stops mid-debounce
+      endSession(sessionId);
+
+      // Coaching analysis only makes sense for practice (a roleplay run being
+      // scored) — a chat session is just a Q&A log, nothing to critique.
+      if (state.persistedSessionKind === 'practice') {
+        analyzeConversation(sessionId)
+          .then((analyzed) => {
+            if (!analyzed) return; // no "You" speech captured this run — nothing to score, not worth erroring on
+            const feedback = saveCoachingFeedback(sessionId, analyzed);
+            this.broadcastCoaching(sessionId, feedback);
+          })
+          .catch((err: any) => {
+            console.error('[voice] practice coaching failed:', err.message);
+            this.broadcastCoachingFailed(sessionId, err.message);
+          });
+      }
     }
   }
 
@@ -1086,14 +1200,41 @@ export class InterfaceServer {
 
     this.scheduleTimer = setInterval(() => this.checkScheduledSessions(), 20_000);
     this.voiceIdleCheckTimer = setInterval(() => this.checkIdleVoiceSessions(), 30_000);
+    this.msGraphSyncTimer = setInterval(() => this.runMsGraphSync(), config.msGraphPollMinutes * 60_000);
   }
 
   stop(): void {
     if (this.scheduleTimer) clearInterval(this.scheduleTimer);
     if (this.voiceIdleCheckTimer) clearInterval(this.voiceIdleCheckTimer);
+    if (this.msGraphSyncTimer) clearInterval(this.msGraphSyncTimer);
     for (const [client] of this.voiceSessions) this.stopVoiceSession(client);
     this.wss.close();
     this.httpServer.close();
+  }
+
+  /**
+   * Fire-and-forget — called both by the poll timer and the manual "Sync
+   * now" route. Skipped silently (not an error) when unconfigured, same as
+   * the calendar poller's rationale elsewhere: most installs won't have this
+   * set up, and a 15-minute timer logging "not configured" every tick would
+   * be noise.
+   */
+  private runMsGraphSync(): void {
+    if (this.msGraphSyncInProgress || !isMsGraphConfigured()) return;
+    this.msGraphSyncInProgress = true;
+    syncOutlookAndTeams()
+      .then((result) => {
+        this.msGraphLastSyncAt = new Date().toISOString();
+        this.msGraphLastError = null;
+        console.log(`[msgraph] synced ${result.emailCount} email(s), ${result.chatMessageCount} chat message(s)`);
+      })
+      .catch((err: any) => {
+        this.msGraphLastError = err.message;
+        console.error('[msgraph] sync failed:', err.message);
+      })
+      .finally(() => {
+        this.msGraphSyncInProgress = false;
+      });
   }
 
   /** Safety net, not a UX feature — see config.voiceSessionIdleTimeoutMs. */

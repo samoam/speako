@@ -4,6 +4,7 @@ import { searchByTool } from '../src/prep/toolCatalog';
 import * as jiraMcp from '../src/integrations/jiraMcp';
 import * as confluenceMcp from '../src/integrations/confluenceMcp';
 import * as bitbucketServer from '../src/integrations/bitbucketServer';
+import * as bitbucketReviews from '../src/integrations/bitbucketReviews';
 import * as mem0Client from '../src/integrations/mem0Client';
 import * as ragClient from '../src/integrations/ragClient';
 import * as searchCodeModule from '../src/codebase/searchCode';
@@ -36,6 +37,17 @@ test('toolCatalog: bitbucket formats path:snippet lines', async () => {
   try {
     const result = await searchByTool('bitbucket', 'query', 5);
     assert.equal(result, 'repo/file.ts: code');
+  } finally {
+    spy.mock.restore();
+  }
+});
+
+test('toolCatalog: bitbucketReviews ignores query/limit — fixed lookup, not a keyword search', async () => {
+  const spy = mock.method(bitbucketReviews, 'formatPullRequestActivity', async () => 'PR activity summary');
+  try {
+    const result = await searchByTool('bitbucketReviews', 'query', 5);
+    assert.equal(result, 'PR activity summary');
+    assert.equal(spy.mock.calls[0].arguments.length, 0);
   } finally {
     spy.mock.restore();
   }

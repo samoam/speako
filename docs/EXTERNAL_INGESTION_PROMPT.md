@@ -1,14 +1,24 @@
 # External communications ingestion — instructions for the daily-indexing agent
 
+> **Note:** Speako can now also fetch Outlook email and Teams chat messages natively via
+> Microsoft Graph (`src/integrations/msGraphSync.ts`, `npm run msgraph-auth`) — see
+> `.env.example`'s `MS_GRAPH_*` section and NOTES.md. That path requires an Azure AD app
+> registration you control; if you don't have the access to create one, or want a source
+> Graph doesn't cover, this document describes the manual alternative: any external agent
+> with its own access writes directly into Speako's database. Both paths write to the same
+> `external_messages` table and are safe to use together — the upsert key (`id`) is scoped
+> per source, so there's no collision as long as each writer uses stable, source-specific ids.
+
 This is a standalone task description for whatever agent runs your daily email/Teams
 ingestion job (Claude Desktop with Microsoft 365 access, a scheduled script, etc). It has
 no dependency on Speako's code — it only needs SQLite write access to Speako's database
 file (`DB_PATH` in Speako's `.env`, default `./data/speako.db`).
 
-Speako does **not** fetch email or Teams messages itself. This task is the only thing that
-writes to the `external_messages` table; Speako only reads from it and does the
-chunking/embedding on its own side (`POST /api/communications/index`, or the "Index
-communications" button in Settings).
+Speako does **not** fetch email or Teams messages itself via this path. This task is the
+only thing that writes to the `external_messages` table for sources it covers; Speako only
+reads from it and does the chunking/embedding on its own side (`POST /api/communications/index`,
+or the "Index communications" button in Settings) — regardless of whether a row came from
+this task or from the native Microsoft Graph sync above.
 
 ## What to do, once per run
 

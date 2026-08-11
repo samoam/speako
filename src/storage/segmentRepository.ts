@@ -3,6 +3,8 @@ import { TranscriptSegment } from '../types';
 
 export interface CreateSessionOptions {
   sessionType?: 'personal' | 'work';
+  /** Distinguishes real recorded meetings from voice-chat/practice sessions for the sidebar history tabs — orthogonal to sessionType (personal/work only applies to 'meeting'). Defaults to 'meeting'. */
+  sessionKind?: 'meeting' | 'practice' | 'chat';
   meetingType?: string;
   calendarEventId?: string;
   /** Which tools/integrations are active for this session (see src/tools/activeTools.ts). Omitted/undefined means "all globally-configured tools" — preserves existing behavior. */
@@ -20,13 +22,14 @@ export function createSession(
   options?: CreateSessionOptions
 ): void {
   db.prepare(
-    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, scheduled_start_at, active_features)
-     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, session_kind, meeting_type, calendar_event_id, prep_status, active_tools, scheduled_start_at, active_features)
+     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId,
     JSON.stringify(languageCodes),
     name || null,
     options?.sessionType || 'personal',
+    options?.sessionKind || 'meeting',
     options?.meetingType || null,
     options?.calendarEventId || null,
     options?.sessionType === 'work' ? 'pending' : 'none',
@@ -288,6 +291,8 @@ export interface SessionSummary {
   segmentCount: number;
   hasSummary: boolean;
   sessionType: 'personal' | 'work';
+  /** Distinguishes real recorded meetings from voice-chat/practice sessions for the sidebar history tabs. */
+  sessionKind: 'meeting' | 'practice' | 'chat';
   meetingType: string | null;
   prepStatus: 'none' | 'pending' | 'ready' | 'failed';
   activeTools: string[] | null;
@@ -299,7 +304,7 @@ export function listSessions(): SessionSummary[] {
   const rows = db
     .prepare(
       `SELECT s.id, s.name, s.started_at, s.ended_at, s.diarized_at, s.language_codes,
-              s.session_type, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at,
+              s.session_type, s.session_kind, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at,
               (SELECT COUNT(*) FROM transcript_segments t WHERE t.session_id = s.id) AS segment_count,
               (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary
        FROM sessions s
@@ -317,6 +322,7 @@ export function listSessions(): SessionSummary[] {
     segmentCount: r.segment_count,
     hasSummary: !!r.has_summary,
     sessionType: r.session_type,
+    sessionKind: r.session_kind,
     meetingType: r.meeting_type,
     prepStatus: r.prep_status,
     activeTools: r.active_tools ? JSON.parse(r.active_tools) : null,

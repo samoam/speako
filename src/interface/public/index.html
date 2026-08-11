@@ -244,6 +244,13 @@
       padding: 0.75rem 1rem 0.4rem; font-size: 0.72rem; text-transform: uppercase;
       letter-spacing: 0.05em; color: var(--muted);
     }
+    #sessionKindTabs { display: flex; gap: 0.2rem; padding: 0 0.75rem 0.5rem; }
+    .kind-tab-btn {
+      padding: 0.3rem 0.65rem; border: none; background: none; color: var(--muted); cursor: pointer;
+      border-radius: 6px; font-size: 0.78rem; font-weight: 500;
+    }
+    .kind-tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .kind-tab-btn.active { color: var(--text); background: rgba(255,255,255,0.1); }
     #sessionList { flex: 1; overflow-y: auto; padding: 0 0.5rem 1rem; display: flex; flex-direction: column; gap: 0.15rem; }
     .session-card {
       padding: 0.7rem 0.75rem; border-radius: 10px; cursor: pointer;
@@ -353,9 +360,9 @@
     #summaryWrap, #actionItemsWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
     #sessionTypeToggle { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
-    #codebaseIndexBox, #communicationsIndexBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
-    #codebaseIndexBox button, #communicationsIndexBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
-    #codebaseIndexStatus, #communicationsIndexStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #codebaseIndexBox, #communicationsIndexBox, #msGraphSyncBox, #outlookDesktopSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+    #codebaseIndexBox button, #communicationsIndexBox button, #msGraphSyncBox button, #outlookDesktopSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
+    #codebaseIndexStatus, #communicationsIndexStatus, #msGraphSyncStatus, #outlookDesktopSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .type-btn {
       flex: 1; padding: 0.35rem; border-radius: 6px; border: 1px solid var(--border);
       background: #1f1f23; color: var(--muted); cursor: pointer; font-size: 0.82rem;
@@ -635,6 +642,11 @@
       <button id="stopBtn" class="primary-btn" hidden><svg class="icon icon-filled"><use href="#icon-square-fill"></use></svg> Stop recording</button>
     </div>
     <div id="sessionListHeader">Sessions</div>
+    <div id="sessionKindTabs">
+      <button class="kind-tab-btn active" data-kind="meeting">Meetings</button>
+      <button class="kind-tab-btn" data-kind="practice">Practice</button>
+      <button class="kind-tab-btn" data-kind="chat">Chat</button>
+    </div>
     <div id="sessionList"></div>
   </div>
 
@@ -939,8 +951,33 @@
           <div class="tools-checklist" id="voiceToolsChecklist"></div>
         </fieldset>
         <fieldset>
+          <legend>Microsoft Graph (Outlook / Teams)</legend>
+          <p class="tools-hint">One-time setup: register an Azure AD app, set the client ID below, then run <code>npm run msgraph-auth</code> to sign in (see NOTES.md). Once signed in, Speako fetches recent emails and Teams chat messages automatically in the background.</p>
+          <div class="settings-grid">
+            <div class="settings-field"><label>Client ID</label><input type="text" data-key="msGraphClientId" /></div>
+            <div class="settings-field"><label>Tenant ID</label><input type="text" data-key="msGraphTenantId" /></div>
+            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="msGraphPollMinutes" /></div>
+            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="msGraphLookbackHours" /></div>
+          </div>
+          <div class="settings-field" id="msGraphSyncBox">
+            <button id="syncMsGraphBtn" class="tool-btn" type="button">Sync now</button>
+            <span id="msGraphSyncStatus"></span>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Outlook desktop (fallback)</legend>
+          <p class="tools-hint">For mailboxes Microsoft Graph can't reach (hybrid/on-premises Exchange, or accounts that turn out to be B2B guests) — reads mail via classic desktop Outlook's own connection instead. Requires classic Outlook (not "New Outlook") on Windows. Manual only, not polled: Outlook may show a one-time security prompt to approve when you click Sync.</p>
+          <div class="settings-grid">
+            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="outlookDesktopLookbackHours" /></div>
+          </div>
+          <div class="settings-field" id="outlookDesktopSyncBox">
+            <button id="syncOutlookDesktopBtn" class="tool-btn" type="button">Sync via Outlook desktop</button>
+            <span id="outlookDesktopSyncStatus"></span>
+          </div>
+        </fieldset>
+        <fieldset>
           <legend>Communications indexing</legend>
-          <p class="tools-hint">Speako doesn't fetch email/Teams itself — a separate daily task writes raw messages into its database (see docs/EXTERNAL_INGESTION_PROMPT.md). This just chunks + embeds whatever's arrived since the last run.</p>
+          <p class="tools-hint">Chunks + embeds whatever's arrived in external_messages since the last run — from the Microsoft Graph sync above, or a separate daily ingestion task (see docs/EXTERNAL_INGESTION_PROMPT.md) for sources without native support.</p>
           <div class="settings-field" id="communicationsIndexBox">
             <button id="indexCommunicationsBtn" class="tool-btn" type="button">Index communications</button>
             <span id="communicationsIndexStatus"></span>
@@ -1011,6 +1048,7 @@
 
   <script>
     const sessionList = document.getElementById('sessionList');
+    const sessionKindTabBtns = document.querySelectorAll('.kind-tab-btn');
     const nameInput = document.getElementById('nameInput');
     const languageSelect = document.getElementById('languageSelect');
     const startBtn = document.getElementById('startBtn');
@@ -1095,6 +1133,10 @@
     const codebaseIndexStatus = document.getElementById('codebaseIndexStatus');
     const indexCommunicationsBtn = document.getElementById('indexCommunicationsBtn');
     const communicationsIndexStatus = document.getElementById('communicationsIndexStatus');
+    const syncMsGraphBtn = document.getElementById('syncMsGraphBtn');
+    const msGraphSyncStatus = document.getElementById('msGraphSyncStatus');
+    const syncOutlookDesktopBtn = document.getElementById('syncOutlookDesktopBtn');
+    const outlookDesktopSyncStatus = document.getElementById('outlookDesktopSyncStatus');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsModalClose = document.getElementById('settingsModalClose');
@@ -1104,7 +1146,7 @@
     const settingsInputs = Array.from(document.querySelectorAll('#settingsModalBody [data-key]'));
     const voiceToolsChecklist = document.getElementById('voiceToolsChecklist');
     // Mirrors liveVoiceSession.ts's VOICE_TOOL_KEYS — the ceiling of tools eligible for voice chat (no email/teams/webSearch).
-    const VOICE_TOOL_KEY_LIST = ['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'localCodebase'];
+    const VOICE_TOOL_KEY_LIST = ['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'bitbucketReviews', 'localCodebase'];
     const insightsBtn = document.getElementById('insightsBtn');
     const insightsOverlay = document.getElementById('insightsOverlay');
     const insightsModalClose = document.getElementById('insightsModalClose');
@@ -1142,8 +1184,8 @@
     // ---------- Tools checklist (shared: new-session modal + per-session popover) ----------
 
     const TOOL_LABELS = {
-      jira: 'Jira', confluence: 'Confluence', bitbucket: 'Bitbucket', mem0: 'mem0 (memory)',
-      ragCloud: 'MyRAG', localCodebase: 'Local codebase', webSearch: 'Web search',
+      jira: 'Jira', confluence: 'Confluence', bitbucket: 'Bitbucket', bitbucketReviews: 'My PR reviews',
+      mem0: 'mem0 (memory)', ragCloud: 'MyRAG', localCodebase: 'Local codebase', webSearch: 'Web search',
       email: 'Email', teams: 'Teams',
     };
 
@@ -1402,6 +1444,7 @@
     let liveSessionId = null; // the session actually recording right now, if any
     let activeSessionId = null; // the session currently shown in the main panel
     let sessions = []; // cached list from GET /api/sessions
+    let currentSessionKindTab = 'meeting'; // sidebar filter — 'meeting' | 'practice' | 'chat', see s.sessionKind
     let currentSummary = null;
     let currentActionItems = [];
     let currentTriggers = [];
@@ -1535,11 +1578,12 @@
 
     function renderSessionList() {
       sessionList.innerHTML = '';
-      if (sessions.length === 0) {
-        sessionList.innerHTML = '<div class="empty-list">No sessions yet — start one above.</div>';
+      const filtered = sessions.filter((s) => (s.sessionKind || 'meeting') === currentSessionKindTab);
+      if (filtered.length === 0) {
+        sessionList.innerHTML = `<div class="empty-list">No ${currentSessionKindTab} sessions yet.</div>`;
         return;
       }
-      for (const s of sessions) {
+      for (const s of filtered) {
         const card = document.createElement('div');
         card.className = 'session-card' + (s.id === activeSessionId ? ' active' : '');
         const dotClass = s.id === liveSessionId ? 'recording' : s.diarizedAt ? 'diarized' : '';
@@ -1592,6 +1636,14 @@
         }
         sessionList.appendChild(card);
       }
+    }
+
+    for (const btn of sessionKindTabBtns) {
+      btn.addEventListener('click', () => {
+        currentSessionKindTab = btn.dataset.kind;
+        for (const b of sessionKindTabBtns) b.classList.toggle('active', b === btn);
+        renderSessionList();
+      });
     }
 
     // ---------- Main panel ----------
@@ -2028,6 +2080,78 @@
 
     refreshCommunicationsStatus();
 
+    function formatMsGraphStatus({ configured, lastSyncAt, lastError }) {
+      if (!configured) return 'Not configured';
+      if (lastError) return `Last sync failed: ${lastError}`;
+      if (lastSyncAt) return `Last synced ${new Date(lastSyncAt).toLocaleString()}`;
+      return 'Configured — waiting for first sync';
+    }
+
+    async function refreshMsGraphStatus() {
+      try {
+        const status = await fetch('/api/msgraph/status').then((r) => r.json());
+        syncMsGraphBtn.disabled = status.inProgress || !status.configured;
+        if (!status.inProgress) msGraphSyncStatus.textContent = formatMsGraphStatus(status);
+      } catch {
+        // Feature unset/unreachable — leave status blank, same as other optional integrations.
+      }
+    }
+
+    syncMsGraphBtn.addEventListener('click', async () => {
+      syncMsGraphBtn.disabled = true;
+      msGraphSyncStatus.textContent = 'Syncing…';
+      try {
+        const res = await fetch('/api/msgraph/sync', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok) {
+          msGraphSyncStatus.textContent = body.error || 'Sync failed.';
+          syncMsGraphBtn.disabled = false;
+          return;
+        }
+        if (!body.started && body.alreadyRunning) msGraphSyncStatus.textContent = 'Already syncing…';
+      } finally {
+        setTimeout(refreshMsGraphStatus, 1500);
+      }
+    });
+
+    refreshMsGraphStatus();
+
+    function formatOutlookDesktopStatus({ configured, lastSyncAt, lastError }) {
+      if (!configured) return 'Windows only';
+      if (lastError) return `Last sync failed: ${lastError}`;
+      if (lastSyncAt) return `Last synced ${new Date(lastSyncAt).toLocaleString()}`;
+      return 'Not yet synced';
+    }
+
+    async function refreshOutlookDesktopStatus() {
+      try {
+        const status = await fetch('/api/outlook-desktop/status').then((r) => r.json());
+        syncOutlookDesktopBtn.disabled = status.inProgress || !status.configured;
+        if (!status.inProgress) outlookDesktopSyncStatus.textContent = formatOutlookDesktopStatus(status);
+      } catch {
+        // Feature unset/unreachable — leave status blank, same as other optional integrations.
+      }
+    }
+
+    syncOutlookDesktopBtn.addEventListener('click', async () => {
+      syncOutlookDesktopBtn.disabled = true;
+      outlookDesktopSyncStatus.textContent = 'Syncing… approve the Outlook prompt if one appears';
+      try {
+        const res = await fetch('/api/outlook-desktop/sync', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok) {
+          outlookDesktopSyncStatus.textContent = body.error || 'Sync failed.';
+          syncOutlookDesktopBtn.disabled = false;
+          return;
+        }
+        if (!body.started && body.alreadyRunning) outlookDesktopSyncStatus.textContent = 'Already syncing…';
+      } finally {
+        setTimeout(refreshOutlookDesktopStatus, 1500);
+      }
+    });
+
+    refreshOutlookDesktopStatus();
+
     // ---------- Settings modal ----------
 
     function openSettingsModal() {
@@ -2035,6 +2159,8 @@
       settingsStatus.textContent = 'Loading…';
       refreshCodebaseStatus();
       refreshCommunicationsStatus();
+      refreshMsGraphStatus();
+      refreshOutlookDesktopStatus();
       fetch('/api/settings')
         .then((res) => res.json())
         .then((settings) => {
@@ -3499,6 +3625,7 @@
     function stopVoice() {
       clearTimeout(voiceConnectTimer);
       const wasPractice = voiceMode === 'practice';
+      const wasVoiceSession = !!voiceMode; // both 'chat' and 'practice' persist a real session now — see NOTES.md
       const practiceId = voicePracticeSessionId;
 
       if (voiceMode && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
@@ -3519,11 +3646,18 @@
       // Jump to the practice session's Coaching tab — real feedback appears
       // once the server finishes analyzeConversation() and pushes 'coaching',
       // exactly like a real meeting's, since activeSessionId is now set to it.
-      if (wasPractice && practiceId) {
-        refreshSessions().then(() => {
-          openSession(practiceId);
-          switchTab('coaching');
-        });
+      // Chat sessions also need refreshSessions() now that they persist too
+      // (previously a no-op, since chat left nothing behind to refresh) —
+      // just without the coaching-tab jump, since there's no coaching for chat.
+      if (wasVoiceSession) {
+        if (wasPractice && practiceId) {
+          refreshSessions().then(() => {
+            openSession(practiceId);
+            switchTab('coaching');
+          });
+        } else {
+          refreshSessions();
+        }
       }
     }
 

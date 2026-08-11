@@ -9,6 +9,7 @@ export async function gather(ctx: WorkflowContext): Promise<WorkflowResult> {
       { tool: 'jira', name: 'jira_sprint_tickets', query: 'current sprint OR just closed sprint', limit: 10 },
       { tool: 'confluence', name: 'confluence_sprint_goal', query: `${ctx.sessionName || ''} sprint goal release notes`, limit: 3 },
       { tool: 'bitbucket', name: 'bitbucket_recent_commits', query: 'recent changes', limit: 5 },
+      { tool: 'bitbucketReviews', name: 'bitbucket_my_pr_activity', query: '', limit: 5 },
       { tool: 'email', name: 'email_context', query: topic, limit: 5 },
     ])
   );

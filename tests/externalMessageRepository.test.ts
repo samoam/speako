@@ -9,6 +9,7 @@ import {
   getExternalMessageChunksBySource,
   getExternalMessageIndexSummary,
   hasAnyExternalMessages,
+  upsertExternalMessage,
 } from '../src/storage/externalMessageRepository';
 
 // Mirrors how the external daily-indexing task writes raw rows (see docs/EXTERNAL_INGESTION_PROMPT.md) — Speako itself has no "insert external message" API by design.
@@ -72,6 +73,28 @@ test('deleteChunksForMessage: removes only that message\'s chunks', () => {
   const remaining = getExternalMessageChunksBySource('email').map((c) => c.text);
   assert.ok(!remaining.includes('a-chunk'));
   assert.ok(remaining.includes('b-chunk'));
+});
+
+// Mirrors msGraphSync.ts's native ingestion path — see docs/EXTERNAL_INGESTION_PROMPT.md
+// for the equivalent raw-SQL contract the external daily-agent path uses instead.
+test('upsertExternalMessage: inserting a new id leaves it unindexed', () => {
+  upsertExternalMessage({ id: 'graph-1', source: 'email', title: 'Hi', participants: ['a@x.com'], occurredAt: '2026-08-10T00:00:00Z', bodyText: 'body' });
+  const unindexed = getUnindexedMessages().find((m) => m.id === 'graph-1');
+  assert.ok(unindexed);
+  assert.equal(unindexed!.title, 'Hi');
+  assert.deepEqual(unindexed!.participants, ['a@x.com']);
+});
+
+test('upsertExternalMessage: re-upserting an already-indexed id resets indexed_at to NULL so it gets re-chunked', () => {
+  upsertExternalMessage({ id: 'graph-2', source: 'teams', title: 'Old', participants: [], occurredAt: '2026-08-10T00:00:00Z', bodyText: 'old body' });
+  markMessageIndexed('graph-2');
+  assert.ok(!getUnindexedMessages().some((m) => m.id === 'graph-2'));
+
+  upsertExternalMessage({ id: 'graph-2', source: 'teams', title: 'Edited', participants: [], occurredAt: '2026-08-10T01:00:00Z', bodyText: 'new body' });
+  const reindexed = getUnindexedMessages().find((m) => m.id === 'graph-2');
+  assert.ok(reindexed);
+  assert.equal(reindexed!.title, 'Edited');
+  assert.equal(reindexed!.bodyText, 'new body');
 });
 
 test('getExternalMessageIndexSummary: aggregates chunk/message counts per source', () => {

@@ -28,12 +28,14 @@ export const WORKFLOW_STEPS: Record<MeetingType, WorkflowStep[]> = {
     { label: 'Carryover tickets from last sprint', tool: 'jira' },
     { label: 'Sprint velocity tracking', tool: 'confluence' },
     { label: 'Recent code changes', tool: 'bitbucket' },
+    { label: 'Your pull request review activity', tool: 'bitbucketReviews' },
     { label: 'Notes from the last planning session' },
   ],
   sprint_review: [
     { label: 'Current / just-closed sprint tickets', tool: 'jira' },
     { label: 'Sprint goal / release notes', tool: 'confluence' },
     { label: 'Recent commits for demo-relevant activity', tool: 'bitbucket' },
+    { label: 'Your pull request review activity', tool: 'bitbucketReviews' },
     { label: 'Related stakeholder email threads', tool: 'email' },
   ],
   retro: [

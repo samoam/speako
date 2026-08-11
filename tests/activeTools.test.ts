@@ -21,7 +21,7 @@ test('isToolActive: empty list means no tools are active', () => {
 });
 
 test('ALL_TOOL_KEYS includes every expected tool exactly once', () => {
-  const expected = ['jira', 'confluence', 'bitbucket', 'mem0', 'ragCloud', 'localCodebase', 'webSearch', 'email', 'teams'];
+  const expected = ['jira', 'confluence', 'bitbucket', 'bitbucketReviews', 'mem0', 'ragCloud', 'localCodebase', 'webSearch', 'email', 'teams'];
   assert.deepEqual([...ALL_TOOL_KEYS].sort(), [...expected].sort());
   assert.equal(new Set(ALL_TOOL_KEYS).size, ALL_TOOL_KEYS.length);
 });

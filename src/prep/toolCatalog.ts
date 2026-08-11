@@ -1,6 +1,7 @@
 import { searchJira } from '../integrations/jiraMcp';
 import { searchConfluence } from '../integrations/confluenceMcp';
 import { searchBitbucketServer } from '../integrations/bitbucketServer';
+import { formatPullRequestActivity } from '../integrations/bitbucketReviews';
 import { searchMemory } from '../integrations/mem0Client';
 import * as ragClient from '../integrations/ragClient';
 import { searchCode } from '../codebase/searchCode';
@@ -23,6 +24,8 @@ export const TOOL_CATALOG: Record<ToolKey, ToolSearchFn> = {
   jira: async (query, limit) => (await searchJira(query, limit)).map((m) => `${m.path}: ${m.snippet}`).join('\n'),
   confluence: async (query, limit) => (await searchConfluence(query, limit)).map((m) => `${m.path}: ${m.snippet}`).join('\n'),
   bitbucket: async (query, limit) => (await searchBitbucketServer(query, limit)).map((m) => `${m.path}: ${m.snippet}`).join('\n'),
+  // Ignores query/limit — a fixed "my current PR review/comment activity" lookup, not a keyword search. Same precedent as webSearch below ignoring limit.
+  bitbucketReviews: async () => formatPullRequestActivity(),
   mem0: async (query, limit) => (await searchMemory(query, limit)).map((m) => m.memory).join('\n'),
   ragCloud: async (query, limit) => (await ragClient.search(query, limit)).map((m) => m.text).join('\n'),
   localCodebase: async (query, limit) => (await searchCode(query, limit)).map((m) => `${m.repoName}/${m.filePath}: ${m.text.slice(0, 300)}`).join('\n\n'),

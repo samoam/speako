@@ -7,7 +7,7 @@ dist/
 *.db-wal
 gcp-credentials.json
 tools/
-data/audio/
+data/
 test-results/
 playwright-report/
 blob-report/

@@ -41,26 +41,26 @@ test('standup workflow: queries jira twice, confluence once, plus previous-stand
   }
 });
 
-test('sprintPlanning workflow: queries jira x2, confluence, bitbucket', async () => {
+test('sprintPlanning workflow: queries jira x2, confluence, bitbucket, and my PR review activity', async () => {
   const spy = mockSearchByTool();
   try {
     const { sources } = await sprintPlanningGather(baseCtx());
     assert.deepEqual(
       sources.map((s) => s.name).sort(),
-      ['bitbucket_recent_activity', 'confluence_velocity', 'jira_backlog', 'jira_carryover'].sort()
+      ['bitbucket_my_pr_activity', 'bitbucket_recent_activity', 'confluence_velocity', 'jira_backlog', 'jira_carryover'].sort()
     );
   } finally {
     spy.mock.restore();
   }
 });
 
-test('sprintReview workflow: queries jira, confluence, bitbucket, and email', async () => {
+test('sprintReview workflow: queries jira, confluence, bitbucket, my PR review activity, and email', async () => {
   const spy = mockSearchByTool();
   try {
     const { sources } = await sprintReviewGather(baseCtx({ sessionName: 'Sprint 12 Review' }));
     assert.deepEqual(
       sources.map((s) => s.name).sort(),
-      ['bitbucket_recent_commits', 'confluence_sprint_goal', 'email_context', 'jira_sprint_tickets'].sort()
+      ['bitbucket_my_pr_activity', 'bitbucket_recent_commits', 'confluence_sprint_goal', 'email_context', 'jira_sprint_tickets'].sort()
     );
   } finally {
     spy.mock.restore();

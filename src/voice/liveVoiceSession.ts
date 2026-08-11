@@ -22,7 +22,7 @@ const { Modality } = require('@google/genai');
  * which server.ts then further filters down to whichever of those are
  * actually configured (has real credentials/paths).
  */
-export const VOICE_TOOL_KEYS: ToolKey[] = ['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'localCodebase'];
+export const VOICE_TOOL_KEYS: ToolKey[] = ['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'bitbucketReviews', 'localCodebase'];
 
 const TOOL_DESCRIPTIONS: Partial<Record<ToolKey, string>> = {
   jira: 'Search Jira tickets by keyword.',
@@ -30,6 +30,7 @@ const TOOL_DESCRIPTIONS: Partial<Record<ToolKey, string>> = {
   mem0: 'Search durable personal/work memory facts previously saved about people and topics.',
   ragCloud: 'Search external reference material and documents (the MyRAG cloud service) — NOT this user\'s own Speako meetings, use search_pastMeetings for those.',
   bitbucket: 'Search recent commit activity in configured Bitbucket repos.',
+  bitbucketReviews: 'Check pull requests assigned to this user for review (with approval status), and comments/mentions on their own pull requests. Ignores the query — always returns their current PR activity.',
   localCodebase: 'Search the user\'s locally indexed codebase(s) by keyword.',
 };
 

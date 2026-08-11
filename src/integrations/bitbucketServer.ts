@@ -32,6 +32,92 @@ async function apiGet(path: string): Promise<any> {
   return res.json();
 }
 
+/** Follows Bitbucket Server's standard {values, isLastPage, nextPageStart} paging shape until exhausted or maxItems is reached. */
+async function apiGetAllPages(path: string, maxItems = 200): Promise<any[]> {
+  const items: any[] = [];
+  let start = 0;
+  while (items.length < maxItems) {
+    const sep = path.includes('?') ? '&' : '?';
+    const page = await apiGet(`${path}${sep}start=${start}`);
+    items.push(...(page.values ?? []));
+    if (page.isLastPage || !page.values?.length) break;
+    start = page.nextPageStart ?? start + page.values.length;
+  }
+  return items.slice(0, maxItems);
+}
+
+export interface BitbucketPullRequest {
+  id: number;
+  title: string;
+  state: string;
+  projectKey: string;
+  repoSlug: string;
+  authorName: string;
+  link: string;
+  /** Only present when this PR was fetched with role=REVIEWER and the caller's own review status could be identified. */
+  myApprovalStatus?: string;
+}
+
+function mapPullRequest(raw: any): BitbucketPullRequest {
+  const myReviewer = (raw.reviewers ?? []).find(
+    (p: any) => p?.user?.name?.toLowerCase() === config.bitbucketServerUsername.toLowerCase()
+  );
+  return {
+    id: raw.id,
+    title: raw.title,
+    state: raw.state,
+    projectKey: raw.toRef?.repository?.project?.key ?? '',
+    repoSlug: raw.toRef?.repository?.slug ?? '',
+    authorName: raw.author?.user?.displayName ?? raw.author?.user?.name ?? 'unknown',
+    link: raw.links?.self?.[0]?.href ?? '',
+    myApprovalStatus: myReviewer?.status,
+  };
+}
+
+/**
+ * Bitbucket Server's /dashboard/pull-requests endpoint is repo-agnostic —
+ * it returns PRs across every repo the authenticated user (whichever
+ * account bitbucketServerUsername/Token belong to) can see, scoped by their
+ * role on each PR. Unlike searchBitbucketServer above, this doesn't need
+ * config.bitbucketServerRepos at all.
+ */
+export async function getPullRequestsForRole(role: 'REVIEWER' | 'AUTHOR', state: 'OPEN' | 'ALL' = 'OPEN'): Promise<BitbucketPullRequest[]> {
+  if (!isBitbucketConfigured()) {
+    throw new Error('Bitbucket Server is not configured — see NOTES.md.');
+  }
+  const raw = await apiGetAllPages(`/rest/api/1.0/dashboard/pull-requests?role=${role}&state=${state}&limit=50`);
+  return raw.map(mapPullRequest);
+}
+
+export interface BitbucketPullRequestComment {
+  prId: number;
+  prTitle: string;
+  projectKey: string;
+  repoSlug: string;
+  authorName: string;
+  text: string;
+  createdDate: string;
+}
+
+/** activities includes comments, approvals, merges, etc. — filtered to COMMENTED here since that's the only action type with free-text worth surfacing. */
+export async function getPullRequestComments(pr: Pick<BitbucketPullRequest, 'id' | 'title' | 'projectKey' | 'repoSlug'>): Promise<BitbucketPullRequestComment[]> {
+  const raw = await apiGetAllPages(
+    `/rest/api/1.0/projects/${encodeURIComponent(pr.projectKey)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/activities?limit=50`,
+    100
+  );
+  return raw
+    .filter((a) => a.action === 'COMMENTED' && a.comment?.text)
+    .map((a) => ({
+      prId: pr.id,
+      prTitle: pr.title,
+      projectKey: pr.projectKey,
+      repoSlug: pr.repoSlug,
+      authorName: a.comment.author?.displayName ?? a.comment.author?.name ?? 'unknown',
+      text: a.comment.text,
+      createdDate: new Date(a.createdDate).toISOString(),
+    }));
+}
+
 /** Matches a "path/like/this.ext" style token in free text, if the query names a specific file. */
 function extractFilePath(text: string): string | null {
   const match = text.match(/\b[\w-]+(?:\/[\w.-]+)+\.[a-zA-Z0-9]+\b/);

@@ -11,6 +11,36 @@ export interface ExternalMessage {
   bodyText: string;
 }
 
+const upsertMessageStmt = db.prepare(`
+  INSERT INTO external_messages (id, source, title, participants, occurred_at, body_text)
+  VALUES (@id, @source, @title, @participants, @occurredAt, @bodyText)
+  ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title,
+    participants = excluded.participants,
+    occurred_at = excluded.occurred_at,
+    body_text = excluded.body_text,
+    indexed_at = NULL
+`);
+
+/**
+ * Writes a raw message into external_messages — same upsert contract
+ * docs/EXTERNAL_INGESTION_PROMPT.md specifies for the external daily-agent
+ * task (resetting indexed_at to NULL on update so an edited message gets
+ * re-chunked, never on INSERT DO NOTHING which would leave stale chunks).
+ * Used by msGraphSync.ts's native Outlook/Teams ingestion; the external-agent
+ * path writes to this same table directly via raw SQL instead of this function.
+ */
+export function upsertExternalMessage(message: ExternalMessage): void {
+  upsertMessageStmt.run({
+    id: message.id,
+    source: message.source,
+    title: message.title,
+    participants: JSON.stringify(message.participants),
+    occurredAt: message.occurredAt,
+    bodyText: message.bodyText,
+  });
+}
+
 export function getUnindexedMessages(): ExternalMessage[] {
   const rows = db.prepare('SELECT * FROM external_messages WHERE indexed_at IS NULL').all() as any[];
   return rows.map((r) => ({

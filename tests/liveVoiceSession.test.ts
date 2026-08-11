@@ -23,7 +23,7 @@ test('buildFunctionDeclarations: empty input returns no declarations', () => {
 });
 
 test('VOICE_TOOL_KEYS: matches the confirmed voice-grounding scope (no email/teams/webSearch)', () => {
-  assert.deepEqual(new Set(VOICE_TOOL_KEYS), new Set(['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'localCodebase']));
+  assert.deepEqual(new Set(VOICE_TOOL_KEYS), new Set(['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'bitbucketReviews', 'localCodebase']));
 });
 
 // search_pastMeetings is dispatched separately from the VOICE_TOOL_KEYS/

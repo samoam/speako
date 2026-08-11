@@ -127,7 +127,7 @@ export const config = {
    * Comma-separated, e.g. "jira,confluence,mem0,ragCloud,bitbucket,localCodebase".
    */
   get voiceToolKeys(): ToolKey[] {
-    const raw = str('voiceToolKeys', 'VOICE_TOOL_KEYS', 'jira,confluence,mem0,ragCloud,bitbucket,localCodebase');
+    const raw = str('voiceToolKeys', 'VOICE_TOOL_KEYS', 'jira,confluence,mem0,ragCloud,bitbucket,bitbucketReviews,localCodebase');
     return raw
       .split(',')
       .map((s) => s.trim())
@@ -329,6 +329,56 @@ export const config = {
    */
   get codebaseLocalPaths(): { name: string; path: string }[] {
     return parseCodebaseLocalPaths(str('codebaseLocalPaths', 'CODEBASE_LOCAL_PATHS', 'officercc=C:\\Users\\madadi\\git\\master'));
+  },
+
+  /**
+   * Microsoft Graph (Outlook + Teams chats) — native ingestion, replacing the
+   * need for the external daily-agent task described in
+   * docs/EXTERNAL_INGESTION_PROMPT.md (still supported as a fallback for
+   * anyone without Azure AD app-registration access). Auth is a public-client
+   * device-code flow (one-time `npm run msgraph-auth`, see scripts/msgraph-auth.ts)
+   * — no client secret, since a secret can't be safely held by a local desktop
+   * app anyway. Feature is skipped if clientId is unset or the token cache
+   * file doesn't exist yet (auth script hasn't been run).
+   */
+  get msGraphClientId(): string {
+    return str('msGraphClientId', 'MS_GRAPH_CLIENT_ID', '');
+  },
+  /** 'common' allows both work/school and personal accounts to sign in; narrow to a specific tenant GUID if your org requires it. */
+  get msGraphTenantId(): string {
+    return str('msGraphTenantId', 'MS_GRAPH_TENANT_ID', 'common');
+  },
+  get msGraphTokenPath(): string {
+    return str('msGraphTokenPath', 'MS_GRAPH_TOKEN_PATH', path.join(process.cwd(), 'data', 'msgraph-token.json'));
+  },
+  /** Background poll cadence — mirrors the scheduled-session/voice-idle timers' setInterval pattern in server.ts. */
+  get msGraphPollMinutes(): number {
+    return num('msGraphPollMinutes', 'MS_GRAPH_POLL_MINUTES', 15);
+  },
+  /**
+   * How far back each sync run looks, regardless of when the last run
+   * happened — deliberate overlap (not "since last sync") so a missed run
+   * (app closed, token expired) can't silently create a gap; re-upserting an
+   * already-seen message is harmless (see externalMessageRepository's
+   * upsertExternalMessage, same ON CONFLICT semantics the external-agent doc
+   * already specifies).
+   */
+  get msGraphLookbackHours(): number {
+    return num('msGraphLookbackHours', 'MS_GRAPH_LOOKBACK_HOURS', 48);
+  },
+
+  /**
+   * Classic-Outlook-desktop COM automation fallback (src/integrations/outlookDesktop.ts)
+   * for mailboxes Microsoft Graph's cloud-only Mail API can't reach (hybrid/
+   * on-premises Exchange, or accounts that turn out to be B2B guests rather
+   * than native tenant members — both confirmed real blockers during setup,
+   * see NOTES.md). Windows + classic Outlook only ("New Outlook" has no COM
+   * automation support) — manually triggered only (Settings' "Sync via
+   * Outlook desktop" button), not polled, since Outlook's Object Model Guard
+   * can show an interactive security prompt on first use in a session.
+   */
+  get outlookDesktopLookbackHours(): number {
+    return num('outlookDesktopLookbackHours', 'OUTLOOK_DESKTOP_LOOKBACK_HOURS', 48);
   },
 };
 

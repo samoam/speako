@@ -278,6 +278,16 @@ if (!sessionColumns.some((c) => c.name === 'session_type')) {
 if (!sessionColumns.some((c) => c.name === 'prep_status')) {
   db.exec("ALTER TABLE sessions ADD COLUMN prep_status TEXT NOT NULL DEFAULT 'none'");
 }
+if (!sessionColumns.some((c) => c.name === 'session_kind')) {
+  // Orthogonal to session_type (personal/work, meetings only) — distinguishes
+  // real recorded meetings from voice-chat/practice sessions for the sidebar
+  // history tabs. Backfills existing practice sessions using the only signal
+  // that existed before this column: the "Practice: " name prefix
+  // (src/interface/server.ts's startVoiceSession) — a one-time best-effort
+  // recovery, not a permanent identification mechanism going forward.
+  db.exec("ALTER TABLE sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'meeting'");
+  db.exec("UPDATE sessions SET session_kind = 'practice' WHERE name LIKE 'Practice: %'");
+}
 
 // Indexed here (after the ALTER TABLEs above, since these columns don't exist
 // on a fresh CREATE TABLE) — findLikelyPreviousSession filters on
