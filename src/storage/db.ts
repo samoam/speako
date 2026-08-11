@@ -227,6 +227,38 @@ db.exec(`
     generated_at TEXT NOT NULL
   );
 
+  -- Running daily token-usage totals per Gemini call site (feature), so the
+  -- cost-optimization work (model tiering, thinking-disable, caching) has a
+  -- visible before/after instead of relying on the plan's assumptions.
+  CREATE TABLE IF NOT EXISTS gemini_usage (
+    feature TEXT NOT NULL,
+    date TEXT NOT NULL,
+    call_count INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    thinking_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (feature, date)
+  );
+
+  -- On-demand meeting chapters (timestamped topic breakpoints) — same
+  -- compute-once-cache-in-a-row shape as coaching_feedback/summaries, one
+  -- Gemini call per session via POST /api/sessions/:id/chapters.
+  CREATE TABLE IF NOT EXISTS meeting_chapters (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    chapters TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+  );
+
+  -- "Ask across all my meetings" — not session-scoped (deliberately, unlike
+  -- live_queries), so no FK to sessions and no cleanup needed on session delete.
+  CREATE TABLE IF NOT EXISTS cross_session_queries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_text TEXT NOT NULL,
+    answer_text TEXT NOT NULL,
+    sources_used TEXT NOT NULL,
+    asked_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
 `);
 
 // Voice-emotion (Imentiv AI) support was removed — drop the table for anyone
@@ -235,7 +267,7 @@ db.exec(`
 db.exec('DROP TABLE IF EXISTS voice_emotion_scores');
 
 const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
-for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', 'calendar_event_id', 'active_tools']) {
+for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', 'calendar_event_id', 'active_tools', 'scheduled_start_at', 'active_features']) {
   if (!sessionColumns.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
   }
@@ -247,6 +279,15 @@ if (!sessionColumns.some((c) => c.name === 'prep_status')) {
   db.exec("ALTER TABLE sessions ADD COLUMN prep_status TEXT NOT NULL DEFAULT 'none'");
 }
 
+// Indexed here (after the ALTER TABLEs above, since these columns don't exist
+// on a fresh CREATE TABLE) — findLikelyPreviousSession filters on
+// session_type+meeting_type, and getDueScheduledSessions filters on
+// scheduled_start_at from a 20s poller, both previously full-scanning sessions.
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_sessions_type_meeting ON sessions(session_type, meeting_type);
+  CREATE INDEX IF NOT EXISTS idx_sessions_scheduled_start ON sessions(scheduled_start_at) WHERE scheduled_start_at IS NOT NULL;
+`);
+
 const triggerColumns = db.prepare('PRAGMA table_info(triggers)').all() as { name: string }[];
 if (!triggerColumns.some((c) => c.name === 'segment_text')) {
   db.exec('ALTER TABLE triggers ADD COLUMN segment_text TEXT');
@@ -255,4 +296,16 @@ if (!triggerColumns.some((c) => c.name === 'segment_text')) {
 const prepBriefColumns = db.prepare('PRAGMA table_info(prep_briefs)').all() as { name: string }[];
 if (!prepBriefColumns.some((c) => c.name === 'anticipated_qa')) {
   db.exec('ALTER TABLE prep_briefs ADD COLUMN anticipated_qa TEXT');
+}
+
+const coachingColumns = db.prepare('PRAGMA table_info(coaching_feedback)').all() as { name: string }[];
+for (const column of ['you_interrupted_others_count', 'others_interrupted_you_count']) {
+  if (!coachingColumns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE coaching_feedback ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+const summaryColumns = db.prepare('PRAGMA table_info(summaries)').all() as { name: string }[];
+if (!summaryColumns.some((c) => c.name === 'topics')) {
+  db.exec("ALTER TABLE summaries ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'");
 }

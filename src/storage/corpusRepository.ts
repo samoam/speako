@@ -30,18 +30,14 @@ export interface CorpusChunkWithSessionName extends CorpusChunk {
   sessionName: string | null;
 }
 
-/** All indexed chunks except the given session's own — used at retrieval time so a live session never retrieves against itself. */
-export function getAllChunksExcludingSession(excludeSessionId: string): CorpusChunkWithSessionName[] {
-  const rows = db
-    .prepare(
-      `SELECT c.*, s.name AS session_name
-       FROM corpus_chunks c
-       JOIN sessions s ON s.id = c.session_id
-       WHERE c.session_id != ?`
-    )
-    .all(excludeSessionId) as any[];
+const selectAllStmt = db.prepare(
+  `SELECT c.*, s.name AS session_name
+   FROM corpus_chunks c
+   JOIN sessions s ON s.id = c.session_id`
+);
 
-  return rows.map((r) => ({
+function rowToChunk(r: any): CorpusChunkWithSessionName {
+  return {
     id: r.id,
     sessionId: r.session_id,
     chunkIndex: r.chunk_index,
@@ -50,7 +46,12 @@ export function getAllChunksExcludingSession(excludeSessionId: string): CorpusCh
     endMs: r.end_ms,
     embedding: JSON.parse(r.embedding),
     sessionName: r.session_name,
-  }));
+  };
+}
+
+/** Every indexed chunk across all sessions — callers filter out their own session in-memory (see rag.ts's cache, which keeps this decoded list around across a session's repeated retrieve() calls instead of re-querying/re-parsing every time). */
+export function getAllChunks(): CorpusChunkWithSessionName[] {
+  return (selectAllStmt.all() as any[]).map(rowToChunk);
 }
 
 export function deleteChunksForSession(sessionId: string): void {

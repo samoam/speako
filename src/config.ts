@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { ToolKey } from './tools/activeTools';
 
 dotenv.config();
 
@@ -95,6 +96,43 @@ export const config = {
   get geminiModel(): string {
     return str('geminiModel', 'GEMINI_MODEL', 'gemini-flash-latest');
   },
+  /** Distinct from geminiModel — the Live API (voice chat/practice) requires a model that supports bidiGenerateContent, not a plain generateContent model. Confirmed available via ai.models.list() at the time this was set; if Google retires it, list models filtered on supportedActions.includes('bidiGenerateContent') to find the current name. */
+  get geminiLiveModel(): string {
+    return str('geminiLiveModel', 'GEMINI_LIVE_MODEL', 'gemini-2.5-flash-native-audio-latest');
+  },
+  /**
+   * Cheaper/faster tier for high-frequency, mechanical calls (live trigger
+   * classification, rolling-summary updates) where flash-lite's quality is
+   * plenty — see docs/gemini-cost-optimization notes. Not used for
+   * generative/creative calls (suggestions, summaries, prep briefs), which
+   * stay on geminiModel.
+   *
+   * Uses the "-latest" alias, not a pinned version, for the same reason
+   * geminiModel does (see its .env.example comment) — confirmed via direct
+   * API testing that the previously-pinned "gemini-2.5-flash-lite" now 404s
+   * ("no longer available to new users") despite still appearing in
+   * ai.models.list(), so pinning a specific version here is exactly the trap
+   * the alias is meant to avoid.
+   */
+  get geminiFastModel(): string {
+    return str('geminiFastModel', 'GEMINI_FAST_MODEL', 'gemini-flash-lite-latest');
+  },
+  /**
+   * Which tools voice chat/practice's function-calling is allowed to use —
+   * user-configurable (Settings > Voice chat tools) subset of
+   * liveVoiceSession.ts's VOICE_TOOL_KEYS ceiling. server.ts further filters
+   * this down to whichever of the chosen tools are actually configured
+   * (real credentials/paths present), so picking a tool here doesn't do
+   * anything on its own if it's not set up elsewhere in Settings.
+   * Comma-separated, e.g. "jira,confluence,mem0,ragCloud,bitbucket,localCodebase".
+   */
+  get voiceToolKeys(): ToolKey[] {
+    const raw = str('voiceToolKeys', 'VOICE_TOOL_KEYS', 'jira,confluence,mem0,ragCloud,bitbucket,localCodebase');
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean) as ToolKey[];
+  },
 
   /** Versioned domain-vocabulary list biasing streaming recognition. See config/phrase-hints.json. */
   phraseHintsPath: process.env.PHRASE_HINTS_PATH || path.join(process.cwd(), 'config', 'phrase-hints.json'),
@@ -178,6 +216,27 @@ export const config = {
   /** Live in-meeting Q&A — same on-demand rationale as diarization/summarization (an explicit user action, not automatic). */
   get liveQaEnabled(): boolean {
     return bool('liveQaEnabled', 'LIVE_QA_ENABLED', true);
+  },
+
+  /**
+   * Live Q&A sends only the last N transcript segments as raw context,
+   * relying on the rolling summary + open-items registry (meetingState.ts)
+   * to carry everything earlier — otherwise the prompt grows linearly with
+   * meeting length on every question asked. 40 segments is comfortably more
+   * than the immediate exchange the summary wouldn't have caught up to yet.
+   */
+  get liveQaTranscriptWindowSegments(): number {
+    return num('liveQaTranscriptWindowSegments', 'LIVE_QA_TRANSCRIPT_WINDOW_SEGMENTS', 40);
+  },
+
+  /**
+   * Live API voice sessions (chat/practice) bill for as long as the
+   * WebSocket to Gemini stays open — if a user starts one and walks away
+   * without clicking Stop, it bills indefinitely. Safety net only: auto-closed
+   * after this many ms with no mic audio/transcript activity.
+   */
+  get voiceSessionIdleTimeoutMs(): number {
+    return num('voiceSessionIdleTimeoutMs', 'VOICE_SESSION_IDLE_TIMEOUT_MS', 5 * 60_000);
   },
 
   /**
@@ -269,7 +328,7 @@ export const config = {
    * Feature is skipped if unset.
    */
   get codebaseLocalPaths(): { name: string; path: string }[] {
-    return parseCodebaseLocalPaths(str('codebaseLocalPaths', 'CODEBASE_LOCAL_PATHS', ''));
+    return parseCodebaseLocalPaths(str('codebaseLocalPaths', 'CODEBASE_LOCAL_PATHS', 'officercc=C:\\Users\\madadi\\git\\master'));
   },
 };
 

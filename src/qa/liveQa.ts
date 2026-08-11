@@ -8,6 +8,7 @@ import { toPlainText } from '../transcriptFormat';
 import { TranscriptSegment } from '../types';
 import { getMeetingStateSnapshot } from '../state/meetingState';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 export interface LiveQaAnswer {
   answerText: string;
@@ -27,7 +28,33 @@ export async function answerLiveQuestion(sessionId: string, question: string, se
   const sourcesUsed: string[] = [];
   const contextParts: string[] = [];
 
-  const ragResult = await retrieve(question, sessionId);
+  // These four lookups are independent — run them concurrently (this is on
+  // the interactive live-QA path, so their latencies would otherwise stack)
+  // and fold the results back in a fixed order below, so contextParts stays
+  // deterministic regardless of which one resolves first.
+  const bitbucketWanted = isBitbucketConfigured() && looksCodeRelated(question);
+  const [ragResult, bitbucketMatches, jiraMatches, confluenceMatches] = await Promise.all([
+    retrieve(question, sessionId),
+    bitbucketWanted
+      ? searchBitbucketServer(question).catch((err: any) => {
+          console.error('[live-qa] Bitbucket search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+    isJiraConfigured()
+      ? searchJira(question).catch((err: any) => {
+          console.error('[live-qa] Jira search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+    isConfluenceConfigured()
+      ? searchConfluence(question).catch((err: any) => {
+          console.error('[live-qa] Confluence search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
+
   if (!ragResult.suppressed) {
     sourcesUsed.push('Past meetings');
     contextParts.push(
@@ -35,39 +62,14 @@ export async function answerLiveQuestion(sessionId: string, question: string, se
     );
   }
 
-  if (isBitbucketConfigured() && looksCodeRelated(question)) {
-    try {
-      const matches = await searchBitbucketServer(question);
-      if (matches.length > 0) {
-        sourcesUsed.push('Bitbucket');
-        contextParts.push('Bitbucket:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-      }
-    } catch (err: any) {
-      console.error('[live-qa] Bitbucket search failed:', err.message);
-    }
-  }
-
-  if (isJiraConfigured()) {
-    try {
-      const matches = await searchJira(question);
-      if (matches.length > 0) {
-        sourcesUsed.push('Jira');
-        contextParts.push('Jira:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-      }
-    } catch (err: any) {
-      console.error('[live-qa] Jira search failed:', err.message);
-    }
-  }
-
-  if (isConfluenceConfigured()) {
-    try {
-      const matches = await searchConfluence(question);
-      if (matches.length > 0) {
-        sourcesUsed.push('Confluence');
-        contextParts.push('Confluence:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-      }
-    } catch (err: any) {
-      console.error('[live-qa] Confluence search failed:', err.message);
+  for (const [label, matches] of [
+    ['Bitbucket', bitbucketMatches],
+    ['Jira', jiraMatches],
+    ['Confluence', confluenceMatches],
+  ] as const) {
+    if (matches && matches.length > 0) {
+      sourcesUsed.push(label);
+      contextParts.push(`${label}:\n` + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
     }
   }
 
@@ -81,8 +83,13 @@ export async function answerLiveQuestion(sessionId: string, question: string, se
     ? state.openItems.map((i) => `- [${i.category}] ${i.description}`).join('\n')
     : '(none tracked yet)';
 
-  const transcriptContext = toPlainText(sessionSegments);
-  const prompt = `You are answering a question asked live during a meeting. Use the retrieved context and the meeting transcript so far to answer concisely and accurately. If there isn't enough information, say so plainly rather than guessing.
+  // Only the most recent segments are sent inline — the rolling summary +
+  // open items above already carry everything earlier, so resending the
+  // full transcript on every question would grow the prompt (and cost)
+  // linearly with meeting length for no benefit.
+  const recentSegments = sessionSegments.slice(-config.liveQaTranscriptWindowSegments);
+  const transcriptContext = toPlainText(recentSegments);
+  const prompt = `You are answering a question asked live during a meeting. Use the retrieved context, the meeting summary, and the most recent transcript to answer concisely and accurately. If there isn't enough information, say so plainly rather than guessing.
 
 Question: ${question}
 
@@ -92,7 +99,7 @@ ${state.rollingSummary || '(nothing yet)'}
 Open items tracked this meeting:
 ${openItemsBlock}
 
-Meeting transcript so far:
+Most recent meeting transcript (earlier context is captured in the summary above):
 ${transcriptContext || '(nothing said yet)'}
 
 Retrieved context:
@@ -102,6 +109,7 @@ ${contextParts.join('\n\n') || '(none found)'}`;
     model: config.geminiModel,
     contents: prompt,
   });
+  logGeminiUsage('answerLiveQuestion', response);
 
   return { answerText: (response.text ?? '').trim(), sourcesUsed };
 }

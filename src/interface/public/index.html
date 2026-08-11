@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>Speako</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236ab0ff'/%3E%3Cpath d='M19 15a2 2 0 0 1-2 2H8l-3 3V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z' fill='none' stroke='%230f0f11' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M9 9v3' stroke='%230f0f11' stroke-width='1.8' stroke-linecap='round'/%3E%3Cpath d='M12 7.5v6' stroke='%230f0f11' stroke-width='1.8' stroke-linecap='round'/%3E%3Cpath d='M15 9v3' stroke='%230f0f11' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
   <style>
     :root {
       --bg: #0f0f11; --panel: #17171a; --border: #2a2a2e; --text: #e8e8ea; --muted: #8a8a92;
@@ -16,38 +17,189 @@
     }
     input, select, button, textarea { font: inherit; color: inherit; }
 
+    /* ---------- Icons ---------- */
+    .icon {
+      width: 1.15em; height: 1.15em; flex-shrink: 0; vertical-align: -0.2em;
+      fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .icon-filled { fill: currentColor; stroke: none; }
+
     /* ---------- Sidebar ---------- */
     #sidebar {
       width: 300px; min-width: 300px; background: var(--panel); border-right: 1px solid var(--border);
       display: flex; flex-direction: column; height: 100vh;
     }
     #sidebarHeader { padding: 1rem 1rem 0.75rem; border-bottom: 1px solid var(--border); }
-    #sidebarHeader h1 { font-size: 1.05rem; margin: 0 0 0.85rem; display: flex; align-items: center; gap: 0.4rem; justify-content: space-between; }
-    #sidebarHeader h1::before { content: '🎙️'; font-size: 1.1rem; margin-right: -0.3rem; }
+    #sidebarHeader h1 { font-size: 1.05rem; margin: 0 0 0.85rem; display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; }
+    #sidebarHeader h1 .icon { color: var(--accent); }
+    #sidebarHeader h1 .icon-logo { width: 1.4em; height: 1.4em; }
     #sidebarHeader h1 .title-text { flex: 1; }
-    #settingsBtn { background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; padding: 0.15rem 0.3rem; line-height: 1; }
-    #settingsBtn:hover { color: var(--text); }
+    #settingsBtn, #voiceChatBtn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem 0.3rem; line-height: 1; border-radius: 6px; display: inline-flex; }
+    #settingsBtn:hover, #voiceChatBtn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    #voiceChatBtn.active { color: var(--rec); animation: pulse 1.4s infinite; }
+
+    /* ---------- Voice panel (chat/practice) ---------- */
+    #voicePanel {
+      position: fixed; bottom: 1.25rem; right: 1.25rem; width: 320px; background: var(--panel);
+      border: 1px solid var(--border); border-radius: 10px; padding: 1rem; z-index: 200;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    #voicePanel[hidden] { display: none; }
+    #voicePanelTitle { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
+    #voicePanelTitle .voice-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); animation: pulse 1.4s infinite; }
+    #voicePanelStatus { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; min-height: 1.2em; }
+    #voicePanelLog { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+    #voicePanelLog:empty { display: none; }
+    .voice-log-entry { font-size: 0.8rem; line-height: 1.35; padding: 0.45rem 0.65rem; border-radius: 10px; max-width: 88%; word-wrap: break-word; }
+    .voice-log-entry.you { align-self: flex-end; background: var(--accent-dim); border-bottom-right-radius: 3px; }
+    .voice-log-entry.assistant { align-self: flex-start; background: #232327; border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+    #voicePanelTextRow { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
+    #voicePanelTextInput {
+      flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); font-size: 0.82rem;
+    }
+    #voicePanelTextInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #voicePanelTextInput:disabled { opacity: 0.5; }
+    #voicePanelSendBtn {
+      padding: 0.45rem 0.8rem; border-radius: 6px; border: 1px solid var(--accent-dim); background: var(--accent-dim);
+      color: var(--text); cursor: pointer; font-size: 0.82rem; font-weight: 500;
+    }
+    #voicePanelSendBtn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+    #voicePanelSendBtn:disabled { opacity: 0.4; cursor: default; }
+    #voicePanelStopBtn { width: 100%; }
 
     /* ---------- Modals (settings, new session, session tools) ---------- */
-    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay {
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
     }
-    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden] { display: none; }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden] { display: none; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-    #settingsModal { width: 640px; }
+    #settingsModal, #insightsModal { width: 640px; }
     #newSessionModal, #sessionToolsPopover { width: 420px; }
     .modal-header, #settingsModalHeader {
       padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;
     }
     .modal-header h2, #settingsModalHeader h2 { margin: 0; font-size: 1rem; }
-    .modal-header button, #settingsModalClose { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
-    .modal-header button:hover, #settingsModalClose:hover { color: var(--text); }
+    .modal-header button, #settingsModalClose { background: none; border: none; color: var(--muted); cursor: pointer; display: inline-flex; padding: 0.2rem; border-radius: 6px; }
+    .modal-header button:hover, #settingsModalClose:hover { color: var(--text); background: rgba(255,255,255,0.06); }
     .modal-body { padding: 1rem 1.25rem; overflow-y: auto; }
     .modal-footer { padding: 0.85rem 1.25rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem; }
     #newSessionModal .modal-body { display: flex; flex-direction: column; }
+    #insightsModal .modal-body { min-height: 320px; display: flex; flex-direction: column; }
+    #insightsMiniTabs { display: flex; gap: 0.2rem; padding: 0.5rem 1.25rem 0; border-bottom: 1px solid var(--border); }
+    .insights-tab-btn {
+      background: none; border: none; color: var(--muted); padding: 0.5rem 0.7rem; cursor: pointer; font: inherit;
+      font-size: 0.85rem; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; transition: color 0.15s;
+    }
+    .insights-tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+    .insights-tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+    #insightsAskWrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    #insightsAskRow { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-shrink: 0; }
+    #insightsAskInput {
+      flex: 1; padding: 0.55rem 0.7rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text);
+    }
+    #insightsAskInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #insightsAskInput:disabled { opacity: 0.6; }
+    #insightsAskBtn {
+      padding: 0.55rem 1.1rem; border-radius: 6px; border: 1px solid var(--accent-dim); background: var(--accent-dim);
+      color: var(--text); cursor: pointer; font-weight: 500;
+    }
+    #insightsAskBtn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+    #insightsAskBtn:disabled { opacity: 0.4; cursor: default; }
+    #insightsAskHistory { display: flex; flex-direction: column; gap: 0.6rem; overflow-y: auto; flex: 1; }
+    #insightsAskEmptyState {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; gap: 0.9rem; color: var(--muted); padding: 1.5rem 1rem;
+    }
+    #insightsAskEmptyState .icon { width: 28px; height: 28px; color: var(--muted); opacity: 0.6; }
+    #insightsAskEmptyState p { margin: 0; font-size: 0.85rem; }
+    #insightsAskExamples { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: center; max-width: 480px; }
+    .insights-example-chip {
+      font: inherit; font-size: 0.78rem; padding: 0.4rem 0.7rem; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    }
+    .insights-example-chip:hover { border-color: var(--accent-dim); background: rgba(255,255,255,0.04); }
+    #insightsAskStatus { font-size: 0.78rem; color: var(--muted); margin: -0.4rem 0 0.75rem; flex-shrink: 0; }
+    #insightsAskHistory { display: flex; flex-direction: column; gap: 0.6rem; }
+    #insightsTopicsChart { display: flex; align-items: flex-end; gap: 0.6rem; height: 140px; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.25rem; }
+    .topic-bar-col { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; cursor: pointer; min-width: 48px; }
+    .topic-bar { width: 32px; background: var(--accent-dim); border-radius: 4px 4px 0 0; }
+    .topic-bar-col:hover .topic-bar { background: var(--accent); }
+    .topic-bar-label { font-size: 0.68rem; color: var(--muted); text-align: center; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topic-bar-count { font-size: 0.72rem; color: var(--text); }
     .tools-hint { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem; line-height: 1.4; }
     .tools-checklist { margin-top: 0.3rem; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
     .tools-checklist-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.4rem; }
+    .schedule-field { display: flex; flex-direction: column; gap: 0.3rem; position: relative; }
+    .schedule-field label {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+      display: flex; align-items: center; gap: 0.3rem;
+    }
+    .schedule-field label .icon { width: 0.9em; height: 0.9em; }
+    .schedule-input-row { display: flex; align-items: stretch; gap: 0.4rem; }
+    .datetime-trigger {
+      flex: 1; display: flex; align-items: center; gap: 0.5rem; text-align: left;
+      padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); font-family: inherit; font-size: 0.85rem; cursor: pointer;
+    }
+    .datetime-trigger:hover { border-color: var(--accent); }
+    .datetime-trigger .icon { color: var(--muted); }
+    #scheduledStartLabel { color: var(--muted); }
+    .datetime-trigger.has-value #scheduledStartLabel { color: var(--text); font-weight: 500; }
+    #scheduledStartClear {
+      background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+      border-radius: 6px; padding: 0 0.5rem; display: inline-flex; align-items: center;
+    }
+    #scheduledStartClear[hidden] { display: none; }
+    #scheduledStartClear:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ---------- Custom date/time picker ---------- */
+    .datetime-picker {
+      margin-top: 0.4rem; padding: 0.7rem; border-radius: 8px; border: 1px solid var(--border);
+      background: #1c1c20;
+    }
+    .datetime-picker[hidden] { display: none; }
+    .dtp-quick-picks { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+    .dtp-quick {
+      padding: 0.3rem 0.6rem; border-radius: 999px; border: 1px solid var(--border);
+      background: #232327; color: var(--text); font-size: 0.74rem; cursor: pointer;
+    }
+    .dtp-quick:hover { border-color: var(--accent); color: var(--accent); }
+    .dtp-cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+    .dtp-cal-header span { font-size: 0.85rem; font-weight: 600; }
+    .dtp-nav {
+      background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.25rem;
+      border-radius: 6px; display: inline-flex;
+    }
+    .dtp-nav:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .dtp-cal-weekdays {
+      display: grid; grid-template-columns: repeat(7, 1fr); text-align: center;
+      font-size: 0.68rem; color: var(--muted); margin-bottom: 0.2rem;
+    }
+    .dtp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 0.7rem; }
+    .dtp-day {
+      aspect-ratio: 1; border: none; background: none; color: var(--text); cursor: pointer;
+      border-radius: 6px; font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+    }
+    .dtp-day:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+    .dtp-day.today { color: var(--accent); font-weight: 700; }
+    .dtp-day.selected { background: var(--accent); color: #0b0b0d; font-weight: 700; }
+    .dtp-day:disabled { color: var(--muted); opacity: 0.35; cursor: default; }
+    .dtp-time-row {
+      display: flex; align-items: center; gap: 0.5rem; padding-top: 0.6rem;
+      border-top: 1px solid var(--border); margin-bottom: 0.7rem; color: var(--muted);
+    }
+    .dtp-time-row input {
+      flex: 1; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); font-family: inherit; font-size: 0.85rem; color-scheme: dark;
+    }
+    .dtp-time-row input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .dtp-actions { display: flex; gap: 0.5rem; }
+    .dtp-actions .primary-btn, .dtp-actions .tool-btn { width: auto; flex: 1; }
+    #scheduledStartClear:hover { color: var(--text); border-color: var(--accent); }
+    #calendarShortcutsBox { border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
+    #calendarShortcutsBox[hidden] { display: none; }
     .tool-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; font-size: 0.85rem; }
     .tool-toggle.unavailable { opacity: 0.4; }
     .tool-toggle .tool-unavailable-note { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
@@ -81,8 +233,10 @@
     .primary-btn {
       padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
       background: #232327; color: var(--text); font-weight: 600; width: 100%;
+      display: flex; align-items: center; justify-content: center; gap: 0.4rem;
     }
     .primary-btn:hover { background: #2a2a2f; }
+    .primary-btn[hidden] { display: none; }
     #startBtn { border-color: var(--ok); }
     #stopBtn { border-color: var(--rec); }
 
@@ -103,16 +257,27 @@
     .session-dot.diarized { background: var(--accent); }
     .session-name { font-size: 0.88rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
     .session-meta { font-size: 0.73rem; color: var(--muted); margin-top: 0.2rem; margin-left: 0.65rem; }
-    .session-delete {
-      background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.1rem 0.35rem;
-      border-radius: 4px; font-size: 0.85rem; opacity: 0; flex-shrink: 0;
+    .session-schedule {
+      font-size: 0.73rem; color: var(--accent); margin-top: 0.2rem; margin-left: 0.65rem;
+      display: flex; align-items: center; gap: 0.4rem;
     }
+    .session-schedule-cancel {
+      background: none; border: none; color: var(--muted); cursor: pointer; padding: 0;
+      font-size: 0.73rem; text-decoration: underline;
+    }
+    .session-delete {
+      background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem;
+      border-radius: 4px; opacity: 0; flex-shrink: 0; display: inline-flex;
+    }
+    .session-delete .icon { width: 0.95em; height: 0.95em; }
     .session-card:hover .session-delete { opacity: 1; }
     .session-delete:hover { color: var(--rec); background: #2a1f21; }
     .session-start-recording {
       margin: 0.4rem 0 0 0.65rem; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid var(--ok);
       background: #1a2620; color: var(--ok); cursor: pointer; font-size: 0.76rem;
+      display: inline-flex; align-items: center; gap: 0.3rem;
     }
+    .session-start-recording .icon { width: 0.85em; height: 0.85em; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
     .empty-list { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0.6rem; }
 
@@ -129,14 +294,18 @@
     }
     #mainTitle:hover { background: #1c1c20; }
     #mainTitle:focus { background: #1c1c20; box-shadow: 0 0 0 1px var(--accent); }
-    #mainMeta { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
+    #mainMeta { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; display: flex; align-items: center; gap: 0.4rem; }
     #mainMeta.recording { color: var(--rec); }
-    #mainMeta.recording::before { content: '● '; }
+    #mainMeta.recording::before {
+      content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--rec);
+      animation: pulse 1.4s infinite; flex-shrink: 0;
+    }
 
     .tool-btn {
       padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid var(--border);
-      background: #1f1f23; cursor: pointer;
+      background: #1f1f23; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;
     }
+    .tool-btn[hidden] { display: none; }
     .tool-btn:hover:not(:disabled) { background: #27272c; }
     .tool-btn:disabled { opacity: 0.35; cursor: default; }
 
@@ -144,7 +313,7 @@
     #mainHeaderActions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
     .icon-btn {
       background: none; border: 1px solid transparent; color: var(--text); cursor: pointer;
-      font-size: 1.05rem; padding: 0.35rem 0.5rem; border-radius: 6px; line-height: 1; position: relative;
+      padding: 0.4rem 0.5rem; border-radius: 6px; line-height: 1; position: relative; display: inline-flex;
     }
     .icon-btn:hover { background: #1f1f23; border-color: var(--border); }
     .icon-btn.active { background: #1c2a38; border-color: var(--accent-dim); }
@@ -202,11 +371,19 @@
     }
     #userNotesInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
     .calendar-shortcut {
-      text-align: left; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
-      background: #1f1f23; color: var(--text); cursor: pointer; font-size: 0.78rem;
+      display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left;
+      padding: 0.45rem 0.55rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); cursor: pointer; font-size: 0.8rem;
     }
-    .calendar-shortcut:hover { border-color: var(--accent); }
-    .calendar-shortcut .cs-type { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; }
+    .calendar-shortcut:hover { border-color: var(--accent); background: #20242c; }
+    .calendar-shortcut.selected { border-color: var(--accent); background: #1c2a38; }
+    .calendar-shortcut .cs-icon {
+      width: 2rem; height: 2rem; flex-shrink: 0; border-radius: 6px; background: var(--accent-dim);
+      color: var(--accent); display: flex; align-items: center; justify-content: center;
+    }
+    .calendar-shortcut .cs-body { min-width: 0; flex: 1; }
+    .calendar-shortcut .cs-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .calendar-shortcut .cs-time { color: var(--muted); font-size: 0.72rem; margin-top: 0.1rem; }
     .prep-badge { font-size: 0.68rem; padding: 0.05rem 0.35rem; border-radius: 4px; margin-left: 0.35rem; }
     .prep-badge.pending { background: #3a2f1f; color: #e0b060; }
     .prep-badge.ready { background: #1f3a2a; color: var(--ok); }
@@ -232,6 +409,7 @@
       background: #17171a; color: var(--text); font-family: inherit; font-size: 0.88rem; line-height: 1.5; resize: vertical;
     }
 
+    .prep-brief-actions { display: flex; gap: 0.5rem; }
     #coachingWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
     #coachingEmptyState { color: var(--muted); font-size: 0.95rem; margin-top: 2rem; text-align: center; }
     #coachingContent { display: flex; flex-direction: column; gap: 1.4rem; max-width: 760px; }
@@ -255,6 +433,12 @@
     .feedback-suggestion .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; margin-right: 0.4rem; }
     #transcriptWrap { flex: 1; display: flex; min-height: 0; }
     #transcriptMain { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 0; }
+    #chaptersList { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+    #chaptersList[hidden] { display: none; }
+    .chapter-chip { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); cursor: pointer; text-align: left; font: inherit; }
+    .chapter-chip:hover { border-color: var(--accent-dim); }
+    .chapter-chip-time { font-size: 0.72rem; color: var(--muted); }
+    .chapter-chip-title { font-size: 0.85rem; font-weight: 600; }
     #panelResizer {
       width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative;
     }
@@ -385,6 +569,14 @@
     .sentiment-dot.pos { background: var(--ok); }
     .sentiment-dot.neg { background: var(--rec); }
     .sentiment-dot.neu { background: var(--muted); }
+    #trendWrap { padding: 1.25rem 1.5rem; overflow: auto; display: none; }
+    .trend-chart-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.6rem; }
+    .trend-chart { overflow: visible; }
+    .trend-bar.pos { fill: var(--ok); }
+    .trend-bar.neg { fill: var(--rec); }
+    .trend-bar.neu { fill: var(--muted); }
+    .trend-zero-line { stroke: var(--border); stroke-width: 1; }
+    .trend-date-label, .trend-nodata { fill: var(--muted); font-size: 10px; }
     .segment-text {
       margin-top: 0.3rem; padding: 0.55rem 0.8rem; border-radius: 14px; border-bottom-left-radius: 4px;
       background: #1c1c20; border: 1px solid var(--border); display: inline-block; max-width: 100%;
@@ -409,11 +601,38 @@
   </style>
 </head>
 <body>
+  <svg style="display:none">
+    <defs>
+      <symbol id="icon-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v4"/><path d="M8 22h8"/></symbol>
+      <!-- Speako's mark: a conversation (chat bubble) with its voice actually being heard (the waveform inside) — meetings, captured and understood. -->
+      <symbol id="icon-logo" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8v4"/><path d="M12 6v8"/><path d="M16 8v4"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M10.3 2.4a1.9 1.9 0 0 1 3.4 0l.4.9a1.9 1.9 0 0 0 2.2 1l.9-.3a1.9 1.9 0 0 1 2.4 2.4l-.3.9a1.9 1.9 0 0 0 1 2.2l.9.4a1.9 1.9 0 0 1 0 3.4l-.9.4a1.9 1.9 0 0 0-1 2.2l.3.9a1.9 1.9 0 0 1-2.4 2.4l-.9-.3a1.9 1.9 0 0 0-2.2 1l-.4.9a1.9 1.9 0 0 1-3.4 0l-.4-.9a1.9 1.9 0 0 0-2.2-1l-.9.3a1.9 1.9 0 0 1-2.4-2.4l.3-.9a1.9 1.9 0 0 0-1-2.2l-.9-.4a1.9 1.9 0 0 1 0-3.4l.9-.4a1.9 1.9 0 0 0 1-2.2l-.3-.9a1.9 1.9 0 0 1 2.4-2.4l.9.3a1.9 1.9 0 0 0 2.2-1l.4-.9Z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="icon-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 4.7L3 17.3V21h3.7l6.3-6.3a4 4 0 0 0 4.7-5.4l-2.6 2.6a1.5 1.5 0 0 1-2.1-2.1l2.6-2.6Z"/></symbol>
+      <symbol id="icon-lightbulb" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.7.5 1 1.2 1 2.05V17h6v-.25c0-.85.3-1.55 1-2.05A7 7 0 0 0 12 2Z"/></symbol>
+      <symbol id="icon-more-vertical" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></symbol>
+      <symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></symbol>
+      <symbol id="icon-circle-fill" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+      <symbol id="icon-square-fill" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M3 10h18"/></symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+      <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16.5 6.5a3.2 3.2 0 0 1 0 6.2"/><path d="M18.5 14a6 6 0 0 1 3 5"/></symbol>
+      <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+      <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+      <symbol id="icon-insights" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></symbol>
+    </defs>
+  </svg>
+
   <div id="sidebar">
     <div id="sidebarHeader">
-      <h1><span class="title-text">Speako</span><button id="settingsBtn" title="Settings">⚙️</button></h1>
+      <h1>
+        <svg class="icon icon-logo"><use href="#icon-logo"></use></svg>
+        <span class="title-text">Speako</span>
+        <button id="voiceChatBtn" title="Voice chat"><svg class="icon"><use href="#icon-mic"></use></svg></button>
+        <button id="insightsBtn" title="Insights"><svg class="icon"><use href="#icon-insights"></use></svg></button>
+        <button id="settingsBtn" title="Settings"><svg class="icon"><use href="#icon-settings"></use></svg></button>
+      </h1>
       <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
-      <button id="stopBtn" class="primary-btn" hidden>■ Stop recording</button>
+      <button id="stopBtn" class="primary-btn" hidden><svg class="icon icon-filled"><use href="#icon-square-fill"></use></svg> Stop recording</button>
     </div>
     <div id="sessionListHeader">Sessions</div>
     <div id="sessionList"></div>
@@ -427,17 +646,18 @@
       </div>
       <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
       <div id="mainHeaderActions">
-        <button id="sessionToolsBtn" class="icon-btn" title="Tools for this session">🔧</button>
+        <button id="sessionToolsBtn" class="icon-btn" title="Tools for this session"><svg class="icon"><use href="#icon-wrench"></use></svg></button>
         <div id="suggestionsToggleWrap">
-          <button id="suggestionsToggleBtn" class="icon-btn" title="Suggestions &amp; triggers">💡<span id="suggestionsUnreadDot" hidden></span></button>
+          <button id="suggestionsToggleBtn" class="icon-btn" title="Suggestions &amp; triggers"><svg class="icon"><use href="#icon-lightbulb"></use></svg><span id="suggestionsUnreadDot" hidden></span></button>
         </div>
         <div id="kebabWrap">
-          <button id="kebabBtn" class="icon-btn" title="More actions">⋯</button>
+          <button id="kebabBtn" class="icon-btn" title="More actions"><svg class="icon icon-filled"><use href="#icon-more-vertical"></use></svg></button>
           <div id="kebabMenu" hidden>
             <button id="saveBtn" class="kebab-item" disabled>Save transcript</button>
             <button id="identifyBtn" class="kebab-item" disabled>Identify speakers</button>
             <button id="summarizeBtn" class="kebab-item" disabled>Generate summary</button>
             <button id="coachBtn" class="kebab-item" disabled>Generate coaching feedback</button>
+            <button id="chaptersBtn" class="kebab-item" disabled>Detect chapters</button>
             <button id="clearBtn" class="kebab-item">Clear view</button>
             <button id="deleteBtn" class="kebab-item danger" disabled>Delete session</button>
           </div>
@@ -451,9 +671,11 @@
       <button class="tab-btn" data-tab="qa">Q&amp;A</button>
       <button class="tab-btn" data-tab="prepBrief">Prep Brief</button>
       <button class="tab-btn" data-tab="coaching">Coaching</button>
+      <button class="tab-btn" data-tab="trend">Trend</button>
     </div>
     <div id="transcriptWrap">
       <div id="transcriptMain">
+        <div id="chaptersList" hidden></div>
         <div id="emptyState">Nothing here yet.</div>
         <div id="transcript"></div>
       </div>
@@ -492,7 +714,10 @@
         <div id="prepQuestionsToAskList"></div>
       </div>
       <textarea id="prepBriefText" placeholder="No prep brief for this session."></textarea>
-      <button id="prepBriefSaveBtn" class="tool-btn">Save edits</button>
+      <div class="prep-brief-actions">
+        <button id="prepBriefSaveBtn" class="tool-btn">Save edits</button>
+        <button id="practiceBtn" class="tool-btn" hidden><svg class="icon"><use href="#icon-users"></use></svg> Practice this meeting</button>
+      </div>
     </div>
     <div id="coachingWrap">
       <div id="coachingEmptyState">No coaching feedback yet — use the ⋯ menu to generate it once the session has ended.</div>
@@ -510,10 +735,18 @@
           <div id="fillerWordExamples"></div>
         </div>
         <div class="coaching-section">
+          <div class="prep-qa-label">Interruptions</div>
+          <div id="interruptionCounts"></div>
+        </div>
+        <div class="coaching-section">
           <div class="prep-qa-label">Feedback</div>
           <div id="feedbackPointsList"></div>
         </div>
       </div>
+    </div>
+    <div id="trendWrap">
+      <div id="trendEmptyState">Available for one-on-one sessions with at least one other session in the series.</div>
+      <div id="trendContent" hidden></div>
     </div>
   </div>
 
@@ -521,7 +754,7 @@
     <div id="newSessionModal" class="modal">
       <div class="modal-header">
         <h2>New session</h2>
-        <button id="newSessionModalClose">&times;</button>
+        <button id="newSessionModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
       </div>
       <div class="modal-body">
         <div id="newSessionBox">
@@ -531,6 +764,10 @@
           </div>
           <input id="nameInput" placeholder="Session name (optional)" />
           <select id="languageSelect"></select>
+          <div class="tools-checklist">
+            <div class="tools-checklist-label">Heavy features for this session</div>
+            <div id="newSessionFeaturesChecklist"></div>
+          </div>
           <div id="workPrepBox" hidden>
             <select id="meetingTypeSelect">
               <option value="generic">Other</option>
@@ -545,29 +782,80 @@
               <div class="workflow-preview-label">What this prepares</div>
               <ul id="workflowPreviewList"></ul>
             </div>
-            <div id="calendarShortcuts"></div>
+            <div id="calendarShortcutsBox" hidden>
+              <div class="workflow-preview-label">Upcoming calendar events</div>
+              <div id="calendarShortcuts"></div>
+            </div>
             <textarea id="userNotesInput" placeholder="Anything you want prep to focus on (optional) — e.g. &quot;ask about the auth migration timeline&quot;"></textarea>
             <div class="tools-checklist">
               <div class="tools-checklist-label">Tools for this session</div>
               <div id="newSessionToolsChecklist"></div>
             </div>
+            <div class="schedule-field">
+              <label><svg class="icon"><use href="#icon-calendar"></use></svg> Schedule recording start (optional)</label>
+              <input type="datetime-local" id="scheduledStartInput" hidden />
+              <div class="schedule-input-row">
+                <button type="button" id="scheduledStartTrigger" class="datetime-trigger">
+                  <svg class="icon"><use href="#icon-calendar"></use></svg>
+                  <span id="scheduledStartLabel">Pick a date &amp; time</span>
+                </button>
+                <button id="scheduledStartClear" type="button" title="Clear scheduled time" hidden><svg class="icon"><use href="#icon-x"></use></svg></button>
+              </div>
+              <div id="datetimePicker" class="datetime-picker" hidden>
+                <div class="dtp-quick-picks">
+                  <button type="button" class="dtp-quick" data-quick="30m">In 30 min</button>
+                  <button type="button" class="dtp-quick" data-quick="1h">In 1 hour</button>
+                  <button type="button" class="dtp-quick" data-quick="tomorrow9">Tomorrow, 9 AM</button>
+                </div>
+                <div class="dtp-cal-header">
+                  <button type="button" id="dtpPrevMonth" class="dtp-nav" title="Previous month"><svg class="icon"><use href="#icon-chevron-left"></use></svg></button>
+                  <span id="dtpMonthLabel"></span>
+                  <button type="button" id="dtpNextMonth" class="dtp-nav" title="Next month"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
+                </div>
+                <div class="dtp-cal-weekdays">
+                  <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+                </div>
+                <div id="dtpCalGrid" class="dtp-cal-grid"></div>
+                <div class="dtp-time-row">
+                  <svg class="icon"><use href="#icon-clock"></use></svg>
+                  <input type="time" id="dtpTimeInput" />
+                </div>
+                <div class="dtp-actions">
+                  <button type="button" id="dtpCancelBtn" class="tool-btn">Cancel</button>
+                  <button type="button" id="dtpApplyBtn" class="primary-btn">Set time</button>
+                </div>
+              </div>
+            </div>
             <button id="prepareBtn" class="primary-btn">Prepare session</button>
           </div>
-          <button id="startBtn" class="primary-btn">● Start new session</button>
+          <button id="startBtn" class="primary-btn"><svg class="icon icon-filled" style="color:var(--rec)"><use href="#icon-circle-fill"></use></svg> Start new session</button>
         </div>
       </div>
     </div>
+  </div>
+
+  <div id="voicePanel" hidden>
+    <div id="voicePanelTitle"><span class="voice-dot"></span><span id="voicePanelTitleText">Voice chat</span></div>
+    <div id="voicePanelStatus">Connecting…</div>
+    <div id="voicePanelLog"></div>
+    <div id="voicePanelTextRow">
+      <input id="voicePanelTextInput" placeholder="Type instead of talking…" disabled />
+      <button id="voicePanelSendBtn" disabled>Send</button>
+    </div>
+    <button id="voicePanelStopBtn" class="tool-btn">Stop</button>
   </div>
 
   <div id="sessionToolsOverlay" hidden>
     <div id="sessionToolsPopover" class="modal">
       <div class="modal-header">
         <h2>Tools for this session</h2>
-        <button id="sessionToolsClose">&times;</button>
+        <button id="sessionToolsClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
       </div>
       <div class="modal-body">
         <p class="tools-hint">Changes apply to live fact-checking going forward. They don't change an already-generated prep brief.</p>
         <div id="sessionToolsChecklist"></div>
+        <div class="tools-checklist-label">Heavy features for this session</div>
+        <div id="sessionFeaturesChecklist"></div>
       </div>
       <div class="modal-footer">
         <button id="sessionToolsSaveBtn" class="primary-btn">Save</button>
@@ -579,7 +867,7 @@
     <div id="settingsModal" class="modal">
       <div id="settingsModalHeader">
         <h2>Settings</h2>
-        <button id="settingsModalClose">&times;</button>
+        <button id="settingsModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
       </div>
       <div id="settingsModalBody">
         <fieldset>
@@ -587,6 +875,8 @@
           <div class="settings-grid">
             <div class="settings-field"><label>API key</label><input type="password" data-key="geminiApiKey" /></div>
             <div class="settings-field"><label>Model</label><input type="text" data-key="geminiModel" /></div>
+            <div class="settings-field"><label>Live model (voice chat/practice)</label><input type="text" data-key="geminiLiveModel" /></div>
+            <div class="settings-field"><label>Fast model (live classification, cheaper tier)</label><input type="text" data-key="geminiFastModel" /></div>
           </div>
         </fieldset>
         <fieldset>
@@ -644,6 +934,11 @@
           </div>
         </fieldset>
         <fieldset>
+          <legend>Voice chat tools</legend>
+          <p class="tools-hint">Which tools voice chat/practice can call to look things up. Only applies to tools that are actually configured above.</p>
+          <div class="tools-checklist" id="voiceToolsChecklist"></div>
+        </fieldset>
+        <fieldset>
           <legend>Communications indexing</legend>
           <p class="tools-hint">Speako doesn't fetch email/Teams itself — a separate daily task writes raw messages into its database (see docs/EXTERNAL_INGESTION_PROMPT.md). This just chunks + embeds whatever's arrived since the last run.</p>
           <div class="settings-field" id="communicationsIndexBox">
@@ -687,6 +982,33 @@
     </div>
   </div>
 
+  <div id="insightsOverlay" hidden>
+    <div id="insightsModal" class="modal">
+      <div class="modal-header">
+        <h2>Insights</h2>
+        <button id="insightsModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+      </div>
+      <div id="insightsMiniTabs">
+        <button class="insights-tab-btn active" data-insights-tab="ask">Ask</button>
+        <button class="insights-tab-btn" data-insights-tab="topics">Topics</button>
+      </div>
+      <div class="modal-body">
+        <div id="insightsAskWrap">
+          <div id="insightsAskRow">
+            <input id="insightsAskInput" placeholder="Ask a question across all your past meetings…" />
+            <button id="insightsAskBtn">Ask</button>
+          </div>
+          <div id="insightsAskStatus" hidden></div>
+          <div id="insightsAskHistory"></div>
+        </div>
+        <div id="insightsTopicsWrap" hidden>
+          <div id="insightsTopicsChart"></div>
+          <div id="insightsTopicsDrilldown"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const sessionList = document.getElementById('sessionList');
     const nameInput = document.getElementById('nameInput');
@@ -699,6 +1021,8 @@
     const identifyBtn = document.getElementById('identifyBtn');
     const summarizeBtn = document.getElementById('summarizeBtn');
     const coachBtn = document.getElementById('coachBtn');
+    const chaptersBtn = document.getElementById('chaptersBtn');
+    const chaptersList = document.getElementById('chaptersList');
     const clearBtn = document.getElementById('clearBtn');
     const deleteBtn = document.getElementById('deleteBtn');
     const transcriptEl = document.getElementById('transcript');
@@ -722,7 +1046,20 @@
     const workPrepBox = document.getElementById('workPrepBox');
     const meetingTypeSelect = document.getElementById('meetingTypeSelect');
     const userNotesInput = document.getElementById('userNotesInput');
+    const calendarShortcutsBox = document.getElementById('calendarShortcutsBox');
     const calendarShortcuts = document.getElementById('calendarShortcuts');
+    const scheduledStartInput = document.getElementById('scheduledStartInput');
+    const scheduledStartClear = document.getElementById('scheduledStartClear');
+    const scheduledStartTrigger = document.getElementById('scheduledStartTrigger');
+    const scheduledStartLabel = document.getElementById('scheduledStartLabel');
+    const datetimePicker = document.getElementById('datetimePicker');
+    const dtpMonthLabel = document.getElementById('dtpMonthLabel');
+    const dtpCalGrid = document.getElementById('dtpCalGrid');
+    const dtpPrevMonth = document.getElementById('dtpPrevMonth');
+    const dtpNextMonth = document.getElementById('dtpNextMonth');
+    const dtpTimeInput = document.getElementById('dtpTimeInput');
+    const dtpCancelBtn = document.getElementById('dtpCancelBtn');
+    const dtpApplyBtn = document.getElementById('dtpApplyBtn');
     const prepareBtn = document.getElementById('prepareBtn');
     const prepBriefWrap = document.getElementById('prepBriefWrap');
     const prepUserNotesBox = document.getElementById('prepUserNotesBox');
@@ -733,6 +1070,15 @@
     const prepQuestionsToAskList = document.getElementById('prepQuestionsToAskList');
     const prepBriefText = document.getElementById('prepBriefText');
     const prepBriefSaveBtn = document.getElementById('prepBriefSaveBtn');
+    const practiceBtn = document.getElementById('practiceBtn');
+    const voiceChatBtn = document.getElementById('voiceChatBtn');
+    const voicePanel = document.getElementById('voicePanel');
+    const voicePanelTitleText = document.getElementById('voicePanelTitleText');
+    const voicePanelStatus = document.getElementById('voicePanelStatus');
+    const voicePanelStopBtn = document.getElementById('voicePanelStopBtn');
+    const voicePanelLog = document.getElementById('voicePanelLog');
+    const voicePanelTextInput = document.getElementById('voicePanelTextInput');
+    const voicePanelSendBtn = document.getElementById('voicePanelSendBtn');
     const coachingWrap = document.getElementById('coachingWrap');
     const coachingEmptyState = document.getElementById('coachingEmptyState');
     const coachingContent = document.getElementById('coachingContent');
@@ -740,6 +1086,10 @@
     const talkTimeLabel = document.getElementById('talkTimeLabel');
     const fillerWordCount = document.getElementById('fillerWordCount');
     const fillerWordExamples = document.getElementById('fillerWordExamples');
+    const interruptionCounts = document.getElementById('interruptionCounts');
+    const trendWrap = document.getElementById('trendWrap');
+    const trendEmptyState = document.getElementById('trendEmptyState');
+    const trendContent = document.getElementById('trendContent');
     const feedbackPointsList = document.getElementById('feedbackPointsList');
     const indexCodebaseBtn = document.getElementById('indexCodebaseBtn');
     const codebaseIndexStatus = document.getElementById('codebaseIndexStatus');
@@ -752,13 +1102,30 @@
     const settingsSaveBtn = document.getElementById('settingsSaveBtn');
     const settingsStatus = document.getElementById('settingsStatus');
     const settingsInputs = Array.from(document.querySelectorAll('#settingsModalBody [data-key]'));
+    const voiceToolsChecklist = document.getElementById('voiceToolsChecklist');
+    // Mirrors liveVoiceSession.ts's VOICE_TOOL_KEYS — the ceiling of tools eligible for voice chat (no email/teams/webSearch).
+    const VOICE_TOOL_KEY_LIST = ['jira', 'confluence', 'mem0', 'ragCloud', 'bitbucket', 'localCodebase'];
+    const insightsBtn = document.getElementById('insightsBtn');
+    const insightsOverlay = document.getElementById('insightsOverlay');
+    const insightsModalClose = document.getElementById('insightsModalClose');
+    const insightsTabBtns = Array.from(document.querySelectorAll('.insights-tab-btn'));
+    const insightsAskWrap = document.getElementById('insightsAskWrap');
+    const insightsTopicsWrap = document.getElementById('insightsTopicsWrap');
+    const insightsAskInput = document.getElementById('insightsAskInput');
+    const insightsAskBtn = document.getElementById('insightsAskBtn');
+    const insightsAskHistory = document.getElementById('insightsAskHistory');
+    const insightsAskStatus = document.getElementById('insightsAskStatus');
+    const insightsTopicsChart = document.getElementById('insightsTopicsChart');
+    const insightsTopicsDrilldown = document.getElementById('insightsTopicsDrilldown');
     const newSessionOpenBtn = document.getElementById('newSessionOpenBtn');
     const newSessionOverlay = document.getElementById('newSessionOverlay');
     const newSessionModalClose = document.getElementById('newSessionModalClose');
     const newSessionToolsChecklist = document.getElementById('newSessionToolsChecklist');
+    const newSessionFeaturesChecklist = document.getElementById('newSessionFeaturesChecklist');
     const sessionToolsOverlay = document.getElementById('sessionToolsOverlay');
     const sessionToolsClose = document.getElementById('sessionToolsClose');
     const sessionToolsChecklist = document.getElementById('sessionToolsChecklist');
+    const sessionFeaturesChecklist = document.getElementById('sessionFeaturesChecklist');
     const sessionToolsSaveBtn = document.getElementById('sessionToolsSaveBtn');
     const sessionToolsBtn = document.getElementById('sessionToolsBtn');
     const suggestionsToggleBtn = document.getElementById('suggestionsToggleBtn');
@@ -769,6 +1136,8 @@
     let selectedCalendarEventId = null;
     let availableTools = null; // cached GET /api/tools response: { jira, confluence, bitbucket, mem0, ragCloud, localCodebase, webSearch }
     let currentSessionActiveTools = null; // activeTools of whichever session is open in the main panel
+    let availableFeatures = null; // cached GET /api/features response: { sentiment, triggers, rag, meetingState } -> { enabled, label }
+    let currentSessionActiveFeatures = null; // activeFeatures of whichever session is open in the main panel
 
     // ---------- Tools checklist (shared: new-session modal + per-session popover) ----------
 
@@ -788,9 +1157,9 @@
       return availableTools;
     }
 
-    function renderToolsChecklist(container, activeTools, available) {
+    function renderToolsChecklist(container, activeTools, available, keys) {
       container.innerHTML = '';
-      for (const key of Object.keys(TOOL_LABELS)) {
+      for (const key of keys || Object.keys(TOOL_LABELS)) {
         const configured = !!available[key];
         const checked = activeTools === null ? configured : activeTools.includes(key);
         const row = document.createElement('label');
@@ -808,6 +1177,43 @@
       const inputs = container.querySelectorAll('input[data-tool]');
       if (inputs.length === 0) return undefined; // checklist hasn't rendered yet — omit so the server defaults to "all tools"
       return Array.from(inputs).filter((el) => el.checked).map((el) => el.dataset.tool);
+    }
+
+    // ---------- Features checklist (shared: new-session modal + per-session popover) ----------
+    // Unlike tools (external integrations, "configured" or not), features are
+    // always offered — a per-session toggle can only turn a globally-enabled
+    // heavy feature OFF for this session, never on if config.*Enabled is off.
+
+    async function loadAvailableFeatures() {
+      if (availableFeatures) return availableFeatures;
+      try {
+        availableFeatures = await fetch('/api/features').then((r) => r.json());
+      } catch {
+        availableFeatures = {};
+      }
+      return availableFeatures;
+    }
+
+    function renderFeaturesChecklist(container, activeFeatures, available) {
+      container.innerHTML = '';
+      for (const key of Object.keys(available)) {
+        const enabled = !!available[key].enabled;
+        const checked = activeFeatures === null ? enabled : activeFeatures.includes(key);
+        const row = document.createElement('label');
+        row.className = 'tool-toggle' + (enabled ? '' : ' unavailable');
+        row.innerHTML = `
+          <input type="checkbox" data-feature="${key}" ${checked ? 'checked' : ''} ${enabled ? '' : 'disabled'} />
+          <span>${available[key].label}</span>
+          ${enabled ? '' : '<span class="tool-unavailable-note">disabled globally</span>'}
+        `;
+        container.appendChild(row);
+      }
+    }
+
+    function checkedFeatures(container) {
+      const inputs = container.querySelectorAll('input[data-feature]');
+      if (inputs.length === 0) return undefined; // checklist hasn't rendered yet — omit so the server defaults to "all features"
+      return Array.from(inputs).filter((el) => el.checked).map((el) => el.dataset.feature);
     }
 
     // ---------- Workflow preview (what each meeting type prepares) ----------
@@ -992,6 +1398,7 @@
     }
 
     let interimEl = null;
+    let controlSocket = null; // the live WebSocket instance — voice chat/practice send over this same connection (binary audio frames + JSON control messages)
     let liveSessionId = null; // the session actually recording right now, if any
     let activeSessionId = null; // the session currently shown in the main panel
     let sessions = []; // cached list from GET /api/sessions
@@ -1003,6 +1410,19 @@
     let currentQueries = [];
     const speakerClassColors = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
     let speakerClassMap = new Map();
+    // Caps how many finalized segments stay in the DOM during a live/open
+    // session — without this a multi-hour meeting would grow the transcript
+    // node list without bound. The full transcript is always safe on the
+    // server (segmentRepository) and reloads in full via renderFullTranscript
+    // whenever a session is reopened; this only bounds the *live-view* DOM.
+    const MAX_TRANSCRIPT_DOM_SEGMENTS = 500;
+    // speaker+startMs -> that segment's DOM element, so applySentiment can look
+    // it up in O(1) instead of re-scanning the whole transcript per sentiment
+    // event. Kept in sync with the DOM by clearTranscriptDom()/pruning below.
+    let segmentElByKey = new Map();
+    function segmentKey(speaker, startMs) {
+      return speaker + '|' + startMs;
+    }
 
     function speakerClassFor(name) {
       if (name === 'You' || name === 'Others') return name;
@@ -1032,6 +1452,29 @@
 
     function toDate(sqliteUtc) {
       return sqliteUtc ? new Date(sqliteUtc.replace(' ', 'T') + 'Z') : null;
+    }
+
+    // scheduledStartAt is a real ISO datetime (from new Date().toISOString()),
+    // not sqlite's space-separated UTC format — toDate() doesn't apply here.
+    // Formats it as the local YYYY-MM-DDTHH:mm a <input type="datetime-local">
+    // expects.
+    function isoToDatetimeLocal(iso) {
+      const d = new Date(iso);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // "Today · 2:00 PM" / "Tomorrow · 10:00 AM" / "Mon, Aug 11 · 2:00 PM" — used
+    // by the calendar-shortcut cards in the new-session modal.
+    function formatEventTime(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+      const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86400000);
+      const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      if (dayDiff === 0) return `Today · ${time}`;
+      if (dayDiff === 1) return `Tomorrow · ${time}`;
+      return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${time}`;
     }
 
     function relativeTime(sqliteUtc) {
@@ -1077,6 +1520,19 @@
         });
     }
 
+    // The live 'segment' WS message fires per transcript chunk (multiple/sec
+    // in active conversation) but only needs to keep the sidebar's segment
+    // count roughly current, not instantly — trailing-debounce it instead of
+    // re-fetching + fully re-rendering the whole session list on every chunk.
+    let sessionsRefreshTimer = null;
+    function scheduleSessionsRefresh() {
+      if (sessionsRefreshTimer) return;
+      sessionsRefreshTimer = setTimeout(() => {
+        sessionsRefreshTimer = null;
+        refreshSessions();
+      }, 3000);
+    }
+
     function renderSessionList() {
       sessionList.innerHTML = '';
       if (sessions.length === 0) {
@@ -1089,20 +1545,39 @@
         const dotClass = s.id === liveSessionId ? 'recording' : s.diarizedAt ? 'diarized' : '';
         const notYetStarted = !s.endedAt && s.id !== liveSessionId && s.sessionType === 'work';
         const badge = notYetStarted ? `<span class="prep-badge ${s.prepStatus}">${s.prepStatus}</span>` : '';
+        const scheduled = notYetStarted && s.scheduledStartAt;
         card.innerHTML = `
           <div class="session-card-top">
             <span class="session-dot ${dotClass}"></span>
             <span class="session-name">${displayName(s)}${badge}</span>
-            <button class="session-delete" title="Delete session">✕</button>
+            <button class="session-delete" title="Delete session"><svg class="icon"><use href="#icon-x"></use></svg></button>
           </div>
           <div class="session-meta">${relativeTime(s.startedAt)} · ${s.segmentCount} segment${s.segmentCount === 1 ? '' : 's'} · ${sessionMetaLabel(s)}</div>
-          ${notYetStarted ? '<button class="session-start-recording">● Start recording</button>' : ''}
+          ${scheduled ? `
+            <div class="session-schedule">
+              <span>Scheduled for ${new Date(s.scheduledStartAt).toLocaleString()}</span>
+              <button class="session-schedule-cancel">Cancel</button>
+            </div>
+          ` : ''}
+          ${notYetStarted ? '<button class="session-start-recording"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording</button>' : ''}
         `;
         card.addEventListener('click', () => openSession(s.id));
         card.querySelector('.session-delete').addEventListener('click', (e) => {
           e.stopPropagation();
           deleteSessionById(s.id, displayName(s));
         });
+        const scheduleCancelBtn = card.querySelector('.session-schedule-cancel');
+        if (scheduleCancelBtn) {
+          scheduleCancelBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await fetch(`/api/sessions/${s.id}/schedule`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ scheduledStartAt: null }),
+            });
+            refreshSessions();
+          });
+        }
         const startRecordingBtn = card.querySelector('.session-start-recording');
         if (startRecordingBtn) {
           startRecordingBtn.addEventListener('click', async (e) => {
@@ -1139,6 +1614,7 @@
           identifyBtn.disabled = !session || !session.endedAt;
           summarizeBtn.disabled = !session || !session.endedAt;
           coachBtn.disabled = !session || !session.endedAt;
+          chaptersBtn.disabled = !session || !session.endedAt;
           deleteBtn.disabled = !session || !session.endedAt;
 
           fetch(`/api/sessions/${id}/sentiment`)
@@ -1168,6 +1644,10 @@
       fetch(`/api/sessions/${id}/queries`)
         .then((res) => res.json())
         .then((queries) => renderQueries(queries));
+
+      fetch(`/api/sessions/${id}/chapters`)
+        .then((res) => res.json())
+        .then(({ chapters }) => renderChapters(chapters));
     }
 
     function setMainHeader(session) {
@@ -1179,6 +1659,7 @@
         ? 'Recording…'
         : `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`;
       currentSessionActiveTools = session.activeTools ?? null;
+      currentSessionActiveFeatures = session.activeFeatures ?? null;
     }
 
     mainTitle.addEventListener('focus', () => {
@@ -1202,6 +1683,12 @@
 
     // ---------- Transcript rendering ----------
 
+    function clearTranscriptDom() {
+      transcriptEl.innerHTML = '';
+      interimEl = null;
+      segmentElByKey.clear();
+    }
+
     function renderSegment(segment) {
       emptyState.style.display = 'none';
       const alignmentClass = segment.speaker === 'You' ? 'mine' : 'theirs';
@@ -1224,7 +1711,21 @@
       el.dataset.speaker = segment.speaker;
       el.innerHTML = segmentHtml(segment);
       transcriptEl.appendChild(el);
+      const key = segmentKey(segment.speaker, segment.startMs);
+      segmentElByKey.set(key, el);
+      pruneOldTranscriptSegments();
       transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
+    }
+
+    // Keeps the live-view DOM bounded for long-running sessions — the
+    // server-side transcript is unaffected, this only trims what's rendered.
+    function pruneOldTranscriptSegments() {
+      while (segmentElByKey.size > MAX_TRANSCRIPT_DOM_SEGMENTS) {
+        const oldest = transcriptEl.querySelector('.segment:not(.interim)');
+        if (!oldest) break;
+        segmentElByKey.delete(segmentKey(oldest.dataset.speaker, oldest.dataset.startMs));
+        oldest.remove();
+      }
     }
 
     function segmentHtml(segment) {
@@ -1245,7 +1746,7 @@
     // Best-effort match: a live 'sentiment' message arrives after its segment
     // was already rendered, correlated by speaker + start time (no shared id).
     function applySentiment(speaker, startMs, score) {
-      const el = transcriptEl.querySelector(`.segment[data-speaker="${speaker}"][data-start-ms="${startMs}"]`);
+      const el = segmentElByKey.get(segmentKey(speaker, startMs));
       const dot = el && el.querySelector('.sentiment-dot');
       if (!dot) return;
       const cls = score > 0.25 ? 'pos' : score < -0.25 ? 'neg' : 'neu';
@@ -1254,8 +1755,7 @@
     }
 
     function renderFullTranscript(segments) {
-      transcriptEl.innerHTML = '';
-      interimEl = null;
+      clearTranscriptDom();
       speakerClassMap = new Map();
       emptyState.style.display = segments.length ? 'none' : 'block';
       emptyState.textContent = 'No speech captured yet.';
@@ -1274,6 +1774,8 @@
       if (tab === 'prepBrief' && activeSessionId) loadPrepBrief(activeSessionId);
       coachingWrap.style.display = tab === 'coaching' ? 'block' : 'none';
       if (tab === 'coaching' && activeSessionId) loadCoachingFeedback(activeSessionId);
+      trendWrap.style.display = tab === 'trend' ? 'block' : 'none';
+      if (tab === 'trend' && activeSessionId) loadRelationshipTrend(activeSessionId);
     }
     for (const btn of tabBtns) btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 
@@ -1296,15 +1798,28 @@
 
     async function loadCalendarShortcuts() {
       calendarShortcuts.innerHTML = '';
+      calendarShortcutsBox.hidden = true;
       try {
         const events = await fetch('/api/calendar/upcoming').then((r) => r.json());
+        calendarShortcutsBox.hidden = events.length === 0;
         for (const event of events) {
           const btn = document.createElement('button');
+          btn.type = 'button';
           btn.className = 'calendar-shortcut';
-          btn.innerHTML = `<div class="cs-type">upcoming</div>${event.title}`;
+          btn.innerHTML = `
+            <span class="cs-icon"><svg class="icon"><use href="#icon-calendar"></use></svg></span>
+            <span class="cs-body">
+              <div class="cs-title">${event.title}</div>
+              ${event.startTime ? `<div class="cs-time">${formatEventTime(event.startTime)}</div>` : ''}
+            </span>
+          `;
           btn.addEventListener('click', () => {
             nameInput.value = event.title;
             selectedCalendarEventId = event.id;
+            if (event.startTime) scheduledStartInput.value = isoToDatetimeLocal(event.startTime);
+            updateScheduledStartClearVisibility();
+            for (const card of calendarShortcuts.querySelectorAll('.calendar-shortcut')) card.classList.remove('selected');
+            btn.classList.add('selected');
           });
           calendarShortcuts.appendChild(btn);
         }
@@ -1312,6 +1827,119 @@
         // Calendar not configured or unreachable — silently show no shortcuts, same "skip, don't error" pattern as every other optional integration.
       }
     }
+
+    function formatPickerLabel(date) {
+      const now = new Date();
+      const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+      const dayDiff = Math.round((startOfDay(date) - startOfDay(now)) / 86400000);
+      const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      if (dayDiff === 0) return `Today, ${time}`;
+      if (dayDiff === 1) return `Tomorrow, ${time}`;
+      return `${date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`;
+    }
+
+    function updateScheduledStartClearVisibility() {
+      const hasValue = !!scheduledStartInput.value;
+      scheduledStartClear.hidden = !hasValue;
+      scheduledStartTrigger.classList.toggle('has-value', hasValue);
+      scheduledStartLabel.textContent = hasValue ? formatPickerLabel(new Date(scheduledStartInput.value)) : 'Pick a date & time';
+    }
+    scheduledStartClear.addEventListener('click', () => {
+      scheduledStartInput.value = '';
+      updateScheduledStartClearVisibility();
+    });
+
+    // ---------- Custom date/time picker ----------
+
+    let dtpViewDate = new Date();
+    let dtpSelectedDate = null; // Date (day precision) or null
+
+    function isSameDay(a, b) {
+      return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    }
+
+    function renderDtpCalendar() {
+      const year = dtpViewDate.getFullYear();
+      const month = dtpViewDate.getMonth();
+      dtpMonthLabel.textContent = dtpViewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+      const firstWeekday = new Date(year, month, 1).getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+      dtpCalGrid.innerHTML = '';
+      for (let i = 0; i < firstWeekday; i++) dtpCalGrid.appendChild(document.createElement('span'));
+      for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, month, day);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dtp-day';
+        btn.textContent = String(day);
+        if (isSameDay(cellDate, today)) btn.classList.add('today');
+        if (dtpSelectedDate && isSameDay(cellDate, dtpSelectedDate)) btn.classList.add('selected');
+        if (cellDate < todayStart) btn.disabled = true;
+        btn.addEventListener('click', () => {
+          dtpSelectedDate = cellDate;
+          renderDtpCalendar();
+        });
+        dtpCalGrid.appendChild(btn);
+      }
+    }
+
+    function openDatetimePicker() {
+      const seed = scheduledStartInput.value ? new Date(scheduledStartInput.value) : new Date(Date.now() + 15 * 60_000);
+      dtpViewDate = new Date(seed.getFullYear(), seed.getMonth(), 1);
+      dtpSelectedDate = new Date(seed.getFullYear(), seed.getMonth(), seed.getDate());
+      const pad = (n) => String(n).padStart(2, '0');
+      dtpTimeInput.value = `${pad(seed.getHours())}:${pad(seed.getMinutes())}`;
+      renderDtpCalendar();
+      datetimePicker.hidden = false;
+    }
+    function closeDatetimePicker() {
+      datetimePicker.hidden = true;
+    }
+    function applyDatetimePicker(date) {
+      const pad = (n) => String(n).padStart(2, '0');
+      scheduledStartInput.value = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      updateScheduledStartClearVisibility();
+      closeDatetimePicker();
+    }
+
+    scheduledStartTrigger.addEventListener('click', () => {
+      if (datetimePicker.hidden) openDatetimePicker();
+      else closeDatetimePicker();
+    });
+    dtpPrevMonth.addEventListener('click', () => {
+      dtpViewDate = new Date(dtpViewDate.getFullYear(), dtpViewDate.getMonth() - 1, 1);
+      renderDtpCalendar();
+    });
+    dtpNextMonth.addEventListener('click', () => {
+      dtpViewDate = new Date(dtpViewDate.getFullYear(), dtpViewDate.getMonth() + 1, 1);
+      renderDtpCalendar();
+    });
+    dtpCancelBtn.addEventListener('click', closeDatetimePicker);
+    dtpApplyBtn.addEventListener('click', () => {
+      const [h, m] = dtpTimeInput.value ? dtpTimeInput.value.split(':').map(Number) : [9, 0];
+      const base = dtpSelectedDate || new Date();
+      applyDatetimePicker(new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m));
+    });
+    for (const btn of document.querySelectorAll('.dtp-quick')) {
+      btn.addEventListener('click', () => {
+        const now = new Date();
+        if (btn.dataset.quick === '30m') applyDatetimePicker(new Date(now.getTime() + 30 * 60_000));
+        else if (btn.dataset.quick === '1h') applyDatetimePicker(new Date(now.getTime() + 60 * 60_000));
+        else if (btn.dataset.quick === 'tomorrow9') {
+          const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0);
+          applyDatetimePicker(tomorrow);
+        }
+      });
+    }
+    document.addEventListener('click', (e) => {
+      if (!datetimePicker.hidden && !datetimePicker.contains(e.target) && e.target !== scheduledStartTrigger && !scheduledStartTrigger.contains(e.target)) {
+        closeDatetimePicker();
+      }
+    });
 
     prepareBtn.addEventListener('click', async () => {
       prepareBtn.disabled = true;
@@ -1326,11 +1954,15 @@
             calendarEventId: selectedCalendarEventId || undefined,
             userNotes: userNotesInput.value.trim() || undefined,
             activeTools: checkedTools(newSessionToolsChecklist),
+            activeFeatures: checkedFeatures(newSessionFeaturesChecklist),
+            scheduledStartAt: scheduledStartInput.value ? new Date(scheduledStartInput.value).toISOString() : undefined,
           }),
         });
         const { sessionId } = await res.json();
         nameInput.value = '';
         userNotesInput.value = '';
+        scheduledStartInput.value = '';
+        updateScheduledStartClearVisibility();
         selectedCalendarEventId = null;
         closeNewSessionModal();
         await refreshSessions();
@@ -1412,6 +2044,8 @@
             if (input.type === 'checkbox') input.checked = raw !== 'false';
             else input.value = raw;
           }
+          const activeVoiceTools = (settings.voiceToolKeys ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+          loadAvailableTools().then((available) => renderToolsChecklist(voiceToolsChecklist, activeVoiceTools, available, VOICE_TOOL_KEY_LIST));
           settingsStatus.textContent = '';
         })
         .catch(() => {
@@ -1435,6 +2069,7 @@
       for (const input of settingsInputs) {
         patch[input.dataset.key] = input.type === 'checkbox' ? String(input.checked) : input.value.trim();
       }
+      patch.voiceToolKeys = (checkedTools(voiceToolsChecklist) ?? []).join(',');
       settingsSaveBtn.disabled = true;
       settingsStatus.textContent = 'Saving…';
       try {
@@ -1453,10 +2088,166 @@
       }
     });
 
+    // ---------- Insights modal (cross-session Ask + Topics) ----------
+
+    function openInsightsModal() {
+      insightsOverlay.hidden = false;
+      switchInsightsTab('ask');
+    }
+
+    function closeInsightsModal() {
+      insightsOverlay.hidden = true;
+    }
+
+    function switchInsightsTab(tab) {
+      for (const btn of insightsTabBtns) btn.classList.toggle('active', btn.dataset.insightsTab === tab);
+      insightsAskWrap.hidden = tab !== 'ask';
+      insightsTopicsWrap.hidden = tab !== 'topics';
+      if (tab === 'ask') loadInsightsAskHistory();
+      if (tab === 'topics') loadInsightsTopics();
+    }
+
+    insightsBtn.addEventListener('click', openInsightsModal);
+    insightsModalClose.addEventListener('click', closeInsightsModal);
+    insightsOverlay.addEventListener('click', (e) => {
+      if (e.target === insightsOverlay) closeInsightsModal();
+    });
+    for (const btn of insightsTabBtns) btn.addEventListener('click', () => switchInsightsTab(btn.dataset.insightsTab));
+
+    const INSIGHTS_ASK_EXAMPLES = [
+      'What have I committed to across recent meetings?',
+      'Have we discussed this topic before?',
+      'What decisions did we make last week?',
+    ];
+
+    function renderInsightsAskHistory(queries) {
+      if (!queries.length) {
+        insightsAskHistory.innerHTML = `
+          <div id="insightsAskEmptyState">
+            <svg class="icon"><use href="#icon-lightbulb"></use></svg>
+            <p>Ask anything grounded in your past meetings — Speako searches across every session.</p>
+            <div id="insightsAskExamples">
+              ${INSIGHTS_ASK_EXAMPLES.map((ex) => `<button type="button" class="insights-example-chip">${ex}</button>`).join('')}
+            </div>
+          </div>
+        `;
+        insightsAskHistory.querySelectorAll('.insights-example-chip').forEach((chip) => {
+          chip.addEventListener('click', () => {
+            insightsAskInput.value = chip.textContent;
+            askAcrossAllMeetings();
+          });
+        });
+        return;
+      }
+      insightsAskHistory.innerHTML = queries
+        .slice()
+        .reverse()
+        .map((q) => qaPairHtml({ questionText: q.questionText, answerText: q.answerText, sourcesUsed: q.sourcesUsed }))
+        .join('');
+    }
+
+    async function loadInsightsAskHistory() {
+      try {
+        const res = await fetch('/api/insights/ask/history');
+        renderInsightsAskHistory(await res.json());
+      } catch {
+        renderInsightsAskHistory([]);
+      }
+    }
+
+    async function askAcrossAllMeetings() {
+      const question = insightsAskInput.value.trim();
+      if (!question) return;
+      insightsAskBtn.disabled = true;
+      insightsAskInput.disabled = true;
+      insightsAskStatus.hidden = false;
+      insightsAskStatus.textContent = 'Searching past meetings…';
+      try {
+        const res = await fetch('/api/insights/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`Could not get an answer: ${data.error || res.statusText}`);
+          return;
+        }
+        insightsAskInput.value = '';
+        await loadInsightsAskHistory();
+      } catch (err) {
+        alert(`Could not get an answer: ${err.message}`);
+      } finally {
+        insightsAskStatus.hidden = true;
+        insightsAskBtn.disabled = false;
+        insightsAskInput.disabled = false;
+        insightsAskInput.focus();
+      }
+    }
+
+    insightsAskBtn.addEventListener('click', askAcrossAllMeetings);
+    insightsAskInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') askAcrossAllMeetings();
+    });
+
+    const MAX_TOPICS_SHOWN = 12;
+
+    function renderInsightsTopics(frequencies) {
+      if (!frequencies.length) {
+        insightsTopicsChart.innerHTML = '<div class="suggestions-empty">No topics yet — topics are tagged automatically when you generate a summary.</div>';
+        insightsTopicsDrilldown.innerHTML = '';
+        return;
+      }
+      const top = frequencies.slice(0, MAX_TOPICS_SHOWN);
+      const maxCount = Math.max(...top.map((t) => t.count));
+      insightsTopicsChart.innerHTML = top
+        .map((t, i) => {
+          const barHeight = Math.round((t.count / maxCount) * 100) + 20;
+          return `
+            <div class="topic-bar-col" data-index="${i}">
+              <span class="topic-bar-count">${t.count}</span>
+              <div class="topic-bar" style="height:${barHeight}px"></div>
+              <span class="topic-bar-label" title="${t.topic}">${t.topic}</span>
+            </div>
+          `;
+        })
+        .join('');
+      insightsTopicsChart.querySelectorAll('.topic-bar-col').forEach((col) => {
+        col.addEventListener('click', () => renderTopicDrilldown(top[Number(col.dataset.index)]));
+      });
+      renderTopicDrilldown(top[0]);
+    }
+
+    function renderTopicDrilldown(topic) {
+      if (!topic) {
+        insightsTopicsDrilldown.innerHTML = '';
+        return;
+      }
+      insightsTopicsDrilldown.innerHTML = `
+        <div class="tools-checklist-label">"${topic.topic}" mentioned in ${topic.sessions.length} session${topic.sessions.length === 1 ? '' : 's'}</div>
+        ${topic.sessions
+          .map((s) => {
+            const date = toDate(s.startedAt);
+            return `<div class="filler-example">${date ? date.toLocaleDateString() : ''} — ${s.name || '(unnamed session)'}</div>`;
+          })
+          .join('')}
+      `;
+    }
+
+    async function loadInsightsTopics() {
+      try {
+        const res = await fetch('/api/insights/topics');
+        renderInsightsTopics(await res.json());
+      } catch {
+        renderInsightsTopics([]);
+      }
+    }
+
     // ---------- New-session modal ----------
 
     function openNewSessionModal() {
       newSessionOverlay.hidden = false;
+      loadAvailableFeatures().then((available) => renderFeaturesChecklist(newSessionFeaturesChecklist, null, available));
       if (sessionType === 'work') {
         loadAvailableTools().then((available) => renderToolsChecklist(newSessionToolsChecklist, null, available));
         updateWorkflowPreview();
@@ -1479,6 +2270,7 @@
       if (!activeSessionId) return;
       sessionToolsOverlay.hidden = false;
       loadAvailableTools().then((available) => renderToolsChecklist(sessionToolsChecklist, currentSessionActiveTools, available));
+      loadAvailableFeatures().then((available) => renderFeaturesChecklist(sessionFeaturesChecklist, currentSessionActiveFeatures, available));
     }
 
     function closeSessionToolsPopover() {
@@ -1511,12 +2303,21 @@
       sessionToolsSaveBtn.disabled = true;
       try {
         const activeTools = checkedTools(sessionToolsChecklist) ?? [];
-        await fetch(`/api/sessions/${activeSessionId}/tools`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ activeTools }),
-        });
+        const activeFeatures = checkedFeatures(sessionFeaturesChecklist) ?? [];
+        await Promise.all([
+          fetch(`/api/sessions/${activeSessionId}/tools`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activeTools }),
+          }),
+          fetch(`/api/sessions/${activeSessionId}/features`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activeFeatures }),
+          }),
+        ]);
         currentSessionActiveTools = activeTools;
+        currentSessionActiveFeatures = activeFeatures;
         closeSessionToolsPopover();
       } finally {
         sessionToolsSaveBtn.disabled = false;
@@ -1566,6 +2367,7 @@
           prepBriefText.placeholder = 'No prep brief for this session.';
           prepUserNotesBox.hidden = true;
           renderAnticipatedQA(null);
+          practiceBtn.hidden = true;
           return;
         }
         const brief = await res.json();
@@ -1574,10 +2376,13 @@
         prepUserNotesBox.hidden = !userNotes;
         if (userNotes) prepUserNotesText.textContent = userNotes.content;
         renderAnticipatedQA(brief.anticipatedQa);
+        const session = sessions.find((s) => s.id === sessionId);
+        practiceBtn.hidden = !(session && !session.endedAt && session.sessionType === 'work');
       } catch {
         prepBriefText.value = '';
         prepUserNotesBox.hidden = true;
         renderAnticipatedQA(null);
+        practiceBtn.hidden = true;
       }
     }
 
@@ -1599,6 +2404,8 @@
         .map((ex) => `<div class="filler-example">"${ex}"</div>`)
         .join('');
 
+      interruptionCounts.textContent = `You interrupted others ${feedback.youInterruptedOthersCount} time${feedback.youInterruptedOthersCount === 1 ? '' : 's'} · Others interrupted you ${feedback.othersInterruptedYouCount} time${feedback.othersInterruptedYouCount === 1 ? '' : 's'}`;
+
       feedbackPointsList.innerHTML = feedback.feedbackPoints.length
         ? feedback.feedbackPoints
             .map(
@@ -1613,6 +2420,70 @@
             )
             .join('')
         : '<div class="suggestions-empty">No specific feedback points — nothing stood out to flag.</div>';
+    }
+
+    // ---------- Relationship sentiment trend (one-on-one series) ----------
+    // No charting library in this app (confirmed) — hand-rolled inline SVG,
+    // same "build it from scratch" approach as the waveform canvas elsewhere.
+
+    function sentimentBarClass(score) {
+      return score > 0.25 ? 'pos' : score < -0.25 ? 'neg' : 'neu';
+    }
+
+    function renderRelationshipTrend(points) {
+      if (!points.length) {
+        trendEmptyState.hidden = false;
+        trendContent.hidden = true;
+        return;
+      }
+      trendEmptyState.hidden = true;
+      trendContent.hidden = false;
+
+      const barWidth = 36;
+      const gap = 16;
+      const chartHeight = 140;
+      const midY = chartHeight / 2;
+      const width = points.length * (barWidth + gap) + gap;
+
+      const bars = points
+        .map((p, i) => {
+          const x = gap + i * (barWidth + gap);
+          if (p.avgScore === null) {
+            return `<text x="${x + barWidth / 2}" y="${midY}" text-anchor="middle" class="trend-nodata">—</text>`;
+          }
+          const barHeight = Math.abs(p.avgScore) * midY;
+          const y = p.avgScore >= 0 ? midY - barHeight : midY;
+          return `<rect x="${x}" y="${y}" width="${barWidth}" height="${Math.max(barHeight, 1)}" class="trend-bar ${sentimentBarClass(p.avgScore)}" />`;
+        })
+        .join('');
+
+      const labels = points
+        .map((p, i) => {
+          const x = gap + i * (barWidth + gap) + barWidth / 2;
+          const date = toDate(p.startedAt);
+          const label = date ? `${date.getMonth() + 1}/${date.getDate()}` : '';
+          return `<text x="${x}" y="${chartHeight + 14}" text-anchor="middle" class="trend-date-label">${label}</text>`;
+        })
+        .join('');
+
+      trendContent.innerHTML = `
+        <div class="trend-chart-label">Sentiment per session (${points.length} in this series)</div>
+        <svg width="${width}" height="${chartHeight + 24}" class="trend-chart">
+          <line x1="0" y1="${midY}" x2="${width}" y2="${midY}" class="trend-zero-line" />
+          ${bars}
+          ${labels}
+        </svg>
+      `;
+    }
+
+    async function loadRelationshipTrend(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/relationship-trend`);
+        const points = await res.json();
+        renderRelationshipTrend(points);
+      } catch {
+        renderRelationshipTrend([]);
+      }
     }
 
     // Bumped on every load and on every WS 'coaching' push — guards against a
@@ -1789,31 +2660,29 @@
       `
         )
         .join('');
-      triggersContent.querySelectorAll('.trigger-row').forEach((row) => {
-        const t = currentTriggers.find((x) => x.id === Number(row.dataset.id));
-        if (t) wireTriggerRow(row, t);
-      });
+      // Listeners are delegated once on triggersContent (see setupTriggersDelegation
+      // below) rather than re-queried and re-attached to every row on every
+      // render — renderTriggers can otherwise fire many times per minute.
     }
 
-    function wireTriggerRow(row, t) {
-      const editBtn = row.querySelector('.claim-edit');
-      if (editBtn) {
-        editBtn.addEventListener('click', () => {
+    // Attached once at startup: handles clicks for every trigger row's
+    // edit/cancel/save controls regardless of how many times renderTriggers
+    // has rebuilt the list's innerHTML since.
+    function setupTriggersDelegation() {
+      triggersContent.addEventListener('click', (e) => {
+        const row = e.target.closest('.trigger-row');
+        if (!row) return;
+        const t = currentTriggers.find((x) => x.id === Number(row.dataset.id));
+        if (!t) return;
+
+        if (e.target.closest('.claim-edit')) {
           t._editing = true;
           t._originalSegmentText = t.segmentText;
           renderTriggers(currentTriggers);
-        });
-      }
-      const cancelBtn = row.querySelector('.claim-cancel');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => {
+        } else if (e.target.closest('.claim-cancel')) {
           t._editing = false;
           renderTriggers(currentTriggers);
-        });
-      }
-      const saveBtn = row.querySelector('.claim-save');
-      if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
+        } else if (e.target.closest('.claim-save')) {
           const newText = row.querySelector('.claim-input').value.trim();
           if (!newText) return;
           t._editing = false;
@@ -1829,8 +2698,8 @@
             t.factCheckStatus = 'error';
             renderTriggers(currentTriggers);
           });
-        });
-      }
+        }
+      });
     }
 
     function appendTrigger(event) {
@@ -1872,10 +2741,6 @@
       `;
     }
 
-    function wireSuggestionCard(card, s) {
-      card.querySelector('.accept').addEventListener('click', () => resolveSuggestion(s.id, 'accepted'));
-      card.querySelector('.dismiss').addEventListener('click', () => resolveSuggestion(s.id, 'dismissed'));
-    }
 
     function factCheckCardHtml(fc) {
       const resolved = fc.userAction === 'accepted' || fc.userAction === 'dismissed';
@@ -1893,11 +2758,6 @@
       `;
     }
 
-    function wireFactCheckCard(card, fc) {
-      card.querySelector('.accept').addEventListener('click', () => resolveFactCheck(fc.id, 'accepted'));
-      card.querySelector('.dismiss').addEventListener('click', () => resolveFactCheck(fc.id, 'dismissed'));
-    }
-
     function renderSuggestionsPanel() {
       const html = currentFactChecks.map(factCheckCardHtml).join('') + currentSuggestions.map(suggestionCardHtml).join('');
       if (!html) {
@@ -1905,13 +2765,26 @@
         return;
       }
       suggestionsList.innerHTML = html;
-      suggestionsList.querySelectorAll('.fact-check-card').forEach((card) => {
-        const fc = currentFactChecks.find((x) => x.id === Number(card.dataset.id));
-        if (fc) wireFactCheckCard(card, fc);
-      });
-      suggestionsList.querySelectorAll('.suggestion-card').forEach((card) => {
-        const s = currentSuggestions.find((x) => x.id === Number(card.dataset.id));
-        if (s) wireSuggestionCard(card, s);
+      // Accept/dismiss clicks are handled by one delegated listener on
+      // suggestionsList (see setupSuggestionsDelegation) instead of being
+      // re-queried and re-bound to every card each time this rebuilds —
+      // this fires on every new suggestion/fact-check during a live session.
+    }
+
+    // Attached once at startup: handles accept/dismiss clicks for every
+    // suggestion and fact-check card, however many times the panel's
+    // innerHTML has been rebuilt by renderSuggestionsPanel since.
+    function setupSuggestionsDelegation() {
+      suggestionsList.addEventListener('click', (e) => {
+        const suggestionCard = e.target.closest('.suggestion-card');
+        const factCheckCard = e.target.closest('.fact-check-card');
+        if (suggestionCard) {
+          const action = e.target.closest('.accept') ? 'accepted' : e.target.closest('.dismiss') ? 'dismissed' : null;
+          if (action) resolveSuggestion(Number(suggestionCard.dataset.id), action);
+        } else if (factCheckCard) {
+          const action = e.target.closest('.accept') ? 'accepted' : e.target.closest('.dismiss') ? 'dismissed' : null;
+          if (action) resolveFactCheck(Number(factCheckCard.dataset.id), action);
+        }
       });
     }
 
@@ -2058,6 +2931,64 @@
       }
     }
 
+    async function triggerDetectChapters(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/chapters`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (sessionId === activeSessionId) {
+            mainMeta.textContent = `Chapter detection failed: ${data.error || res.statusText}`;
+            chaptersBtn.disabled = false;
+          }
+        }
+      } catch (err) {
+        if (sessionId === activeSessionId) {
+          mainMeta.textContent = `Chapter detection failed: ${err.message}`;
+          chaptersBtn.disabled = false;
+        }
+      }
+    }
+
+    // Clicking a chapter scrolls to its nearest rendered transcript segment —
+    // reuses the segmentElByKey map built for the sentiment-dot lookup, since
+    // both need "find the segment closest to this timestamp."
+    function renderChapters(meetingChapters) {
+      const chapters = meetingChapters ? meetingChapters.chapters : [];
+      if (!chapters.length) {
+        chaptersList.hidden = true;
+        chaptersList.innerHTML = '';
+        return;
+      }
+      chaptersList.hidden = false;
+      chaptersList.innerHTML = chapters
+        .map(
+          (c, i) => `
+        <button type="button" class="chapter-chip" data-index="${i}">
+          <span class="chapter-chip-time">${fmt(c.startMs)}</span>
+          <span class="chapter-chip-title">${c.title}</span>
+        </button>
+      `
+        )
+        .join('');
+      chaptersList.querySelectorAll('.chapter-chip').forEach((chip) => {
+        const chapter = chapters[Number(chip.dataset.index)];
+        chip.addEventListener('click', () => scrollToNearestSegment(chapter.startMs));
+      });
+    }
+
+    function scrollToNearestSegment(targetMs) {
+      let closest = null;
+      let closestDelta = Infinity;
+      for (const el of segmentElByKey.values()) {
+        const delta = Math.abs(Number(el.dataset.startMs) - targetMs);
+        if (delta < closestDelta) {
+          closestDelta = delta;
+          closest = el;
+        }
+      }
+      if (closest) closest.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
     // ---------- Recording controls ----------
 
     function setRecordingUiState(recording) {
@@ -2087,8 +3018,7 @@
 
     function resetMainPanel() {
       activeSessionId = null;
-      transcriptEl.innerHTML = '';
-      interimEl = null;
+      clearTranscriptDom();
       mainTitle.textContent = 'No session selected';
       mainMeta.classList.remove('recording');
       mainMeta.textContent = 'Start a new session or pick one from the list';
@@ -2096,6 +3026,7 @@
       identifyBtn.disabled = true;
       summarizeBtn.disabled = true;
       coachBtn.disabled = true;
+      chaptersBtn.disabled = true;
       deleteBtn.disabled = true;
       emptyState.style.display = 'block';
       emptyState.textContent = 'Nothing here yet.';
@@ -2106,6 +3037,8 @@
       renderFactChecks([]);
       renderQueries([]);
       renderCoachingFeedback(null);
+      renderChapters(null);
+      renderRelationshipTrend([]);
       clearWaveform();
       updateWaveformVisibility();
       switchTab('transcript');
@@ -2133,7 +3066,11 @@
         const res = await fetch('/api/session/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ languageCode: languageSelect.value, name: nameInput.value.trim() }),
+          body: JSON.stringify({
+            languageCode: languageSelect.value,
+            name: nameInput.value.trim(),
+            activeFeatures: checkedFeatures(newSessionFeaturesChecklist),
+          }),
         });
         const data = await res.json();
         liveSessionId = data.sessionId;
@@ -2141,8 +3078,7 @@
         nameInput.value = '';
         closeNewSessionModal();
         setRecordingUiState(true);
-        transcriptEl.innerHTML = '';
-        interimEl = null;
+        clearTranscriptDom();
         emptyState.style.display = 'block';
         emptyState.textContent = 'Listening…';
         await refreshSessions();
@@ -2152,6 +3088,7 @@
         identifyBtn.disabled = true;
         summarizeBtn.disabled = true;
         coachBtn.disabled = true;
+        chaptersBtn.disabled = true;
         deleteBtn.disabled = true;
         renderSummary(null);
         renderActionItems([]);
@@ -2160,6 +3097,8 @@
         renderFactChecks([]);
         renderQueries([]);
         renderCoachingFeedback(null);
+        renderChapters(null);
+        renderRelationshipTrend([]);
       } catch (err) {
         mainMeta.textContent = `Error starting: ${err.message}`;
       } finally {
@@ -2201,6 +3140,12 @@
       triggerCoach(activeSessionId);
     });
 
+    chaptersBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      chaptersBtn.disabled = true;
+      triggerDetectChapters(activeSessionId);
+    });
+
     deleteBtn.addEventListener('click', () => {
       if (!activeSessionId) return;
       const session = sessions.find((s) => s.id === activeSessionId);
@@ -2208,8 +3153,7 @@
     });
 
     clearBtn.addEventListener('click', () => {
-      transcriptEl.innerHTML = '';
-      interimEl = null;
+      clearTranscriptDom();
       emptyState.style.display = 'block';
       emptyState.textContent = 'Cleared — the saved transcript is untouched.';
     });
@@ -2223,8 +3167,14 @@
 
     function connect() {
       const ws = new WebSocket(`ws://${location.host}`);
+      ws.binaryType = 'arraybuffer';
+      controlSocket = ws;
       ws.onclose = () => setTimeout(connect, 1500);
       ws.onmessage = (event) => {
+        if (typeof event.data !== 'string') {
+          handleVoiceAudioFrame(event.data);
+          return;
+        }
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'status') {
@@ -2238,6 +3188,13 @@
           setRecordingUiState(true);
           clearWaveform();
           updateWaveformVisibility();
+          // Every other start path (new-session modal, sidebar's manual
+          // "Start recording" button) already calls openSession() itself,
+          // which re-renders the sidebar — but the schedule poller starts a
+          // session with no client-side driver at all, so without this the
+          // sidebar would never show it's now recording or that its
+          // schedule badge cleared.
+          refreshSessions();
         } else if (msg.type === 'session-stop') {
           liveSessionId = null;
           setRecordingUiState(false);
@@ -2257,7 +3214,7 @@
           if (msg.segment.sessionId === activeSessionId && msg.segment.sessionId === liveSessionId) {
             renderSegment(msg.segment);
           }
-          refreshSessions();
+          scheduleSessionsRefresh();
         } else if (msg.type === 'sentiment') {
           if (msg.sessionId === activeSessionId) applySentiment(msg.speaker, msg.startMs, msg.score);
         } else if (msg.type === 'trigger') {
@@ -2321,6 +3278,22 @@
             coachBtn.disabled = false;
             mainMeta.textContent = `Coaching feedback failed: ${msg.error}`;
           }
+        } else if (msg.type === 'chapters-detecting') {
+          if (msg.sessionId === activeSessionId) {
+            chaptersBtn.disabled = true;
+            mainMeta.textContent = 'Detecting chapters…';
+          }
+        } else if (msg.type === 'chapters-detected') {
+          if (msg.sessionId === activeSessionId) {
+            renderChapters(msg.chapters);
+            chaptersBtn.disabled = false;
+            mainMeta.textContent = 'Chapters ready';
+          }
+        } else if (msg.type === 'chapters-detection-failed') {
+          if (msg.sessionId === activeSessionId) {
+            chaptersBtn.disabled = false;
+            mainMeta.textContent = `Chapter detection failed: ${msg.error}`;
+          }
         } else if (msg.type === 'action-item-updated') {
           if (msg.sessionId === activeSessionId) {
             const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
@@ -2331,6 +3304,8 @@
           refreshSessions();
         } else if (msg.type === 'session-deleted') {
           if (msg.sessionId === activeSessionId) resetMainPanel();
+          refreshSessions();
+        } else if (msg.type === 'session-schedule-updated') {
           refreshSessions();
         } else if (msg.type === 'prep-ready') {
           if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
@@ -2357,9 +3332,235 @@
         } else if (msg.type === 'communications-index-complete') {
           indexCommunicationsBtn.disabled = false;
           communicationsIndexStatus.textContent = formatCommunicationsSummary(msg.sources);
+        } else if (msg.type === 'voice-ready') {
+          clearTimeout(voiceConnectTimer);
+          voicePanelStatus.textContent = 'Listening…';
+          setVoiceTextInputEnabled(true);
+        } else if (msg.type === 'voice-practice-ready') {
+          clearTimeout(voiceConnectTimer);
+          voicePracticeSessionId = msg.sessionId;
+          voicePanelStatus.textContent = 'Listening…';
+          setVoiceTextInputEnabled(true);
+          refreshSessions();
+        } else if (msg.type === 'voice-function-call') {
+          voicePanelStatus.textContent = `Checking ${msg.tool}…`;
+        } else if (msg.type === 'voice-transcript') {
+          appendVoiceLogEntry(msg.role, msg.text);
+        } else if (msg.type === 'voice-turn-complete') {
+          finalizeVoiceBubble();
+        } else if (msg.type === 'voice-error') {
+          clearTimeout(voiceConnectTimer);
+          voicePanelStatus.textContent = `Error: ${msg.error}`;
+          setVoiceTextInputEnabled(false);
+        } else if (msg.type === 'voice-idle-timeout') {
+          voicePanelStatus.textContent = 'Session ended after a period of inactivity.';
+          stopVoice();
         }
       };
     }
+
+    // ---------- Voice chat / practice (Gemini Live) ----------
+
+    let voiceMode = null; // 'chat' | 'practice' | null
+    let voicePracticeSessionId = null;
+    let voiceCaptureContext = null;
+    let voiceWorkletNode = null;
+    let voiceMediaStream = null;
+    let voicePlaybackContext = null;
+    let voicePlaybackNextTime = 0;
+    let voiceConnectTimer = null;
+    let voiceCurrentBubbleEl = null;
+    let voiceCurrentBubbleRole = null;
+
+    function appendVoiceLogEntry(role, text) {
+      if (voiceCurrentBubbleEl && voiceCurrentBubbleRole === role) {
+        voiceCurrentBubbleEl.textContent += text;
+      } else {
+        voiceCurrentBubbleEl = document.createElement('div');
+        voiceCurrentBubbleEl.className = `voice-log-entry ${role}`;
+        voiceCurrentBubbleEl.textContent = text;
+        voiceCurrentBubbleRole = role;
+        voicePanelLog.appendChild(voiceCurrentBubbleEl);
+      }
+      voicePanelLog.scrollTop = voicePanelLog.scrollHeight;
+    }
+
+    // Called when a turn genuinely finishes (generationComplete) or when the
+    // user sends a fresh typed message — either way, the next transcript
+    // delta for that role should start its own bubble, not append to a
+    // stale one from a previous turn.
+    function finalizeVoiceBubble() {
+      voiceCurrentBubbleEl = null;
+      voiceCurrentBubbleRole = null;
+    }
+
+    function clearVoicePanelLog() {
+      voicePanelLog.innerHTML = '';
+      finalizeVoiceBubble();
+    }
+
+    function setVoiceTextInputEnabled(enabled) {
+      voicePanelTextInput.disabled = !enabled;
+      voicePanelSendBtn.disabled = !enabled;
+    }
+
+    function sendVoiceText() {
+      const text = voicePanelTextInput.value.trim();
+      if (!text || !voiceMode || !controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
+      controlSocket.send(JSON.stringify({ type: 'voice-text', text }));
+      finalizeVoiceBubble(); // the typed message is its own complete bubble, not a delta to accumulate
+      appendVoiceLogEntry('you', text);
+      finalizeVoiceBubble(); // ...and the *next* thing (spoken or typed) shouldn't append into it either
+      voicePanelTextInput.value = '';
+      voicePanelTextInput.focus();
+    }
+
+    voicePanelSendBtn.addEventListener('click', sendVoiceText);
+    voicePanelTextInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendVoiceText();
+    });
+
+    async function startVoice(mode, sourceSessionId) {
+      if (voiceMode) return;
+      if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) {
+        voicePanelTitleText.textContent = mode === 'practice' ? 'Practicing meeting' : 'Voice chat';
+        voicePanelStatus.textContent = 'Not connected to the server — try again in a moment.';
+        voicePanel.hidden = false;
+        return;
+      }
+      voiceMode = mode;
+      voicePracticeSessionId = null;
+      voicePanelTitleText.textContent = mode === 'practice' ? 'Practicing meeting' : 'Voice chat';
+      voicePanelStatus.textContent = 'Connecting…';
+      voicePanel.hidden = false;
+      voiceChatBtn.classList.toggle('active', mode === 'chat');
+      clearVoicePanelLog();
+      setVoiceTextInputEnabled(false);
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        // getUserMedia/AudioWorklet are both gated behind a secure context
+        // (HTTPS, or the literal hostname "localhost") — undefined here
+        // means the page was loaded over plain HTTP via a LAN IP/hostname,
+        // not that permission was denied.
+        voicePanelStatus.textContent = 'Voice chat needs a secure context — open this page via http://localhost, not a LAN IP/hostname.';
+        voiceMode = null;
+        return;
+      }
+
+      try {
+        voiceMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        voicePanelStatus.textContent = `Microphone access denied: ${err.message}`;
+        voiceMode = null;
+        return;
+      }
+
+      // Everything from here on can fail in ways getUserMedia's catch above
+      // doesn't cover (worklet module 404/parse error, unsupported browser,
+      // etc.) — without this try/catch, a rejection here left the panel
+      // stuck on "Connecting…" forever with no feedback and no way to retry.
+      try {
+        // 16kHz to match config.sampleRate exactly — no resampling anywhere in this pipeline.
+        voiceCaptureContext = new AudioContext({ sampleRate: 16000 });
+        await voiceCaptureContext.audioWorklet.addModule('/pcm-worklet.js');
+        const source = voiceCaptureContext.createMediaStreamSource(voiceMediaStream);
+        voiceWorkletNode = new AudioWorkletNode(voiceCaptureContext, 'pcm-recorder');
+        voiceWorkletNode.port.onmessage = (e) => {
+          if (controlSocket && controlSocket.readyState === WebSocket.OPEN) controlSocket.send(e.data);
+        };
+        source.connect(voiceWorkletNode);
+      } catch (err) {
+        voicePanelStatus.textContent = `Could not set up audio capture: ${err.message}`;
+        voiceMediaStream?.getTracks().forEach((t) => t.stop());
+        voiceCaptureContext?.close();
+        voiceMediaStream = null;
+        voiceCaptureContext = null;
+        voiceWorkletNode = null;
+        voiceMode = null;
+        return;
+      }
+
+      // The server can also take a while (or fail) to establish the Gemini
+      // Live connection — without a timeout, a slow/hung server-side connect
+      // left this stuck on "Connecting…" with no feedback either, same
+      // failure mode as the client-side gaps above.
+      clearTimeout(voiceConnectTimer);
+      voiceConnectTimer = setTimeout(() => {
+        if (voiceMode) {
+          voicePanelStatus.textContent = 'Still trying to connect — the voice service may be unavailable right now.';
+        }
+      }, 15_000);
+
+      controlSocket.send(JSON.stringify({ type: 'voice-start', mode, sourceSessionId }));
+    }
+
+    // Idempotent — also used to dismiss the panel when startVoice() bailed
+    // out early (e.g. not connected yet) without voiceMode ever having been set.
+    function stopVoice() {
+      clearTimeout(voiceConnectTimer);
+      const wasPractice = voiceMode === 'practice';
+      const practiceId = voicePracticeSessionId;
+
+      if (voiceMode && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+        controlSocket.send(JSON.stringify({ type: 'voice-stop' }));
+      }
+      voiceMediaStream?.getTracks().forEach((t) => t.stop());
+      voiceWorkletNode?.disconnect();
+      voiceCaptureContext?.close();
+      voiceMediaStream = null;
+      voiceWorkletNode = null;
+      voiceCaptureContext = null;
+      voiceMode = null;
+      voicePracticeSessionId = null;
+      voicePanel.hidden = true;
+      voiceChatBtn.classList.remove('active');
+      setVoiceTextInputEnabled(false);
+
+      // Jump to the practice session's Coaching tab — real feedback appears
+      // once the server finishes analyzeConversation() and pushes 'coaching',
+      // exactly like a real meeting's, since activeSessionId is now set to it.
+      if (wasPractice && practiceId) {
+        refreshSessions().then(() => {
+          openSession(practiceId);
+          switchTab('coaching');
+        });
+      }
+    }
+
+    function handleVoiceAudioFrame(arrayBuffer) {
+      if (!voicePlaybackContext) {
+        voicePlaybackContext = new AudioContext({ sampleRate: 24000 });
+        voicePlaybackNextTime = voicePlaybackContext.currentTime;
+      }
+      const int16 = new Int16Array(arrayBuffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / (int16[i] < 0 ? 32768 : 32767);
+
+      const buffer = voicePlaybackContext.createBuffer(1, float32.length, 24000);
+      buffer.copyToChannel(float32, 0);
+      const src = voicePlaybackContext.createBufferSource();
+      src.buffer = buffer;
+      src.connect(voicePlaybackContext.destination);
+      if (voicePlaybackNextTime < voicePlaybackContext.currentTime) voicePlaybackNextTime = voicePlaybackContext.currentTime;
+      src.start(voicePlaybackNextTime);
+      voicePlaybackNextTime += buffer.duration;
+      voicePanelStatus.textContent = 'Speaking…';
+    }
+
+    voiceChatBtn.addEventListener('click', () => {
+      if (voiceMode) stopVoice();
+      else startVoice('chat');
+    });
+
+    practiceBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      startVoice('practice', activeSessionId);
+    });
+
+    voicePanelStopBtn.addEventListener('click', stopVoice);
+
+    setupTriggersDelegation();
+    setupSuggestionsDelegation();
 
     refreshSessions();
     connect();

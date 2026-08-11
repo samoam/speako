@@ -4,6 +4,7 @@ import { TranscriptSegment } from '../types';
 import { getMeetingState, upsertMeetingState, OpenItem } from '../storage/meetingStateRepository';
 import { countSegmentsForSession, getSegmentsForSessionSince } from '../storage/segmentRepository';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 const MEETING_STATE_PROMPT = `You maintain running state for a live meeting so later reasoning steps don't have to re-read the whole transcript.
 You'll get the PREVIOUS SUMMARY, the PREVIOUS OPEN ITEMS (each with a stable id), and the NEW TRANSCRIPT said since the last update.
@@ -84,10 +85,16 @@ export async function updateMeetingState(sessionId: string): Promise<void> {
     const prompt = `${MEETING_STATE_PROMPT}\n\nPREVIOUS SUMMARY:\n${previousSummary || '(none yet)'}\n\nPREVIOUS OPEN ITEMS:\n${JSON.stringify(previousOpenItems)}\n\nNEW TRANSCRIPT:\n${newText}`;
 
     const response = await getGeminiClient().models.generateContent({
-      model: config.geminiModel,
+      // Fires every config.meetingStateUpdateEverySegments segments for the
+      // whole meeting — mechanical merge/extraction task, not creative
+      // reasoning, so the cheaper tier + disabled thinking cost nothing in
+      // quality here. See docs/gemini-cost-optimization.
+      model: config.geminiFastModel,
       contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: MEETING_STATE_SCHEMA },
+      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest/fast tier — 1 is the smallest accepted budget.
+      config: { responseMimeType: 'application/json', responseSchema: MEETING_STATE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
     });
+    logGeminiUsage('updateMeetingState', response);
 
     const parsed = JSON.parse(response.text ?? '{}');
     const totalCount = countSegmentsForSession(sessionId);

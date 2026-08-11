@@ -21,6 +21,8 @@ export interface McpTool {
   inputSchema?: unknown;
 }
 
+const CALL_TOOL_TIMEOUT_MS = 20_000;
+
 /**
  * Thin wrapper around one MCP server subprocess, connected lazily on first
  * use and kept alive for reuse (spawning a fresh process per query would be
@@ -69,7 +71,11 @@ export class McpServerClient {
 
   async callTool(name: string, args: Record<string, unknown>): Promise<any> {
     const client = await this.getClient();
-    return client.callTool({ name, arguments: args });
+    // The SDK's own default (60s) is generous for what's meant to be a live,
+    // in-meeting fact-check/QA lookup — callers (factcheck.ts, liveQa.ts) have
+    // their own fallback paths (web search) that should get a chance to run
+    // well within a live turn rather than after a full minute of hanging.
+    return client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TOOL_TIMEOUT_MS });
   }
 
   /** Closes the underlying transport (kills the stdio subprocess, if any) and drops the cached client so the next call reconnects fresh. */

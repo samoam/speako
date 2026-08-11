@@ -19,8 +19,13 @@ export function isBitbucketConfigured(): boolean {
   );
 }
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function apiGet(path: string): Promise<any> {
-  const res = await fetch(`${config.bitbucketServerUrl}${path}`, { headers: { Authorization: authHeader() } });
+  const res = await fetch(`${config.bitbucketServerUrl}${path}`, {
+    headers: { Authorization: authHeader() },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(`Bitbucket Server request failed: ${res.status} ${res.statusText} — ${path}`);
   }

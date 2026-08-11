@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { embedText, cosineSimilarity } from '../rag/rag';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 import { LikelyQuestion, QuestionToAsk } from './anticipateQA';
 
 export interface EmbeddedLikelyQuestion {
@@ -81,10 +82,15 @@ export async function checkQuestionsToAskRelevance(rollingSummary: string, remai
   try {
     const prompt = `${ASK_NOW_PROMPT}\n\nMeeting so far:\n${rollingSummary || '(nothing yet)'}\n\nCandidate questions:\n${JSON.stringify(remaining.map((q) => q.question))}`;
     const response = await getGeminiClient().models.generateContent({
-      model: config.geminiModel,
+      // Same live-pipeline cadence as updateMeetingState — cheap tier, no
+      // thinking needed for "does this exact question fit now". See
+      // docs/gemini-cost-optimization.
+      model: config.geminiFastModel,
       contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: ASK_NOW_SCHEMA },
+      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest/fast tier — 1 is the smallest accepted budget.
+      config: { responseMimeType: 'application/json', responseSchema: ASK_NOW_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
     });
+    logGeminiUsage('checkQuestionsToAskRelevance', response);
     const parsed = JSON.parse(response.text ?? '{}');
     const relevantTexts: string[] = parsed.relevantQuestions ?? [];
     return remaining.filter((q) => relevantTexts.includes(q.question));

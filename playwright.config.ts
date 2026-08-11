@@ -21,7 +21,11 @@ export default defineConfig({
     command: 'npx ts-node src/index.ts start',
     url: `http://localhost:${E2E_PORT}/api/status`,
     reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
+    // ts-node has to type-check + transpile the whole src/ tree cold (no
+    // build cache) before the server can even start listening — the
+    // codebase has grown substantially since this was first set to 30s, and
+    // that's no longer reliably enough, especially under any system load.
+    timeout: 60_000,
     env: {
       // Real .env credentials AND the real GCP_PROJECT_ID flow through
       // untouched (dotenv.config() inside src/config.ts reads .env directly,

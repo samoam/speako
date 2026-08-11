@@ -6,6 +6,7 @@ export interface Summary {
   keyDecisions: string;
   discussionTopics: string;
   nextSteps: string;
+  topics: string[];
   generatedAt: string;
   modelUsed: string;
 }
@@ -23,13 +24,14 @@ export interface ActionItem {
 export type NewActionItem = Omit<ActionItem, 'id' | 'sessionId' | 'status'>;
 
 const upsertSummaryStmt = db.prepare(`
-  INSERT INTO summaries (session_id, overview, key_decisions, discussion_topics, next_steps, generated_at, model_used)
-  VALUES (@sessionId, @overview, @keyDecisions, @discussionTopics, @nextSteps, datetime('now'), @modelUsed)
+  INSERT INTO summaries (session_id, overview, key_decisions, discussion_topics, next_steps, topics, generated_at, model_used)
+  VALUES (@sessionId, @overview, @keyDecisions, @discussionTopics, @nextSteps, @topics, datetime('now'), @modelUsed)
   ON CONFLICT(session_id) DO UPDATE SET
     overview = excluded.overview,
     key_decisions = excluded.key_decisions,
     discussion_topics = excluded.discussion_topics,
     next_steps = excluded.next_steps,
+    topics = excluded.topics,
     generated_at = excluded.generated_at,
     model_used = excluded.model_used
 `);
@@ -48,6 +50,7 @@ export const saveSummaryAndActionItems = db.transaction(
       keyDecisions: summary.keyDecisions,
       discussionTopics: summary.discussionTopics,
       nextSteps: summary.nextSteps,
+      topics: JSON.stringify(summary.topics),
       modelUsed: summary.modelUsed,
     });
     db.prepare('DELETE FROM action_items WHERE session_id = ?').run(sessionId);
@@ -72,6 +75,7 @@ export function getSummary(sessionId: string): Summary | undefined {
     keyDecisions: row.key_decisions,
     discussionTopics: row.discussion_topics,
     nextSteps: row.next_steps,
+    topics: JSON.parse(row.topics ?? '[]'),
     generatedAt: row.generated_at,
     modelUsed: row.model_used,
   };
@@ -122,6 +126,26 @@ export function getOpenActionItemsByOwner(ownerNameContains: string): ActionItem
     status: r.status,
     confidence: r.confidence,
   }));
+}
+
+export interface SessionTopics {
+  sessionId: string;
+  name: string | null;
+  startedAt: string;
+  topics: string[];
+}
+
+/** Every session that has a saved summary, with its topic tags and enough session metadata to display/order them — used by src/insights/topicTrend.ts to aggregate topic frequency across all meetings. */
+export function getSessionsWithTopics(): SessionTopics[] {
+  const rows = db
+    .prepare(
+      `SELECT s.id, s.name, s.started_at, su.topics
+       FROM summaries su
+       JOIN sessions s ON s.id = su.session_id
+       ORDER BY s.started_at ASC`
+    )
+    .all() as { id: string; name: string | null; started_at: string; topics: string }[];
+  return rows.map((r) => ({ sessionId: r.id, name: r.name, startedAt: r.started_at, topics: JSON.parse(r.topics ?? '[]') }));
 }
 
 export function deleteSummaryAndActionItems(sessionId: string): void {

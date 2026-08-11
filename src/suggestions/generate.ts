@@ -3,6 +3,7 @@ import { retrieve } from '../rag/rag';
 import { TriggerEvent } from '../storage/triggerRepository';
 import { getMeetingStateSnapshot } from '../state/meetingState';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 // Category-specific prompts (spec §7.2) — each asks for exactly one thing, matching
 // how differently each trigger category should be handled rather than one generic prompt.
@@ -66,6 +67,7 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
     model: config.geminiModel,
     contents: prompt,
   });
+  logGeminiUsage('generateSuggestion', response);
 
   const text = (response.text ?? '').trim();
   if (!text || text.toUpperCase() === 'SKIP') return null;

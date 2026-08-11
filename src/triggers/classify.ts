@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 const CLASSIFY_PROMPT = `You are a fast filter watching a live meeting transcript for moments worth
 flagging. You'll be given the most recent one or two spoken lines (a small window, not the whole
@@ -60,9 +61,15 @@ export interface ClassificationResult {
 export async function classifySegment(text: string, meetingContext?: string): Promise<ClassificationResult> {
   const contextBlock = meetingContext ? `Meeting context so far:\n${meetingContext}\n\n` : '';
   const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
+    // Highest-volume call in the app (fires per finalized live segment) — a
+    // cheaper model tier plus disabled thinking (pure schema classification
+    // gains nothing from open-ended "thinking") compound to the biggest
+    // single cost reduction available. See docs/gemini-cost-optimization.
+    model: config.geminiFastModel,
     contents: `${CLASSIFY_PROMPT}\n\n${contextBlock}Window:\n${text}`,
-    config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA },
+    // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest/fast tier — 1 is the smallest accepted budget.
+    config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
   });
+  logGeminiUsage('classifySegment', response);
   return JSON.parse(response.text ?? '{}');
 }

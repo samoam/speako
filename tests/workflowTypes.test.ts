@@ -124,7 +124,7 @@ test('previousSessionNotes: formats overview, decisions, and open action items',
   endSession('wt-with-summary');
   saveSummaryAndActionItems(
     'wt-with-summary',
-    { overview: 'We discussed X', keyDecisions: 'Decided Y', discussionTopics: 'Topic Z', nextSteps: 'Do W', modelUsed: 'test-model' },
+    { overview: 'We discussed X', keyDecisions: 'Decided Y', discussionTopics: 'Topic Z', nextSteps: 'Do W', topics: [], modelUsed: 'test-model' },
     [{ description: 'Follow up on Y', owner: 'Alice', dueDate: null, confidence: 'explicit' }]
   );
   const notes = await previousSessionNotes({ id: 'wt-with-summary', name: 'With Summary' });

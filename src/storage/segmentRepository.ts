@@ -7,6 +7,10 @@ export interface CreateSessionOptions {
   calendarEventId?: string;
   /** Which tools/integrations are active for this session (see src/tools/activeTools.ts). Omitted/undefined means "all globally-configured tools" — preserves existing behavior. */
   activeTools?: string[];
+  /** Which heavy pipeline features (sentiment, triggers, RAG, meeting-state) are active for this session (see src/tools/activeFeatures.ts). Omitted/undefined means "all globally-enabled features" — preserves existing behavior. */
+  activeFeatures?: string[];
+  /** ISO datetime — when set, the session's recording auto-starts at this time instead of waiting for a manual "Start recording" click. See InterfaceServer's schedule poller. */
+  scheduledStartAt?: string;
 }
 
 export function createSession(
@@ -16,8 +20,8 @@ export function createSession(
   options?: CreateSessionOptions
 ): void {
   db.prepare(
-    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools)
-     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, scheduled_start_at, active_features)
+     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId,
     JSON.stringify(languageCodes),
@@ -26,7 +30,9 @@ export function createSession(
     options?.meetingType || null,
     options?.calendarEventId || null,
     options?.sessionType === 'work' ? 'pending' : 'none',
-    options?.activeTools ? JSON.stringify(options.activeTools) : null
+    options?.activeTools ? JSON.stringify(options.activeTools) : null,
+    options?.scheduledStartAt || null,
+    options?.activeFeatures ? JSON.stringify(options.activeFeatures) : null
   );
 }
 
@@ -36,6 +42,37 @@ export function setPrepStatus(sessionId: string, status: 'none' | 'pending' | 'r
 
 export function setActiveTools(sessionId: string, tools: string[]): void {
   db.prepare('UPDATE sessions SET active_tools = ? WHERE id = ?').run(JSON.stringify(tools), sessionId);
+}
+
+export function setActiveFeatures(sessionId: string, features: string[]): void {
+  db.prepare('UPDATE sessions SET active_features = ? WHERE id = ?').run(JSON.stringify(features), sessionId);
+}
+
+/** Sets or cancels (null) a session's scheduled auto-start time. Also called from Session.start() to clear a stale schedule once a session actually goes live, whichever path started it. */
+export function setScheduledStartAt(sessionId: string, iso: string | null): void {
+  db.prepare('UPDATE sessions SET scheduled_start_at = ? WHERE id = ?').run(iso, sessionId);
+}
+
+export interface DueScheduledSession {
+  id: string;
+  name: string | null;
+  languageCodes: string[];
+}
+
+/** Sessions whose scheduled auto-start time has arrived and haven't ended — used by InterfaceServer's schedule poller. Ordered so the earliest-due session is started first if more than one is due. */
+export function getDueScheduledSessions(nowIso: string): DueScheduledSession[] {
+  const rows = db
+    .prepare(
+      `SELECT id, name, language_codes FROM sessions
+       WHERE scheduled_start_at IS NOT NULL AND scheduled_start_at <= ? AND ended_at IS NULL
+       ORDER BY scheduled_start_at ASC`
+    )
+    .all(nowIso) as { id: string; name: string | null; language_codes: string | null }[];
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    languageCodes: r.language_codes ? JSON.parse(r.language_codes) : [],
+  }));
 }
 
 /**
@@ -75,6 +112,39 @@ export function findLikelyPreviousSession(
   const row = exactMatch || candidates[0];
 
   return { id: row.id, name: row.name, endedAt: row.ended_at };
+}
+
+export interface SessionSeriesEntry {
+  id: string;
+  name: string | null;
+  startedAt: string;
+}
+
+/**
+ * Every ended work session of the given meetingType with an exact (trimmed,
+ * case-insensitive) name match, chronological ascending — the full recurring
+ * series, unlike findLikelyPreviousSession above which collapses this same
+ * candidate set down to one best guess. Used by src/insights/relationshipTrend.ts
+ * to chart a 1:1 relationship's sentiment across every session in the series
+ * (including whichever one the caller is currently viewing — there's no
+ * excludeSessionId here, deliberately). Returns [] if name is blank, since a
+ * series can't be identified without something to match on.
+ */
+export function findSessionSeries(meetingType: string, name: string | undefined): SessionSeriesEntry[] {
+  const normalizedName = name?.trim().toLowerCase();
+  if (!normalizedName) return [];
+
+  const rows = db
+    .prepare(
+      `SELECT id, name, started_at FROM sessions
+       WHERE session_type = 'work' AND meeting_type = ? AND ended_at IS NOT NULL
+       ORDER BY started_at ASC`
+    )
+    .all(meetingType) as { id: string; name: string | null; started_at: string }[];
+
+  return rows
+    .filter((r) => r.name?.trim().toLowerCase() === normalizedName)
+    .map((r) => ({ id: r.id, name: r.name, startedAt: r.started_at }));
 }
 
 export function endSession(sessionId: string): void {
@@ -130,6 +200,7 @@ export const deleteSession = db.transaction((sessionId: string) => {
   db.prepare('DELETE FROM meeting_state WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM prep_briefs WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM coaching_feedback WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM meeting_chapters WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 });
 
@@ -144,12 +215,14 @@ export interface SessionRow {
   prepStatus: 'none' | 'pending' | 'ready' | 'failed';
   /** null means "all globally-configured tools active" — see src/tools/activeTools.ts. */
   activeTools: string[] | null;
+  /** null means "all globally-enabled heavy features active" — see src/tools/activeFeatures.ts. */
+  activeFeatures: string[] | null;
 }
 
 export function getSession(sessionId: string): SessionRow | undefined {
   const row = db
     .prepare(
-      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools
+      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, active_features
        FROM sessions WHERE id = ?`
     )
     .get(sessionId) as
@@ -163,6 +236,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
         calendar_event_id: string | null;
         prep_status: 'none' | 'pending' | 'ready' | 'failed';
         active_tools: string | null;
+        active_features: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -176,6 +250,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
     calendarEventId: row.calendar_event_id,
     prepStatus: row.prep_status,
     activeTools: row.active_tools ? JSON.parse(row.active_tools) : null,
+    activeFeatures: row.active_features ? JSON.parse(row.active_features) : null,
   };
 }
 
@@ -216,13 +291,15 @@ export interface SessionSummary {
   meetingType: string | null;
   prepStatus: 'none' | 'pending' | 'ready' | 'failed';
   activeTools: string[] | null;
+  activeFeatures: string[] | null;
+  scheduledStartAt: string | null;
 }
 
 export function listSessions(): SessionSummary[] {
   const rows = db
     .prepare(
       `SELECT s.id, s.name, s.started_at, s.ended_at, s.diarized_at, s.language_codes,
-              s.session_type, s.meeting_type, s.prep_status, s.active_tools,
+              s.session_type, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at,
               (SELECT COUNT(*) FROM transcript_segments t WHERE t.session_id = s.id) AS segment_count,
               (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary
        FROM sessions s
@@ -243,6 +320,8 @@ export function listSessions(): SessionSummary[] {
     meetingType: r.meeting_type,
     prepStatus: r.prep_status,
     activeTools: r.active_tools ? JSON.parse(r.active_tools) : null,
+    activeFeatures: r.active_features ? JSON.parse(r.active_features) : null,
+    scheduledStartAt: r.scheduled_start_at,
   }));
 }
 

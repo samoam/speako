@@ -2,6 +2,8 @@ import { config } from '../config';
 import { MEETING_TYPE_LABELS, MeetingType } from './meetingTypes';
 import { WorkflowSource } from './workflows/types';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
+import { buildRawContextBlock } from './rawContext';
 
 const SYNTHESIZE_PROMPT = `You are preparing a concise pre-meeting brief for someone about to join a meeting. You'll be given raw context pulled from several sources (Jira, Confluence, past meeting notes, code activity, web search, etc) for a specific meeting type.
 
@@ -35,12 +37,19 @@ const TYPE_EMPHASIS: Record<MeetingType, string> = {
  * another search result, because it should be given priority in the prompt
  * (the user explicitly asked for it), not treated as equal-weight raw
  * context that might get dropped if it seems less relevant than a Jira hit.
+ *
+ * `cachedRawContent`: pass a Gemini context-cache resource name (from
+ * createSharedCache, built from buildRawContextBlock(sources)) to avoid
+ * resending the raw sources block — PrepService.ts shares one cache between
+ * this and anticipateQA.ts, which both send the identical block. Omit to
+ * build and send it inline as before.
  */
 export async function synthesizeBrief(
   meetingType: MeetingType,
   sessionName: string | undefined,
   sources: WorkflowSource[],
-  userNotes?: string
+  userNotes?: string,
+  cachedRawContent?: string
 ): Promise<string> {
   const notes = userNotes?.trim();
 
@@ -48,7 +57,7 @@ export async function synthesizeBrief(
     return `No prep context was found for this ${MEETING_TYPE_LABELS[meetingType]} session.`;
   }
 
-  const rawBlock = sources.map((s) => `--- ${s.name} ---\n${s.content}`).join('\n\n');
+  const rawBlock = buildRawContextBlock(sources);
   const notesBlock = notes ? `## Your notes\n\n${notes}` : '';
   const fallback = () => [notesBlock, rawBlock && `## Raw prep context\n\n${rawBlock}`].filter(Boolean).join('\n\n');
 
@@ -58,8 +67,14 @@ export async function synthesizeBrief(
     const userNotesInstruction = notes
       ? `\n\nThe user provided the following notes before prep ran — these take priority: make sure the brief addresses them, and weave them in rather than appending them as an afterthought.\nUser's notes: ${notes}`
       : '';
-    const prompt = `${SYNTHESIZE_PROMPT}\n\nMeeting type: ${MEETING_TYPE_LABELS[meetingType]}\nEmphasis for this type: ${TYPE_EMPHASIS[meetingType]}\nSession name: ${sessionName || '(unnamed)'}${userNotesInstruction}\n\nRaw context:\n${rawBlock || '(none)'}`;
-    const response = await getGeminiClient().models.generateContent({ model: config.geminiModel, contents: prompt });
+    const header = `${SYNTHESIZE_PROMPT}\n\nMeeting type: ${MEETING_TYPE_LABELS[meetingType]}\nEmphasis for this type: ${TYPE_EMPHASIS[meetingType]}\nSession name: ${sessionName || '(unnamed)'}${userNotesInstruction}`;
+    const prompt = cachedRawContent ? header : `${header}\n\nRaw context:\n${rawBlock || '(none)'}`;
+    const response = await getGeminiClient().models.generateContent({
+      model: config.geminiModel,
+      contents: prompt,
+      config: cachedRawContent ? { cachedContent: cachedRawContent } : undefined,
+    });
+    logGeminiUsage('synthesizeBrief', response);
     return response.text?.trim() || fallback();
   } catch (err: any) {
     console.error('[prep] brief synthesis failed, falling back to raw context:', err.message);

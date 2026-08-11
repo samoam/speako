@@ -14,11 +14,18 @@ import {
   renameSession,
   deleteSession,
   setActiveTools,
+  setActiveFeatures,
+  setScheduledStartAt,
+  getDueScheduledSessions,
+  endSession,
+  insertFinalSegment,
 } from '../storage/segmentRepository';
+import { LiveVoiceSession, VOICE_TOOL_KEYS } from '../voice/liveVoiceSession';
+import { buildChatInstruction, buildPracticeInstruction } from '../voice/systemInstructions';
 import { diarizeSession, deleteUploadedAudio } from '../diarization/diarize';
 import { SUPPORTED_LANGUAGES } from '../languages';
 import { toPlainText } from '../transcriptFormat';
-import { summarizeSession, extractActionItems } from '../summarization/summarize';
+import { summarizeAndExtractActionItems } from '../summarization/summarize';
 import {
   getSummary,
   getActionItems,
@@ -43,10 +50,17 @@ import { listUpcomingEvents } from '../integrations/googleCalendar';
 import { writeSummaryFactsToMem0 } from '../prep/writeMemFacts';
 import { analyzeConversation } from '../coaching/analyzeConversation';
 import { saveCoachingFeedback, getCoachingFeedback, CoachingFeedback } from '../storage/coachingRepository';
+import { detectChapters } from '../summarization/chapters';
+import { saveChapters, getChapters, MeetingChapters } from '../storage/chaptersRepository';
+import { getTopicFrequencies } from '../insights/topicTrend';
+import { getRelationshipTrend } from '../insights/relationshipTrend';
+import { answerAcrossAllMeetings } from '../qa/crossSessionQa';
+import { insertCrossSessionQuery, getCrossSessionQueryHistory } from '../storage/crossSessionQueryRepository';
 import { runCodebaseIndex } from '../codebase/indexCodebase';
 import { getIndexedRepoSummary } from '../storage/codeRepository';
 import { updateSettings } from '../settingsStore';
 import { ALL_TOOL_KEYS } from '../tools/activeTools';
+import { ALL_FEATURE_KEYS, FEATURE_LABELS } from '../tools/activeFeatures';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
 import { isJiraConfigured } from '../integrations/jiraMcp';
 import { isConfluenceConfigured } from '../integrations/confluenceMcp';
@@ -61,6 +75,8 @@ import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../stora
 const SETTINGS_FIELDS = [
   'geminiApiKey',
   'geminiModel',
+  'geminiLiveModel',
+  'geminiFastModel',
   'jiraUrl',
   'jiraPersonalToken',
   'confluenceUrl',
@@ -78,6 +94,7 @@ const SETTINGS_FIELDS = [
   'googleCalendarTokenPath',
   'prepWindowMinutes',
   'codebaseLocalPaths',
+  'voiceToolKeys',
   'prepEnabled',
   'sentimentEnabled',
   'triggerDetectionEnabled',
@@ -109,7 +126,7 @@ function serializeSettingValue(key: (typeof SETTINGS_FIELDS)[number]): string {
   return String(value);
 }
 
-type StartHandler = (languageCode?: string, name?: string, existingSessionId?: string) => string;
+type StartHandler = (languageCode?: string, name?: string, existingSessionId?: string, activeFeatures?: string[] | null) => string;
 type StopHandler = () => void;
 
 export class InterfaceServer {
@@ -118,8 +135,15 @@ export class InterfaceServer {
   private currentSessionId: string | null = null;
   private onStartHandler: StartHandler | null = null;
   private onStopHandler: StopHandler | null = null;
+  /** Voice (chat/practice) is per-client, unlike currentSessionId's single-global-recording model — each connected browser tab can have at most one active Live session. */
+  private voiceSessions = new Map<
+    WebSocket,
+    { session: LiveVoiceSession; practiceSessionId?: string; flushPracticeTranscript?: () => void; lastActivityAt: number }
+  >();
   private codebaseIndexInProgress = false;
   private communicationsIndexInProgress = false;
+  private scheduleTimer: NodeJS.Timeout | null = null;
+  private voiceIdleCheckTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     const app = express();
@@ -169,6 +193,52 @@ export class InterfaceServer {
       });
     });
 
+    // Which heavy pipeline features are globally enabled (config.*Enabled) —
+    // a per-session toggle can only ever turn one of these OFF for a session,
+    // never on if it's globally disabled, so the UI only offers what could
+    // actually apply, same rationale as /api/tools above.
+    app.get('/api/features', (_req, res) => {
+      res.json({
+        sentiment: { enabled: config.sentimentEnabled, label: FEATURE_LABELS.sentiment },
+        triggers: { enabled: config.triggerDetectionEnabled, label: FEATURE_LABELS.triggers },
+        rag: { enabled: config.ragEnabled, label: FEATURE_LABELS.rag },
+        meetingState: { enabled: config.meetingStateEnabled, label: FEATURE_LABELS.meetingState },
+      });
+    });
+
+    // Rides the topic tags already produced by on-demand summarization
+    // (SUMMARY_SCHEMA's `topics` field) — no separate Gemini call.
+    app.get('/api/insights/topics', (_req, res) => {
+      res.json(getTopicFrequencies());
+    });
+
+    app.get('/api/insights/ask/history', (_req, res) => {
+      res.json(getCrossSessionQueryHistory());
+    });
+
+    // "Ask across all my meetings" — synchronous/awaited, same shape as the
+    // existing per-session /ask route (the answer comes back in the response
+    // itself, not a two-phase started/broadcast like summarize).
+    app.post('/api/insights/ask', async (req, res) => {
+      if (!config.geminiApiKey) {
+        res.status(400).json({ error: 'GEMINI_API_KEY is not configured — see NOTES.md.' });
+        return;
+      }
+      const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+      if (!question) {
+        res.status(400).json({ error: 'A question is required.' });
+        return;
+      }
+      try {
+        const answer = await answerAcrossAllMeetings(question);
+        const query = insertCrossSessionQuery({ questionText: question, answerText: answer.answerText, sourcesUsed: answer.sourcesUsed });
+        res.json(query);
+      } catch (err: any) {
+        console.error('[insights] cross-session ask failed:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     // Describes what each meeting type's prep workflow gathers — shown in the
     // new-session UI so picking a type isn't a guess.
     app.get('/api/prep/workflow-steps', (_req, res) => {
@@ -187,7 +257,13 @@ export class InterfaceServer {
       const languageCode = typeof req.body?.languageCode === 'string' ? req.body.languageCode : undefined;
       const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 200) : undefined;
       const existingSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
-      const sessionId = this.onStartHandler(languageCode, name, existingSessionId);
+      // Only meaningful for a brand-new (non-resumed) session — a resumed
+      // session created via /api/session/prepare already has its features
+      // stored on the row from prepare-time.
+      const activeFeatures = Array.isArray(req.body?.activeFeatures)
+        ? req.body.activeFeatures.filter((f: unknown) => typeof f === 'string' && ALL_FEATURE_KEYS.includes(f as any))
+        : null;
+      const sessionId = this.onStartHandler(languageCode, name, existingSessionId, activeFeatures);
       res.json({ sessionId });
     });
 
@@ -205,9 +281,20 @@ export class InterfaceServer {
       const activeTools = Array.isArray(req.body?.activeTools)
         ? req.body.activeTools.filter((t: unknown) => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
         : undefined;
+      const activeFeatures = Array.isArray(req.body?.activeFeatures)
+        ? req.body.activeFeatures.filter((f: unknown) => typeof f === 'string' && ALL_FEATURE_KEYS.includes(f as any))
+        : undefined;
+      const scheduledStartAt = typeof req.body?.scheduledStartAt === 'string' ? req.body.scheduledStartAt : undefined;
 
       const sessionId = uuid();
-      createPrepSession(sessionId, languageCodes, name, { sessionType: 'work', meetingType, calendarEventId, activeTools });
+      createPrepSession(sessionId, languageCodes, name, {
+        sessionType: 'work',
+        meetingType,
+        calendarEventId,
+        activeTools,
+        activeFeatures,
+        scheduledStartAt,
+      });
 
       runPrep({
         sessionId,
@@ -236,6 +323,38 @@ export class InterfaceServer {
       setActiveTools(sessionId, activeTools);
       this.broadcast({ type: 'session-tools-updated', sessionId, activeTools });
       res.json({ sessionId, activeTools });
+    });
+
+    // Editable anytime, same rationale as the tools endpoint above — a
+    // session already in progress can still have sentiment/triggers/RAG/
+    // meeting-state turned off (or back on) going forward.
+    app.patch('/api/sessions/:id/features', (req, res) => {
+      const sessionId = req.params.id;
+      if (!getSession(sessionId)) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      const activeFeatures = Array.isArray(req.body?.activeFeatures)
+        ? req.body.activeFeatures.filter((f: unknown) => typeof f === 'string' && ALL_FEATURE_KEYS.includes(f as any))
+        : [];
+      setActiveFeatures(sessionId, activeFeatures);
+      this.broadcast({ type: 'session-features-updated', sessionId, activeFeatures });
+      res.json({ sessionId, activeFeatures });
+    });
+
+    // Set (or, with null, cancel) when a not-yet-started session should auto-start
+    // recording — see checkScheduledSessions() below. Editable/cancelable anytime
+    // before the session actually starts; Session.start() clears it once it does.
+    app.patch('/api/sessions/:id/schedule', (req, res) => {
+      const sessionId = req.params.id;
+      if (!getSession(sessionId)) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      const scheduledStartAt = typeof req.body?.scheduledStartAt === 'string' ? req.body.scheduledStartAt : null;
+      setScheduledStartAt(sessionId, scheduledStartAt);
+      this.broadcast({ type: 'session-schedule-updated', sessionId, scheduledStartAt });
+      res.json({ sessionId, scheduledStartAt });
     });
 
     app.get('/api/sessions/:id/prep-brief', (req, res) => {
@@ -412,7 +531,7 @@ export class InterfaceServer {
 
       res.json({ started: true });
       this.broadcastSummarizing(sessionId);
-      Promise.all([summarizeSession(segments), extractActionItems(segments)])
+      summarizeAndExtractActionItems(segments)
         .then(([summary, actionItems]) => {
           saveSummaryAndActionItems(sessionId, summary, actionItems);
           this.broadcastSummarized(sessionId, getSummary(sessionId)!, getActionItems(sessionId));
@@ -464,6 +583,51 @@ export class InterfaceServer {
         .catch((err: any) => {
           console.error('[coaching] failed:', err.message);
           this.broadcastCoachingFailed(sessionId, err.message);
+        });
+    });
+
+    app.get('/api/sessions/:id/chapters', (req, res) => {
+      res.json({ chapters: getChapters(req.params.id) || null });
+    });
+
+    // Deterministic, no Gemini call — empty array for anything that isn't a
+    // named one-on-one session (see getRelationshipTrend).
+    app.get('/api/sessions/:id/relationship-trend', (req, res) => {
+      res.json(getRelationshipTrend(req.params.id));
+    });
+
+    // On-demand only, same shape as /summarize and /coach.
+    app.post('/api/sessions/:id/chapters', (req, res) => {
+      const sessionId = req.params.id;
+      const session = getSession(sessionId);
+      if (!session) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      if (!session.endedAt) {
+        res.status(409).json({ error: 'Session is still recording — stop it first.' });
+        return;
+      }
+      if (!config.geminiApiKey) {
+        res.status(400).json({ error: 'GEMINI_API_KEY is not configured — see NOTES.md.' });
+        return;
+      }
+      const segments = getSegmentsForSession(sessionId);
+      if (segments.length === 0) {
+        res.status(409).json({ error: 'No transcript to split into chapters.' });
+        return;
+      }
+
+      res.json({ started: true });
+      this.broadcastChaptersDetecting(sessionId);
+      detectChapters(segments)
+        .then((chapters) => {
+          const saved = saveChapters(sessionId, chapters);
+          this.broadcastChaptersDetected(sessionId, saved);
+        })
+        .catch((err: any) => {
+          console.error('[chapters] detection failed:', err.message);
+          this.broadcastChaptersDetectionFailed(sessionId, err.message);
         });
     });
 
@@ -662,7 +826,242 @@ export class InterfaceServer {
 
     this.wss.on('connection', (client) => {
       client.send(JSON.stringify({ type: 'status', recording: !!this.currentSessionId, sessionId: this.currentSessionId }));
+
+      // Voice chat/practice reuses this same connection rather than opening a
+      // second one — ws's message event already distinguishes binary frames
+      // (mic audio, forwarded to this client's Live session) from the
+      // existing JSON text frames (control messages / broadcasts), so both
+      // coexist with no protocol conflict.
+      client.on('message', (data: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          const state = this.voiceSessions.get(client);
+          if (state) {
+            state.session.sendAudio(data);
+            state.lastActivityAt = Date.now();
+          }
+          return;
+        }
+        let msg: any;
+        try {
+          msg = JSON.parse(data.toString());
+        } catch {
+          return;
+        }
+        if (msg.type === 'voice-start') {
+          this.startVoiceSession(client, msg.mode, msg.sourceSessionId).catch((err: any) => {
+            console.error('[voice] failed to start session:', err.message);
+            client.send(JSON.stringify({ type: 'voice-error', error: err.message }));
+          });
+        } else if (msg.type === 'voice-stop') {
+          this.stopVoiceSession(client);
+        } else if (msg.type === 'voice-text' && typeof msg.text === 'string' && msg.text.trim()) {
+          const state = this.voiceSessions.get(client);
+          if (state) {
+            state.session.sendText(msg.text.trim());
+            state.lastActivityAt = Date.now();
+          }
+        }
+      });
+
+      client.on('close', () => this.stopVoiceSession(client));
     });
+  }
+
+  /** mode 'chat': ephemeral, no session created. mode 'practice': creates a new session (grounded by sourceSessionId's prep brief) so the roleplay gets full history + real coaching feedback afterward, same as any real meeting. */
+  private async startVoiceSession(client: WebSocket, mode: 'chat' | 'practice', sourceSessionId?: string): Promise<void> {
+    if (this.voiceSessions.has(client)) return;
+    if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+
+    // config.voiceToolKeys (user's choice, Settings > Voice chat tools) is
+    // filtered down to whichever of those are actually configured — picking
+    // a tool here does nothing on its own if it has no real credentials/path.
+    const configuredTools = config.voiceToolKeys.filter((tool) => {
+      if (!VOICE_TOOL_KEYS.includes(tool)) return false; // ignore anything outside the eligible ceiling (stale setting, manual edit, etc.)
+      switch (tool) {
+        case 'jira':
+          return isJiraConfigured();
+        case 'confluence':
+          return isConfluenceConfigured();
+        case 'mem0':
+          return isMem0Configured();
+        case 'ragCloud':
+          return isRagConfigured();
+        case 'bitbucket':
+          return isBitbucketConfigured();
+        case 'localCodebase':
+          return isLocalCodebaseConfigured();
+        default:
+          return false;
+      }
+    });
+
+    let systemInstruction: string;
+    let practiceSessionId: string | undefined;
+    let flushPracticeTranscript: (() => void) | undefined;
+
+    if (mode === 'practice') {
+      if (!sourceSessionId) throw new Error('Practice mode requires sourceSessionId.');
+      const source = getSession(sourceSessionId);
+      if (!source) throw new Error('Unknown source session.');
+      const brief = getPrepBrief(sourceSessionId);
+      if (!brief) throw new Error('No prep brief for this session yet — prepare it first.');
+
+      practiceSessionId = uuid();
+      createPrepSession(practiceSessionId, source.languageCodes, `Practice: ${source.name ?? 'session'}`, { sessionType: 'personal' });
+      systemInstruction = buildPracticeInstruction(brief, source.meetingType ?? 'generic', source.name);
+    } else {
+      systemInstruction = buildChatInstruction();
+    }
+
+    const liveSession = new LiveVoiceSession({ systemInstruction, tools: configuredTools });
+
+    const bumpActivity = () => {
+      const state = this.voiceSessions.get(client);
+      if (state) state.lastActivityAt = Date.now();
+    };
+
+    liveSession.on('audio', (chunk: Buffer) => {
+      bumpActivity();
+      if (client.readyState === WebSocket.OPEN) client.send(chunk);
+    });
+    liveSession.on('functionCall', (tool: string) => {
+      bumpActivity();
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-function-call', tool }));
+    });
+    liveSession.on('error', (err: any) => {
+      console.error('[voice] session error:', err.message);
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-error', error: err.message }));
+    });
+
+    // Live transcript relay for the client's on-screen chat log — separate
+    // from the practice-mode buffering/persistence below (which exists to
+    // write clean segments to the DB, not to update the UI in real time).
+    // Every delta is relayed as-is; the client accumulates them into the
+    // current bubble itself and starts a fresh one on 'voice-turn-complete'.
+    liveSession.on('inputTranscript', (text: string) => {
+      bumpActivity();
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-transcript', role: 'you', text }));
+    });
+    liveSession.on('outputTranscript', (text: string) => {
+      bumpActivity();
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-transcript', role: 'assistant', text }));
+    });
+    liveSession.on('generationComplete', () => {
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-turn-complete' }));
+    });
+
+    if (practiceSessionId) {
+      const finalPracticeId = practiceSessionId;
+      const sessionStart = Date.now();
+      let lastEndMs = 0;
+      // Confirmed via real Live API traffic: transcription deltas never carry
+      // finished:true (despite the field existing in the type), and
+      // generationComplete can fire before every trailing transcript/audio
+      // chunk has actually arrived (same "trailing results after the
+      // signal" behavior session.ts already handles for the STT pipeline).
+      // So: accumulate deltas, and debounce the flush — each new delta or a
+      // fresh generationComplete pushes the flush out another 800ms; it only
+      // actually persists once nothing new has arrived in that window.
+      let inputBuffer = '';
+      let outputBuffer = '';
+      let flushTimer: NodeJS.Timeout | null = null;
+
+      const persistTurn = (speaker: string, text: string) => {
+        if (!text.trim()) return;
+        const now = Date.now() - sessionStart;
+        insertFinalSegment({ sessionId: finalPracticeId, speaker, startMs: lastEndMs, endMs: now, text: text.trim(), isFinal: true });
+        lastEndMs = now;
+      };
+      flushPracticeTranscript = () => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        persistTurn('You', inputBuffer);
+        persistTurn('Practice Partner', outputBuffer);
+        inputBuffer = '';
+        outputBuffer = '';
+      };
+      const scheduleFlush = () => {
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = setTimeout(() => flushPracticeTranscript!(), 800);
+      };
+
+      liveSession.on('inputTranscript', (text: string) => {
+        bumpActivity();
+        inputBuffer += text;
+        scheduleFlush();
+      });
+      liveSession.on('outputTranscript', (text: string) => {
+        bumpActivity();
+        outputBuffer += text;
+        scheduleFlush();
+      });
+      liveSession.on('generationComplete', scheduleFlush);
+    }
+
+    // Without this, a hung Gemini Live handshake (e.g. a proxy silently
+    // dropping the WebSocket upgrade, or a slow/overloaded Live backend) left
+    // the client stuck on "Connecting…" forever — connect() never resolved OR
+    // rejected, so neither the voice-ready nor the outer .catch()'s
+    // voice-error ever fired. abortSignal is client-side-only per the SDK's
+    // docs (it won't cancel the request or its billing on Google's end), but
+    // it does stop *our* process from holding this promise open indefinitely
+    // if the handshake truly never completes.
+    let timedOut = false;
+    const abortController = new AbortController();
+    const connected = liveSession.connect(abortController.signal).then(() => {
+      // connect() can still land after we've already given up and told the
+      // client it failed — close it rather than leak a live (billed) session.
+      if (timedOut) liveSession.close();
+    });
+    try {
+      await Promise.race([
+        connected,
+        new Promise((_, reject) =>
+          setTimeout(() => {
+            timedOut = true;
+            abortController.abort();
+            reject(new Error('Timed out connecting to the Gemini Live voice service.'));
+          }, 20_000)
+        ),
+      ]);
+    } catch (err) {
+      connected.catch(() => {}); // the abort rejects `connected` too — already handled above, don't crash on an unhandled rejection
+      throw err;
+    }
+    this.voiceSessions.set(client, { session: liveSession, practiceSessionId, flushPracticeTranscript, lastActivityAt: Date.now() });
+
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(
+        practiceSessionId
+          ? JSON.stringify({ type: 'voice-practice-ready', sessionId: practiceSessionId })
+          : JSON.stringify({ type: 'voice-ready' })
+      );
+    }
+  }
+
+  private stopVoiceSession(client: WebSocket): void {
+    const state = this.voiceSessions.get(client);
+    if (!state) return;
+    this.voiceSessions.delete(client);
+    state.session.close();
+
+    if (state.practiceSessionId) {
+      const practiceId = state.practiceSessionId;
+      state.flushPracticeTranscript?.(); // don't lose whatever's still buffered when the user stops mid-debounce
+      endSession(practiceId);
+      analyzeConversation(practiceId)
+        .then((analyzed) => {
+          if (!analyzed) return; // no "You" speech captured this run — nothing to score, not worth erroring on
+          const feedback = saveCoachingFeedback(practiceId, analyzed);
+          this.broadcastCoaching(practiceId, feedback);
+        })
+        .catch((err: any) => {
+          console.error('[voice] practice coaching failed:', err.message);
+          this.broadcastCoachingFailed(practiceId, err.message);
+        });
+    }
   }
 
   /** Wires session start/stop to actual capture+transcription logic, owned by the caller (index.ts). */
@@ -684,11 +1083,45 @@ export class InterfaceServer {
     this.httpServer.listen(config.httpPort, () => {
       console.log(`Live transcript view: http://localhost:${config.httpPort}`);
     });
+
+    this.scheduleTimer = setInterval(() => this.checkScheduledSessions(), 20_000);
+    this.voiceIdleCheckTimer = setInterval(() => this.checkIdleVoiceSessions(), 30_000);
   }
 
   stop(): void {
+    if (this.scheduleTimer) clearInterval(this.scheduleTimer);
+    if (this.voiceIdleCheckTimer) clearInterval(this.voiceIdleCheckTimer);
+    for (const [client] of this.voiceSessions) this.stopVoiceSession(client);
     this.wss.close();
     this.httpServer.close();
+  }
+
+  /** Safety net, not a UX feature — see config.voiceSessionIdleTimeoutMs. */
+  private checkIdleVoiceSessions(): void {
+    const now = Date.now();
+    for (const [client, state] of this.voiceSessions) {
+      if (now - state.lastActivityAt < config.voiceSessionIdleTimeoutMs) continue;
+      console.log('[voice] closing idle session after', config.voiceSessionIdleTimeoutMs, 'ms of inactivity');
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'voice-idle-timeout' }));
+      this.stopVoiceSession(client);
+    }
+  }
+
+  /**
+   * Auto-starts the earliest due scheduled session, reusing the exact same
+   * onStartHandler the manual "Start recording" button/POST /api/session/start
+   * already call — no separate start logic to keep in sync. If another
+   * session is already recording, this just skips the tick and retries every
+   * 20s until it's free; a schedule that arrives while the app was
+   * closed/asleep starts immediately once noticed rather than being treated
+   * as "missed."
+   */
+  private checkScheduledSessions(): void {
+    if (this.currentSessionId || !this.onStartHandler) return;
+    const due = getDueScheduledSessions(new Date().toISOString());
+    if (due.length === 0) return;
+    const next = due[0];
+    this.onStartHandler(next.languageCodes[0], next.name ?? undefined, next.id);
   }
 
   setSession(sessionId: string, name?: string): void {
@@ -735,6 +1168,18 @@ export class InterfaceServer {
 
   broadcastCoachingFailed(sessionId: string, error: string): void {
     this.broadcast({ type: 'coaching-failed', sessionId, error });
+  }
+
+  broadcastChaptersDetecting(sessionId: string): void {
+    this.broadcast({ type: 'chapters-detecting', sessionId });
+  }
+
+  broadcastChaptersDetected(sessionId: string, chapters: MeetingChapters): void {
+    this.broadcast({ type: 'chapters-detected', sessionId, chapters });
+  }
+
+  broadcastChaptersDetectionFailed(sessionId: string, error: string): void {
+    this.broadcast({ type: 'chapters-detection-failed', sessionId, error });
   }
 
   broadcastSentiment(sessionId: string, speaker: string, startMs: number, endMs: number, score: number, magnitude: number): void {

@@ -22,6 +22,15 @@ export class TriggerDetector extends EventEmitter {
   private lastFiredAt: Partial<Record<TriggerCategory, number>> = {};
   private recentFireTimestamps: number[] = [];
   private pendingQuestionTimer: NodeJS.Timeout | null = null;
+  /**
+   * The underlying meeting_state row only actually changes every
+   * config.meetingStateUpdateEverySegments segments (see session.ts's
+   * updateMeetingState cadence) — re-querying it here on every single
+   * segment was re-reading identical data most of the time. Cached and
+   * refreshed on the same cadence instead.
+   */
+  private cachedRollingSummary: string | undefined;
+  private segmentsSinceStateFetch = 0;
 
   constructor(private sessionId: string) {
     super();
@@ -45,8 +54,11 @@ export class TriggerDetector extends EventEmitter {
 
     let classification;
     try {
-      const { rollingSummary } = getMeetingStateSnapshot(this.sessionId);
-      classification = await classifySegment(segment.text, rollingSummary || undefined);
+      if (this.segmentsSinceStateFetch === 0) {
+        this.cachedRollingSummary = getMeetingStateSnapshot(this.sessionId).rollingSummary || undefined;
+      }
+      this.segmentsSinceStateFetch = (this.segmentsSinceStateFetch + 1) % config.meetingStateUpdateEverySegments;
+      classification = await classifySegment(segment.text, this.cachedRollingSummary);
     } catch (err: any) {
       console.error(`[triggers] classification failed for session ${this.sessionId}:`, err.message);
       return;

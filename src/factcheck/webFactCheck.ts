@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 const WEB_FACT_CHECK_PROMPT = `You are fact-checking a spoken claim using web search. Judge whether it is correct.
 - "match": search results clearly confirm the claim.
@@ -39,14 +40,19 @@ export async function webFactCheckClaim(claimText: string): Promise<WebFactCheck
   if (!isWebFactCheckConfigured()) return null;
 
   const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
+    // Same bounded 3-way verdict as factCheckClaim — cheaper tier, thinking
+    // disabled. See docs/gemini-cost-optimization.
+    model: config.geminiFastModel,
     contents: `${WEB_FACT_CHECK_PROMPT}\n\nCLAIM: "${claimText}"`,
     config: {
       tools: [{ googleSearch: {} }],
       responseMimeType: 'application/json',
       responseSchema: WEB_FACT_CHECK_SCHEMA,
+      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
+      thinkingConfig: { thinkingBudget: 1 },
     },
   });
+  logGeminiUsage('webFactCheckClaim', response);
 
   const parsed = JSON.parse(response.text ?? '{}');
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];

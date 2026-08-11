@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 
 export function isPrepWebSearchConfigured(): boolean {
   return !!config.geminiApiKey;
@@ -19,6 +20,7 @@ export async function prepWebSearch(topic: string): Promise<string> {
     contents: `Using web search, give a brief (3-5 sentence) summary of relevant background on: "${topic}". Focus on facts someone would want to know walking into a technical discussion about this.`,
     config: { tools: [{ googleSearch: {} }] },
   });
+  logGeminiUsage('prepWebSearch', response);
 
   return response.text ?? '';
 }

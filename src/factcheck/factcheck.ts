@@ -6,6 +6,7 @@ import { webFactCheckClaim, isWebFactCheckConfigured } from './webFactCheck';
 import { looksCodeRelated } from '../router';
 import { getMeetingStateSnapshot } from '../state/meetingState';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 import { getSession } from '../storage/segmentRepository';
 import { isToolActive } from '../tools/activeTools';
 
@@ -70,42 +71,45 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
   const contextSources: string[] = [];
   const activeTools = getSession(sessionId)?.activeTools ?? null;
 
-  if (isBitbucketConfigured() && isToolActive(activeTools, 'bitbucket') && looksCodeRelated(claimText)) {
-    try {
-      const matches = await searchBitbucketServer(claimText);
-      sourcesAttempted.push('bitbucket');
-      if (matches.length > 0) {
-        contextParts.push('bitbucket:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-        contextSources.push('bitbucket');
-      }
-    } catch (err: any) {
-      console.error('[factcheck] Bitbucket search failed:', err.message);
-    }
-  }
+  // The three internal sources are independent of each other — search them
+  // concurrently instead of one after another, then fold the results back in
+  // a fixed order below so contextParts/sourcesAttempted stay deterministic
+  // regardless of which search actually finishes first.
+  const bitbucketWanted = isBitbucketConfigured() && isToolActive(activeTools, 'bitbucket') && looksCodeRelated(claimText);
+  const jiraWanted = isJiraConfigured() && isToolActive(activeTools, 'jira');
+  const confluenceWanted = isConfluenceConfigured() && isToolActive(activeTools, 'confluence');
 
-  if (isJiraConfigured() && isToolActive(activeTools, 'jira')) {
-    try {
-      const matches = await searchJira(claimText);
-      sourcesAttempted.push('jira');
-      if (matches.length > 0) {
-        contextParts.push('jira:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-        contextSources.push('jira');
-      }
-    } catch (err: any) {
-      console.error('[factcheck] Jira search failed:', err.message);
-    }
-  }
+  const [bitbucketMatches, jiraMatches, confluenceMatches] = await Promise.all([
+    bitbucketWanted
+      ? searchBitbucketServer(claimText).catch((err: any) => {
+          console.error('[factcheck] Bitbucket search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+    jiraWanted
+      ? searchJira(claimText).catch((err: any) => {
+          console.error('[factcheck] Jira search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+    confluenceWanted
+      ? searchConfluence(claimText).catch((err: any) => {
+          console.error('[factcheck] Confluence search failed:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
 
-  if (isConfluenceConfigured() && isToolActive(activeTools, 'confluence')) {
-    try {
-      const matches = await searchConfluence(claimText);
-      sourcesAttempted.push('confluence');
-      if (matches.length > 0) {
-        contextParts.push('confluence:\n' + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
-        contextSources.push('confluence');
-      }
-    } catch (err: any) {
-      console.error('[factcheck] Confluence search failed:', err.message);
+  for (const [name, matches] of [
+    ['bitbucket', bitbucketMatches],
+    ['jira', jiraMatches],
+    ['confluence', confluenceMatches],
+  ] as const) {
+    if (matches === null) continue; // not gated in, or the search errored (treated the same as "not attempted", matching prior behavior)
+    sourcesAttempted.push(name);
+    if (matches.length > 0) {
+      contextParts.push(`${name}:\n` + matches.map((m) => `- ${m.path}: ${m.snippet}`).join('\n'));
+      contextSources.push(name);
     }
   }
 
@@ -122,10 +126,20 @@ export async function factCheckClaim(claimText: string, sessionId: string): Prom
   if (contextParts.length > 0) {
     const meetingSummary = getMeetingStateSnapshot(sessionId).rollingSummary;
     const response = await getGeminiClient().models.generateContent({
-      model: config.geminiModel,
+      // Bounded 3-way verdict with an explicit conservative-default
+      // instruction — schema classification, not open-ended reasoning, so
+      // the cheaper tier + disabled thinking apply here too. See
+      // docs/gemini-cost-optimization.
+      model: config.geminiFastModel,
       contents: `${FACT_CHECK_PROMPT}\n\nMEETING SO FAR (for context only — if this claim/conflict was already established and discussed earlier in the meeting, note that in groundTruth rather than treating it as a fresh discovery):\n${meetingSummary || '(nothing yet)'}\n\nCLAIM: "${claimText}"\n\nCONTEXT:\n${contextParts.join('\n\n')}`,
-      config: { responseMimeType: 'application/json', responseSchema: FACT_CHECK_SCHEMA },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: FACT_CHECK_SCHEMA,
+        // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
+        thinkingConfig: { thinkingBudget: 1 },
+      },
     });
+    logGeminiUsage('factCheckClaim', response);
     const parsed = JSON.parse(response.text ?? '{}');
     const result: 'match' | 'conflict' | 'insufficient' = parsed.result ?? 'insufficient';
     internalResult = result;

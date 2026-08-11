@@ -4,7 +4,8 @@ import { SoxCapture } from './audio-capture/soxCapture';
 import { WavRecorder } from './audio-capture/wavRecorder';
 import { StreamManager } from './transcription/streamManager';
 import { InterfaceServer } from './interface/server';
-import { createSession, endSession, insertFinalSegment, getSegmentsForSession } from './storage/segmentRepository';
+import { createSession, endSession, insertFinalSegment, getSegmentsForSession, setScheduledStartAt, getSession } from './storage/segmentRepository';
+import { isFeatureActive } from './tools/activeFeatures';
 import { insertSentimentScore } from './storage/sentimentRepository';
 import { analyzeSentiment } from './sentiment/sentiment';
 import { TriggerDetector } from './triggers/TriggerDetector';
@@ -36,13 +37,23 @@ export class Session {
   private surfacedLikelyQuestionTexts = new Set<string>();
   /** Prepared "questions to ask" not yet surfaced this session — see checkQuestionsToAsk. */
   private remainingQuestionsToAsk: QuestionToAsk[] = [];
+  /**
+   * Resolved once in start() from the sessions row — for a brand-new session
+   * that's whatever was passed to the constructor (persisted there by
+   * createSession); for a resumed (existingSessionId) session it's whatever
+   * was already chosen at POST /api/session/prepare time. null means "every
+   * globally-enabled heavy feature is active" (see src/tools/activeFeatures.ts).
+   */
+  private activeFeatures: string[] | null = null;
 
   constructor(
     private ui: InterfaceServer,
     private languageCodes: string[],
     private name?: string,
     /** When set, resumes an already-prepared (session_type='work') session created by POST /api/session/prepare, instead of creating a new row. */
-    private existingSessionId?: string
+    private existingSessionId?: string,
+    /** Only used for a brand-new session (ignored when resuming existingSessionId, which already has this stored) — see POST /api/session/start. */
+    private initialActiveFeatures?: string[] | null
   ) {
     this.id = existingSessionId || uuid();
     this.capture = new SoxCapture();
@@ -53,8 +64,14 @@ export class Session {
 
   start(): void {
     if (!this.existingSessionId) {
-      createSession(this.id, this.languageCodes, this.name);
+      createSession(this.id, this.languageCodes, this.name, { activeFeatures: this.initialActiveFeatures ?? undefined });
+    } else {
+      // Resuming a session created by POST /api/session/prepare — clear any
+      // scheduled auto-start time now that it's actually recording, whether
+      // this was a manual "Start recording" click or the schedule poller.
+      setScheduledStartAt(this.existingSessionId, null);
     }
+    this.activeFeatures = getSession(this.id)?.activeFeatures ?? null;
     this.ui.setSession(this.id, this.name);
 
     const prepBrief = getPrepBrief(this.id);
@@ -80,8 +97,8 @@ export class Session {
       } catch (err: any) {
         console.error(`[storage] failed to persist trailing segment for session ${this.id}:`, err.message);
       }
-      if (config.sentimentEnabled) this.scoreSentiment(segment);
-      if (config.triggerDetectionEnabled) {
+      if (config.sentimentEnabled && isFeatureActive(this.activeFeatures, 'sentiment')) this.scoreSentiment(segment);
+      if (config.triggerDetectionEnabled && isFeatureActive(this.activeFeatures, 'triggers')) {
         this.triggerDetector.onFinalSegment(segment).catch((err: any) => {
           console.error(`[triggers] unexpected failure for session ${this.id}:`, err.message);
         });
@@ -93,7 +110,7 @@ export class Session {
           this.checkAnticipatedAnswer(segment);
         }
       }
-      if (config.meetingStateEnabled && config.geminiApiKey) {
+      if (config.meetingStateEnabled && config.geminiApiKey && isFeatureActive(this.activeFeatures, 'meetingState')) {
         this.segmentsSinceStateUpdate++;
         if (this.segmentsSinceStateUpdate >= config.meetingStateUpdateEverySegments) {
           this.segmentsSinceStateUpdate = 0;
@@ -106,7 +123,7 @@ export class Session {
     });
     this.triggerDetector.on('trigger', (event: TriggerEvent, segmentText: string) => {
       this.ui.broadcastTrigger(event);
-      if (config.ragEnabled && config.geminiApiKey) this.generateAndBroadcastSuggestion(event, segmentText);
+      if (config.ragEnabled && config.geminiApiKey && isFeatureActive(this.activeFeatures, 'rag')) this.generateAndBroadcastSuggestion(event, segmentText);
       if (event.category === 'factual_claim') {
         if (isAnyFactCheckSourceConfigured() && config.geminiApiKey) {
           this.runFactCheck(event, segmentText);
@@ -154,7 +171,7 @@ export class Session {
     this.triggerDetector.stop();
     console.log(`Session ${this.id} stopped.`);
 
-    if (config.ragEnabled && config.geminiApiKey) {
+    if (config.ragEnabled && config.geminiApiKey && isFeatureActive(this.activeFeatures, 'rag')) {
       // StreamManager may still deliver a trailing final result for already-buffered
       // audio for a moment after stop() returns (same pattern as elsewhere in this
       // file) — wait briefly so indexing captures the complete transcript, not a

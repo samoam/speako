@@ -14,6 +14,8 @@ test('coachingRepository: save then get round-trips all fields including JSON ar
     talkTimeRatio: 0.62,
     fillerWordCount: 7,
     fillerWordExamples: ['um, so basically', 'like, you know'],
+    youInterruptedOthersCount: 2,
+    othersInterruptedYouCount: 1,
     feedbackPoints: [
       { category: 'clarity' as const, observation: 'obs', quote: 'a quote', suggestion: 'do this' },
       { category: 'talk_time' as const, observation: 'obs2', quote: null, suggestion: 'do that' },
@@ -28,13 +30,29 @@ test('coachingRepository: save then get round-trips all fields including JSON ar
   assert.equal(fetched!.talkTimeRatio, 0.62);
   assert.equal(fetched!.fillerWordCount, 7);
   assert.deepEqual(fetched!.fillerWordExamples, input.fillerWordExamples);
+  assert.equal(fetched!.youInterruptedOthersCount, 2);
+  assert.equal(fetched!.othersInterruptedYouCount, 1);
   assert.deepEqual(fetched!.feedbackPoints, input.feedbackPoints);
 });
 
 test('coachingRepository: saving again for the same session upserts rather than duplicating', () => {
   createSession('cr-upsert', ['en-US'], 'Upsert', { sessionType: 'personal' });
-  saveCoachingFeedback('cr-upsert', { talkTimeRatio: 0.5, fillerWordCount: 1, fillerWordExamples: [], feedbackPoints: [] });
-  saveCoachingFeedback('cr-upsert', { talkTimeRatio: 0.9, fillerWordCount: 9, fillerWordExamples: ['x'], feedbackPoints: [] });
+  saveCoachingFeedback('cr-upsert', {
+    talkTimeRatio: 0.5,
+    fillerWordCount: 1,
+    fillerWordExamples: [],
+    youInterruptedOthersCount: 0,
+    othersInterruptedYouCount: 0,
+    feedbackPoints: [],
+  });
+  saveCoachingFeedback('cr-upsert', {
+    talkTimeRatio: 0.9,
+    fillerWordCount: 9,
+    fillerWordExamples: ['x'],
+    youInterruptedOthersCount: 3,
+    othersInterruptedYouCount: 2,
+    feedbackPoints: [],
+  });
 
   const fetched = getCoachingFeedback('cr-upsert');
   assert.equal(fetched!.talkTimeRatio, 0.9);

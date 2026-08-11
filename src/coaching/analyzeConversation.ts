@@ -1,8 +1,10 @@
 import { config } from '../config';
 import { toPlainText } from '../transcriptFormat';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
 import { getSegmentsForSession } from '../storage/segmentRepository';
 import { FeedbackPoint } from '../storage/coachingRepository';
+import { TranscriptSegment } from '../types';
 
 const FILLER_WORD_REGEX = /\b(um+|uh+|like|you know|sort of|kind of|basically|actually|i mean)\b/gi;
 const MAX_FILLER_EXAMPLES = 3;
@@ -43,7 +45,42 @@ export interface AnalyzedConversation {
   talkTimeRatio: number;
   fillerWordCount: number;
   fillerWordExamples: string[];
+  youInterruptedOthersCount: number;
+  othersInterruptedYouCount: number;
   feedbackPoints: FeedbackPoint[];
+}
+
+/**
+ * Deterministic cross-talk count from the two channel-based speaker streams
+ * ('You' mic channel, 'Others' system-audio channel — see types.ts). Within
+ * one speaker's own stream, finalized segments are monotonic/non-overlapping
+ * (confirmed in streamManager.ts), so any segment that starts before the
+ * OTHER speaker's most recent segment has ended is genuine cross-talk: sort
+ * both streams together by startMs and sweep, tracking each speaker's latest
+ * endMs seen so far. Silently ignores any other speaker label (post-
+ * diarization 'Speaker N' sessions) since only two channels can overlap here.
+ */
+export function countInterruptions(segments: TranscriptSegment[]): {
+  youInterruptedOthersCount: number;
+  othersInterruptedYouCount: number;
+} {
+  const relevant = segments.filter((s) => s.speaker === 'You' || s.speaker === 'Others').sort((a, b) => a.startMs - b.startMs);
+
+  const lastEndMs: Record<'You' | 'Others', number> = { You: -Infinity, Others: -Infinity };
+  let youInterruptedOthersCount = 0;
+  let othersInterruptedYouCount = 0;
+
+  for (const segment of relevant) {
+    const speaker = segment.speaker as 'You' | 'Others';
+    const other = speaker === 'You' ? 'Others' : 'You';
+    if (segment.startMs < lastEndMs[other]) {
+      if (speaker === 'You') youInterruptedOthersCount++;
+      else othersInterruptedYouCount++;
+    }
+    lastEndMs[speaker] = Math.max(lastEndMs[speaker], segment.endMs);
+  }
+
+  return { youInterruptedOthersCount, othersInterruptedYouCount };
 }
 
 /**
@@ -78,8 +115,10 @@ export async function analyzeConversation(sessionId: string): Promise<AnalyzedCo
     }
   }
 
+  const { youInterruptedOthersCount, othersInterruptedYouCount } = countInterruptions(segments);
+
   if (!config.geminiApiKey) {
-    return { talkTimeRatio, fillerWordCount, fillerWordExamples, feedbackPoints: [] };
+    return { talkTimeRatio, fillerWordCount, fillerWordExamples, youInterruptedOthersCount, othersInterruptedYouCount, feedbackPoints: [] };
   }
 
   try {
@@ -87,17 +126,24 @@ export async function analyzeConversation(sessionId: string): Promise<AnalyzedCo
     const response = await getGeminiClient().models.generateContent({
       model: config.geminiModel,
       contents: `${COACHING_PROMPT}\n\nTranscript:\n${transcript}`,
-      config: { responseMimeType: 'application/json', responseSchema: COACHING_SCHEMA },
+      // thinkingBudget: 0 (fully disabled) is currently rejected with a 400 by
+      // gemini-flash-latest — confirmed via direct API testing; 1 is the
+      // smallest budget this model still accepts, so it's the closest
+      // available approximation of "disabled" until that changes.
+      config: { responseMimeType: 'application/json', responseSchema: COACHING_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
     });
+    logGeminiUsage('analyzeConversation', response);
     const parsed = JSON.parse(response.text ?? '{}');
     return {
       talkTimeRatio,
       fillerWordCount,
       fillerWordExamples,
+      youInterruptedOthersCount,
+      othersInterruptedYouCount,
       feedbackPoints: (parsed.feedbackPoints ?? []).map((p: any) => ({ ...p, quote: p.quote ?? null })),
     };
   } catch (err: any) {
     console.error(`[coaching] feedback generation failed for session ${sessionId}:`, err.message);
-    return { talkTimeRatio, fillerWordCount, fillerWordExamples, feedbackPoints: [] };
+    return { talkTimeRatio, fillerWordCount, fillerWordExamples, youInterruptedOthersCount, othersInterruptedYouCount, feedbackPoints: [] };
   }
 }

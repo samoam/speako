@@ -45,3 +45,24 @@ export function getSentimentScoresForSession(sessionId: string): SentimentScore[
 export function deleteSentimentScoresForSession(sessionId: string): void {
   db.prepare('DELETE FROM sentiment_scores WHERE session_id = ?').run(sessionId);
 }
+
+export interface SessionSentimentAverage {
+  sessionId: string;
+  avgScore: number;
+  scoreCount: number;
+}
+
+/** One grouped query across every session in a series, rather than one query per session — used by src/insights/relationshipTrend.ts. Sessions with no sentiment rows (feature disabled, or no config.geminiApiKey at the time) are simply absent from the result, not zeroed. */
+export function getAverageSentimentPerSession(sessionIds: string[]): SessionSentimentAverage[] {
+  if (sessionIds.length === 0) return [];
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT session_id, AVG(score) AS avg_score, COUNT(*) AS score_count
+       FROM sentiment_scores
+       WHERE session_id IN (${placeholders})
+       GROUP BY session_id`
+    )
+    .all(...sessionIds) as { session_id: string; avg_score: number; score_count: number }[];
+  return rows.map((r) => ({ sessionId: r.session_id, avgScore: r.avg_score, scoreCount: r.score_count }));
+}

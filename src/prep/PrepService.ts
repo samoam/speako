@@ -1,3 +1,4 @@
+import { config } from '../config';
 import { createPrepBrief } from '../storage/prepBriefRepository';
 import { findLikelyPreviousSession, setPrepStatus } from '../storage/segmentRepository';
 import { seedMeetingState } from '../state/meetingState';
@@ -5,6 +6,8 @@ import { MeetingType } from './meetingTypes';
 import { getWorkflow } from './workflows';
 import { synthesizeBrief } from './synthesizeBrief';
 import { anticipateQA } from './anticipateQA';
+import { buildRawContextBlock } from './rawContext';
+import { createSharedCache } from '../gemini/contextCache';
 
 export interface RunPrepParams {
   sessionId: string;
@@ -39,9 +42,15 @@ export async function runPrep(params: RunPrepParams): Promise<void> {
     const workflow = getWorkflow(meetingType);
     const { sources } = await workflow({ sessionId, sessionName, userNotes, meetingType, previousSession, activeTools });
 
+    // synthesizeBrief and anticipateQA both send the identical raw-sources
+    // block — share one Gemini context cache between them instead of each
+    // sending it inline twice.
+    const rawBlock = buildRawContextBlock(sources);
+    const cachedRawContent = (await createSharedCache(config.geminiModel, rawBlock)) ?? undefined;
+
     const [briefText, anticipatedQa] = await Promise.all([
-      synthesizeBrief(meetingType, sessionName, sources, userNotes),
-      anticipateQA(meetingType, sessionName, sources, userNotes),
+      synthesizeBrief(meetingType, sessionName, sources, userNotes, cachedRawContent),
+      anticipateQA(meetingType, sessionName, sources, userNotes, cachedRawContent),
     ]);
     const succeeded = sources.length > 0 || hasUserNotes;
 

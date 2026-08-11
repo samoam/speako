@@ -3,6 +3,8 @@ import { TranscriptSegment } from '../types';
 import { toPlainText } from '../transcriptFormat';
 import { NewActionItem } from '../storage/summaryRepository';
 import { getGeminiClient } from '../gemini/geminiClient';
+import { logGeminiUsage } from '../gemini/logUsage';
+import { createSharedCache } from '../gemini/contextCache';
 
 const SUMMARY_SYSTEM_PROMPT = `You are an expert meeting assistant. You will be given a speaker-labeled
 transcript of a recorded conversation or meeting. Produce a concise but comprehensive summary.
@@ -17,8 +19,13 @@ const SUMMARY_SCHEMA = {
     keyDecisions: { type: 'string', description: 'Decisions actually made during the conversation.' },
     discussionTopics: { type: 'string', description: 'Main topics discussed, grouped by theme.' },
     nextSteps: { type: 'string', description: 'What happens next, at a high level (detailed commitments go in action items separately).' },
+    topics: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Short 2-4 word topic tags capturing the main themes discussed, for cross-meeting topic tracking. 2-6 tags, no duplicates.',
+    },
   },
-  required: ['overview', 'keyDecisions', 'discussionTopics', 'nextSteps'],
+  required: ['overview', 'keyDecisions', 'discussionTopics', 'nextSteps', 'topics'],
 };
 
 const ACTION_ITEMS_SYSTEM_PROMPT = `You are an expert meeting assistant extracting action items from a
@@ -30,18 +37,28 @@ statements, hypotheticals, and things that were merely discussed but not committ
   or "inferred" if implied by the discussion but not directly committed to.
 Return an empty array if there are no genuine action items — do not invent any.`;
 
+// Object-wrapped, not a bare top-level array — a bare `type:'array'` responseSchema
+// was confirmed to trigger a real 400 INVALID_ARGUMENT from the live Gemini API
+// (found via e2e testing, not caught by mocked unit tests), so every schema in
+// this app wraps its list in a named object property instead.
 const ACTION_ITEMS_SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      owner: { type: 'string', nullable: true },
-      description: { type: 'string' },
-      dueDate: { type: 'string', nullable: true },
-      confidence: { type: 'string', enum: ['explicit', 'inferred'] },
+  type: 'object',
+  properties: {
+    actionItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', nullable: true },
+          description: { type: 'string' },
+          dueDate: { type: 'string', nullable: true },
+          confidence: { type: 'string', enum: ['explicit', 'inferred'] },
+        },
+        required: ['description', 'confidence'],
+      },
     },
-    required: ['description', 'confidence'],
   },
+  required: ['actionItems'],
 };
 
 export interface GeneratedSummary {
@@ -49,38 +66,74 @@ export interface GeneratedSummary {
   keyDecisions: string;
   discussionTopics: string;
   nextSteps: string;
+  topics: string[];
   modelUsed: string;
 }
 
-/** Two separate calls (summary, action items) rather than one combined prompt — improves precision on each. */
+/** transcriptOrCache: pass a cachedContent resource name (from createSharedCache) to avoid resending the transcript, or the raw transcript string to send it inline. */
+async function summarizeSessionFrom(transcriptOrCache: { transcript: string } | { cachedContent: string }): Promise<GeneratedSummary> {
+  const response = await getGeminiClient().models.generateContent({
+    model: config.geminiModel,
+    contents: 'cachedContent' in transcriptOrCache ? SUMMARY_SYSTEM_PROMPT : `${SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n${transcriptOrCache.transcript}`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: SUMMARY_SCHEMA,
+      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
+      thinkingConfig: { thinkingBudget: 1 },
+      ...('cachedContent' in transcriptOrCache ? { cachedContent: transcriptOrCache.cachedContent } : {}),
+    },
+  });
+  logGeminiUsage('summarizeSession', response);
+  const parsed = JSON.parse(response.text ?? '{}');
+  return { ...parsed, topics: parsed.topics ?? [], modelUsed: config.geminiModel };
+}
+
+async function extractActionItemsFrom(transcriptOrCache: { transcript: string } | { cachedContent: string }): Promise<NewActionItem[]> {
+  const response = await getGeminiClient().models.generateContent({
+    model: config.geminiModel,
+    contents: 'cachedContent' in transcriptOrCache ? ACTION_ITEMS_SYSTEM_PROMPT : `${ACTION_ITEMS_SYSTEM_PROMPT}\n\nTranscript:\n${transcriptOrCache.transcript}`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: ACTION_ITEMS_SCHEMA,
+      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
+      thinkingConfig: { thinkingBudget: 1 },
+      ...('cachedContent' in transcriptOrCache ? { cachedContent: transcriptOrCache.cachedContent } : {}),
+    },
+  });
+  logGeminiUsage('extractActionItems', response);
+  const parsed = JSON.parse(response.text ?? '{}');
+  return (parsed.actionItems ?? []) as NewActionItem[];
+}
+
 export async function summarizeSession(segments: TranscriptSegment[]): Promise<GeneratedSummary> {
   if (!config.geminiApiKey) {
     throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
   }
-  const transcript = toPlainText(segments);
-
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: `${SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`,
-    config: { responseMimeType: 'application/json', responseSchema: SUMMARY_SCHEMA },
-  });
-
-  const parsed = JSON.parse(response.text ?? '{}');
-  return { ...parsed, modelUsed: config.geminiModel };
+  return summarizeSessionFrom({ transcript: toPlainText(segments) });
 }
 
 export async function extractActionItems(segments: TranscriptSegment[]): Promise<NewActionItem[]> {
   if (!config.geminiApiKey) {
     throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
   }
+  return extractActionItemsFrom({ transcript: toPlainText(segments) });
+}
+
+/**
+ * Runs summarizeSession + extractActionItems together, sharing one explicit
+ * Gemini cache for the (potentially large) transcript both calls would
+ * otherwise send in full — cached reads bill at ~10% of normal input price.
+ * Falls back to sending the transcript inline to both (today's behavior) if
+ * the transcript's too short to be worth caching or cache creation fails for
+ * any reason. Preferred over calling summarizeSession/extractActionItems
+ * separately when both are needed, which is every real call site today.
+ */
+export async function summarizeAndExtractActionItems(segments: TranscriptSegment[]): Promise<[GeneratedSummary, NewActionItem[]]> {
+  if (!config.geminiApiKey) {
+    throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+  }
   const transcript = toPlainText(segments);
-
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: `${ACTION_ITEMS_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`,
-    config: { responseMimeType: 'application/json', responseSchema: ACTION_ITEMS_SCHEMA },
-  });
-
-  const parsed = JSON.parse(response.text ?? '[]');
-  return parsed as NewActionItem[];
+  const cachedContent = await createSharedCache(config.geminiModel, transcript);
+  const source = cachedContent ? { cachedContent } : { transcript };
+  return Promise.all([summarizeSessionFrom(source), extractActionItemsFrom(source)]);
 }
