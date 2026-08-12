@@ -75,6 +75,26 @@ import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../stora
 import { isMsGraphConfigured } from '../integrations/msGraphAuth';
 import { syncOutlookAndTeams } from '../integrations/msGraphSync';
 import { isOutlookDesktopConfigured, syncOutlookDesktop } from '../integrations/outlookDesktop';
+import {
+  isClaudeCodeConfigured,
+  resolveLocalRepoPath,
+  startClaudeCodeTask,
+  getTaskInfo,
+  getWorktreeDiff,
+  applyCodeChangeToRepo,
+  pushRepoChanges,
+  discardCodeChangeTask,
+} from '../integrations/claudeCodeCli';
+import {
+  createCodeChangeRequest,
+  getCodeChangeRequest,
+  getLatestCodeChangeRequestForActionItem,
+  markCodeChangeReady,
+  markCodeChangeFailed,
+  markCodeChangeApplied,
+  markCodeChangePushed,
+  markCodeChangeDiscarded,
+} from '../storage/codeChangeRequestRepository';
 
 const SETTINGS_FIELDS = [
   'geminiApiKey',
@@ -745,6 +765,141 @@ export class InterfaceServer {
       res.json(updated);
     });
 
+    // "Implement with Claude Code" — some action items are code changes, not
+    // just meeting follow-ups. Launches a background Claude Code CLI agent
+    // in an isolated git worktree (never the repo's real working directory)
+    // to make the edit; git commit/push are hard-blocked inside that agent
+    // (see claudeCodeCli.ts's DISALLOWED_TOOLS) — approving/pushing are
+    // separate, later, explicit steps below, never automatic.
+    app.post('/api/action-items/:id/implement', async (req, res) => {
+      const actionItemId = Number(req.params.id);
+      const item = getActionItem(actionItemId);
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      const existing = getLatestCodeChangeRequestForActionItem(actionItemId);
+      if (existing && existing.status === 'running') {
+        res.json({ started: false, alreadyRunning: true, requestId: existing.id });
+        return;
+      }
+      if (!isClaudeCodeConfigured()) {
+        res.status(400).json({ error: 'No local codebase configured — see Settings > Local codebase indexing.' });
+        return;
+      }
+      const configuredRepos = config.codebaseLocalPaths;
+      const repoName =
+        typeof req.body?.repoName === 'string' && req.body.repoName
+          ? req.body.repoName
+          : configuredRepos.length === 1
+            ? configuredRepos[0].name
+            : null;
+      if (!repoName) {
+        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
+        return;
+      }
+      let repoPath: string;
+      try {
+        repoPath = resolveLocalRepoPath(repoName);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+
+      try {
+        const prompt = `Implement this action item from a meeting. Description: ${item.description}${item.owner ? ` (owner: ${item.owner})` : ''}`;
+        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath);
+        const request = createCodeChangeRequest({ actionItemId, sessionId: item.sessionId, repoName, repoPath, cliSessionId });
+        this.pollCodeChangeRequest(request.id).catch((err: any) => console.error('[claude-code] polling failed:', err.message));
+        this.broadcast({ type: 'code-change-started', actionItemId, requestId: request.id });
+        res.json({ started: true, requestId: request.id });
+      } catch (err: any) {
+        console.error('[claude-code] failed to start task:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/action-items/:id/code-change', (req, res) => {
+      const actionItemId = Number(req.params.id);
+      const request = getLatestCodeChangeRequestForActionItem(actionItemId);
+      res.json(request ?? null);
+    });
+
+    app.post('/api/code-change-requests/:id/approve', async (req, res) => {
+      const id = Number(req.params.id);
+      const request = getCodeChangeRequest(id);
+      if (!request) {
+        res.status(404).json({ error: 'Unknown code change request.' });
+        return;
+      }
+      if (request.status !== 'ready') {
+        res.status(400).json({ error: `Cannot approve a request in status "${request.status}" — must be "ready".` });
+        return;
+      }
+      try {
+        const actionItem = getActionItem(request.actionItemId);
+        const commitMessage = `Implement: ${(actionItem?.description ?? 'action item').slice(0, 200)}`;
+        await applyCodeChangeToRepo(request.diff ?? '', request.repoPath, commitMessage);
+        markCodeChangeApplied(id);
+        this.broadcast({ type: 'code-change-applied', actionItemId: request.actionItemId, requestId: id });
+        res.json(getCodeChangeRequest(id));
+      } catch (err: any) {
+        console.error('[claude-code] approve failed:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Deliberately separate from /approve — commit and push are two
+    // distinct gates a human has to click through, not one bundled action.
+    app.post('/api/code-change-requests/:id/push', async (req, res) => {
+      const id = Number(req.params.id);
+      const request = getCodeChangeRequest(id);
+      if (!request) {
+        res.status(404).json({ error: 'Unknown code change request.' });
+        return;
+      }
+      if (request.status !== 'applied') {
+        res.status(400).json({ error: `Cannot push a request in status "${request.status}" — must be "applied" first.` });
+        return;
+      }
+      try {
+        await pushRepoChanges(request.repoPath);
+        markCodeChangePushed(id);
+        this.broadcast({ type: 'code-change-pushed', actionItemId: request.actionItemId, requestId: id });
+        res.json(getCodeChangeRequest(id));
+      } catch (err: any) {
+        console.error('[claude-code] push failed:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/code-change-requests/:id/discard', async (req, res) => {
+      const id = Number(req.params.id);
+      const request = getCodeChangeRequest(id);
+      if (!request) {
+        res.status(404).json({ error: 'Unknown code change request.' });
+        return;
+      }
+      if (request.status === 'applied' || request.status === 'pushed' || request.status === 'discarded') {
+        res.status(400).json({ error: `Cannot discard a request in status "${request.status}".` });
+        return;
+      }
+      try {
+        let worktreePath = request.worktreePath;
+        if (!worktreePath) {
+          const info = await getTaskInfo(request.cliSessionId);
+          worktreePath = info?.cwd ?? null;
+        }
+        if (worktreePath) await discardCodeChangeTask(request.cliSessionId, worktreePath, request.repoPath);
+        markCodeChangeDiscarded(id);
+        this.broadcast({ type: 'code-change-discarded', actionItemId: request.actionItemId, requestId: id });
+        res.json(getCodeChangeRequest(id));
+      } catch (err: any) {
+        console.error('[claude-code] discard failed:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     app.delete('/api/sessions/:id', async (req, res) => {
       const sessionId = req.params.id;
       if (!getSession(sessionId)) {
@@ -1235,6 +1390,72 @@ export class InterfaceServer {
       .finally(() => {
         this.msGraphSyncInProgress = false;
       });
+  }
+
+  /**
+   * Polls `claude agents --json` (see claudeCodeCli.ts's getTaskInfo) every
+   * 10s until the background agent reaches a terminal state, capped at 20
+   * minutes so a runaway/stuck task can't poll forever.
+   *
+   * 'blocked' is NOT a reliable failure signal on its own — confirmed via a
+   * real smoke test: an agent that finishes editing and then tries the
+   * (intentionally denied) `git commit` also ends up in state 'blocked',
+   * even though the edit itself succeeded and is exactly the diff we want
+   * to offer for approval. So 'done' and 'blocked' are both treated as
+   * "may have produced a usable diff" — the actual failure test is whether
+   * getWorktreeDiff() comes back empty, not the state string itself.
+   * 'stopped'/'failed'/'error' still fail immediately since there is
+   * nothing to double-check a diff against there.
+   */
+  private async pollCodeChangeRequest(requestId: number): Promise<void> {
+    const POLL_INTERVAL_MS = 10_000;
+    const MAX_ATTEMPTS = 120; // 20 minutes
+    const MAYBE_DONE_STATES = ['done', 'blocked'];
+    const FAILURE_STATES = ['stopped', 'failed', 'error'];
+
+    const request = getCodeChangeRequest(requestId);
+    if (!request) return;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      let info;
+      try {
+        info = await getTaskInfo(request.cliSessionId);
+      } catch (err: any) {
+        console.error(`[claude-code] status check failed for request ${requestId}:`, err.message);
+        continue; // transient CLI hiccup — keep trying rather than failing the whole task on one bad poll
+      }
+      if (!info) continue; // not registered yet, or briefly missing — keep polling
+
+      if (MAYBE_DONE_STATES.includes(info.state)) {
+        try {
+          const diff = await getWorktreeDiff(info.cwd);
+          if (!diff.trim()) {
+            const error = `Claude Code agent ended in state "${info.state}" with no file changes — check \`claude logs ${request.cliSessionId}\` for details.`;
+            markCodeChangeFailed(requestId, error);
+            this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error });
+            return;
+          }
+          markCodeChangeReady(requestId, info.cwd, diff);
+          this.broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, requestId });
+        } catch (err: any) {
+          markCodeChangeFailed(requestId, err.message);
+          this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error: err.message });
+        }
+        return;
+      }
+      if (FAILURE_STATES.includes(info.state)) {
+        const error = `Claude Code agent ended in state "${info.state}" — check \`claude logs ${request.cliSessionId}\` for details.`;
+        markCodeChangeFailed(requestId, error);
+        this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error });
+        return;
+      }
+      // else: still running (or an unrecognized-but-non-terminal status) — keep polling
+    }
+
+    const timeoutError = 'Timed out waiting for the Claude Code agent after 20 minutes.';
+    markCodeChangeFailed(requestId, timeoutError);
+    this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error: timeoutError });
   }
 
   /** Safety net, not a UX feature — see config.voiceSessionIdleTimeoutMs. */

@@ -223,6 +223,17 @@ Once ready, the session card shows a **Start recording** button. The brief itsel
 
 The sidebar's session list is split into three tabs by `session_kind`: **Meetings** (real recordings), **Practice** (roleplay runs against a prep brief), and **Chat** (ad-hoc voice-chat sessions). Both voice chat and practice now persist a real session + transcript (previously chat was fully ephemeral — nothing was saved), so both show up in history and can be reopened to view their transcript, same as any recorded meeting. Practice sessions still get coaching feedback on stop, same as before; chat sessions don't (there's nothing to score — it's a Q&A log, not a roleplay).
 
+#### Implement with Claude Code (action items)
+
+Some action items are code changes, not just meeting follow-ups. Each action item in the **Action Items** tab gets an **Implement with Claude Code** button that launches a background [Claude Code](https://claude.com/claude-code) CLI agent to make the actual change — requires the `claude` CLI installed and at least one repo configured in `CODEBASE_LOCAL_PATHS` (see "Local codebase indexing" below; if more than one is configured, pass `repoName` in the request body to pick which).
+
+**Safety model, not just a convenience feature**: the agent runs in a freshly created, isolated git worktree (`claude --worktree`) — never your repo's actual working directory — with file edits allowed but `git commit`/`git push` explicitly denied (`--disallowedTools "Bash(git commit:*)" "Bash(git push:*)"`), confirmed by direct testing: asking the agent to edit a file *and* commit it resulted in the edit landing but the commit being flatly rejected. Once the agent finishes, Speako shows you the diff — nothing is applied automatically. You get two separate, explicit approval steps:
+
+1. **Approve & Commit** — applies the diff to the real repo and commits it there (Speako's own action, not the agent's).
+2. **Push** — a distinct second click, only enabled after committing. Nothing ever reaches a remote without this.
+
+You can also **Discard** a change before or after review, which force-removes the worktree and throws the changes away. Background progress and results are broadcast live over the existing WebSocket, so the row updates in place — no polling needed on the frontend.
+
 #### Pull request reviews (Bitbucket Server)
 
 Beyond commit/file search, Speako can also check **your own pull request activity** — uses the same `BITBUCKET_SERVER_*` credentials, no extra setup. It surfaces three things: open PRs where you're a requested reviewer (with your current approval status), comments on pull requests you authored, and comments that @-mention your Bitbucket username anywhere you're already involved (as author or reviewer). Available as a voice-chat/practice tool ("My PR reviews" in Settings > Voice chat tools) and as an extra source in Sprint Planning/Sprint Review prep. Note: Bitbucket Server has no global cross-repo comment search, so "mentioned in comments" is scoped to PRs you're already touching, not every PR on the server — a real limitation, not a bug.

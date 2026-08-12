@@ -53,6 +53,28 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_action_items_session ON action_items(session_id);
 
+  -- Tracks a background Claude Code CLI run ("Implement with Claude Code")
+  -- for a specific action item — see src/integrations/claudeCodeCli.ts.
+  -- diff is captured once at 'ready' time and reused for the later approve
+  -- step, so approval still works even after the worktree itself is cleaned
+  -- up. status: 'running' | 'ready' | 'applied' | 'pushed' | 'discarded' | 'failed'.
+  CREATE TABLE IF NOT EXISTS code_change_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_item_id INTEGER NOT NULL REFERENCES action_items(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    repo_name TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    cli_session_id TEXT NOT NULL,
+    worktree_path TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    diff TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_code_change_requests_action_item ON code_change_requests(action_item_id);
+
   CREATE TABLE IF NOT EXISTS sentiment_scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),

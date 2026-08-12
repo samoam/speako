@@ -550,6 +550,14 @@
     .ai-badge { font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px; text-transform: uppercase; }
     .ai-badge.explicit { background: #1c3a2a; color: var(--ok); }
     .ai-badge.inferred { background: #3a331c; color: #e0b84a; }
+    .cc-cell { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; min-width: 160px; }
+    .cc-cell button { font-size: 0.76rem; padding: 0.25rem 0.55rem; }
+    .cc-status { font-size: 0.8rem; color: var(--muted); }
+    .cc-status.cc-error { color: var(--rec); }
+    .cc-diff {
+      max-width: 480px; max-height: 300px; overflow: auto; background: #0b0b0d; border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.76rem; white-space: pre-wrap; word-break: break-all;
+    }
     #emptyState { color: var(--muted); font-size: 0.95rem; margin-top: 2rem; text-align: center; }
     /* Chat-bubble alignment: "You" bubbles right-aligned/accent-tinted, everyone else left-aligned. */
     .segment { display: flex; gap: 0.65rem; margin: 0.9rem 0; line-height: 1.5; max-width: 760px; }
@@ -2629,6 +2637,125 @@
         `<div class="summary-meta">Generated ${toDate(summary.generatedAt)?.toLocaleString() || ''} · ${summary.modelUsed}</div>`;
     }
 
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text ?? '';
+      return div.innerHTML;
+    }
+
+    // ---------- "Implement with Claude Code" (per action item) ----------
+    // Some action items are code changes, not just meeting follow-ups. Each
+    // cell's state is fetched independently (GET .../code-change) since only
+    // a handful of action items exist per session — not worth a bulk endpoint.
+
+    function codeChangeCellHtml(request) {
+      if (!request) {
+        return '<button class="cc-implement-btn">Implement with Claude Code</button>';
+      }
+      if (request.status === 'running') {
+        return '<span class="cc-status">Running…</span>';
+      }
+      if (request.status === 'ready') {
+        return `
+          <span class="cc-status">Ready for review</span>
+          <button class="cc-view-diff-btn">View diff</button>
+          <button class="cc-approve-btn">Approve &amp; Commit</button>
+          <button class="cc-discard-btn">Discard</button>
+          <pre class="cc-diff" hidden>${escapeHtml(request.diff || '(no changes)')}</pre>
+        `;
+      }
+      if (request.status === 'applied') {
+        return '<span class="cc-status">Committed ✓ (not pushed)</span><button class="cc-push-btn">Push</button>';
+      }
+      if (request.status === 'pushed') {
+        return '<span class="cc-status">Pushed ✓</span>';
+      }
+      if (request.status === 'failed') {
+        return `<span class="cc-status cc-error">Failed: ${escapeHtml(request.error || 'unknown error')}</span><button class="cc-implement-btn">Retry</button>`;
+      }
+      if (request.status === 'discarded') {
+        return '<span class="cc-status">Discarded</span><button class="cc-implement-btn">Retry</button>';
+      }
+      return '';
+    }
+
+    function wireCodeChangeCell(cell, actionItemId) {
+      const implementBtn = cell.querySelector('.cc-implement-btn');
+      if (implementBtn) {
+        implementBtn.addEventListener('click', async () => {
+          implementBtn.disabled = true;
+          cell.innerHTML = '<span class="cc-status">Starting…</span>';
+          try {
+            const res = await fetch(`/api/action-items/${actionItemId}/implement`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const body = await res.json();
+            if (!res.ok) {
+              cell.innerHTML = `<span class="cc-status cc-error">${escapeHtml(body.error || 'Failed to start.')}</span><button class="cc-implement-btn">Retry</button>`;
+              wireCodeChangeCell(cell, actionItemId);
+              return;
+            }
+          } catch (err) {
+            cell.innerHTML = `<span class="cc-status cc-error">${escapeHtml(err.message)}</span><button class="cc-implement-btn">Retry</button>`;
+            wireCodeChangeCell(cell, actionItemId);
+            return;
+          }
+          refreshCodeChangeCell(actionItemId);
+        });
+      }
+      const viewDiffBtn = cell.querySelector('.cc-view-diff-btn');
+      const diffEl = cell.querySelector('.cc-diff');
+      if (viewDiffBtn && diffEl) {
+        viewDiffBtn.addEventListener('click', () => {
+          diffEl.hidden = !diffEl.hidden;
+          viewDiffBtn.textContent = diffEl.hidden ? 'View diff' : 'Hide diff';
+        });
+      }
+      const approveBtn = cell.querySelector('.cc-approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', async () => {
+          approveBtn.disabled = true;
+          const requestId = await currentRequestIdFor(actionItemId);
+          const res = await fetch(`/api/code-change-requests/${requestId}/approve`, { method: 'POST' });
+          const body = await res.json();
+          if (!res.ok) { alert(`Could not commit: ${body.error}`); approveBtn.disabled = false; return; }
+          refreshCodeChangeCell(actionItemId);
+        });
+      }
+      const discardBtn = cell.querySelector('.cc-discard-btn');
+      if (discardBtn) {
+        discardBtn.addEventListener('click', async () => {
+          if (!confirm('Discard this Claude Code change? The worktree and its changes will be deleted.')) return;
+          discardBtn.disabled = true;
+          const requestId = await currentRequestIdFor(actionItemId);
+          await fetch(`/api/code-change-requests/${requestId}/discard`, { method: 'POST' });
+          refreshCodeChangeCell(actionItemId);
+        });
+      }
+      const pushBtn = cell.querySelector('.cc-push-btn');
+      if (pushBtn) {
+        pushBtn.addEventListener('click', async () => {
+          pushBtn.disabled = true;
+          const requestId = await currentRequestIdFor(actionItemId);
+          const res = await fetch(`/api/code-change-requests/${requestId}/push`, { method: 'POST' });
+          const body = await res.json();
+          if (!res.ok) { alert(`Could not push: ${body.error}`); pushBtn.disabled = false; return; }
+          refreshCodeChangeCell(actionItemId);
+        });
+      }
+    }
+
+    async function currentRequestIdFor(actionItemId) {
+      const request = await fetch(`/api/action-items/${actionItemId}/code-change`).then((r) => r.json());
+      return request?.id;
+    }
+
+    async function refreshCodeChangeCell(actionItemId) {
+      const cell = actionItemsContent.querySelector(`tr[data-id="${actionItemId}"] .cc-cell`);
+      if (!cell) return;
+      const request = await fetch(`/api/action-items/${actionItemId}/code-change`).then((r) => r.json());
+      cell.innerHTML = codeChangeCellHtml(request);
+      wireCodeChangeCell(cell, actionItemId);
+    }
+
     function renderActionItems(items) {
       currentActionItems = items;
       if (!items.length) {
@@ -2644,13 +2771,14 @@
           <td>${item.description}</td>
           <td>${item.dueDate || 'TBD'}</td>
           <td><span class="ai-badge ${item.confidence}">${item.confidence}</span></td>
+          <td class="cc-cell"><button class="cc-implement-btn">Implement with Claude Code</button></td>
         </tr>
       `
         )
         .join('');
       actionItemsContent.innerHTML = `
         <table class="ai-table">
-          <thead><tr><th></th><th>Owner</th><th>Task</th><th>Due</th><th>Confidence</th></tr></thead>
+          <thead><tr><th></th><th>Owner</th><th>Task</th><th>Due</th><th>Confidence</th><th>Code change</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
@@ -2670,6 +2798,9 @@
           });
         });
       });
+      for (const item of items) {
+        refreshCodeChangeCell(item.id);
+      }
     }
 
     // ---------- Triggers (raw detection log) ----------
@@ -3379,6 +3510,15 @@
         } else if (msg.type === 'communications-index-complete') {
           indexCommunicationsBtn.disabled = false;
           communicationsIndexStatus.textContent = formatCommunicationsSummary(msg.sources);
+        } else if (
+          msg.type === 'code-change-started' ||
+          msg.type === 'code-change-ready' ||
+          msg.type === 'code-change-applied' ||
+          msg.type === 'code-change-pushed' ||
+          msg.type === 'code-change-discarded' ||
+          msg.type === 'code-change-failed'
+        ) {
+          refreshCodeChangeCell(msg.actionItemId);
         } else if (msg.type === 'voice-ready') {
           clearTimeout(voiceConnectTimer);
           voicePanelStatus.textContent = 'Listening…';

@@ -1031,3 +1031,112 @@ the value if disconnects are more/less frequent than expected.
   not assumed) — nothing in the meeting-type-classification or prep-workflow
   logic needed to change; the only real wiring was the UI/creation-path
   change plus the `prep_status` decoupling above.
+
+## "Implement with Claude Code" (action items → real code changes)
+
+- **Motivating ask, verbatim**: some action items are code changes, and the
+  user wanted Speako to be able to invoke the `claude` CLI to actually make
+  them — with one hard constraint stated up front: "no commit or push
+  action are allowed unless approved." That constraint shaped the entire
+  design; this is not a "run arbitrary shell commands" feature.
+- **Every mechanic below was verified against the real `claude` CLI on this
+  machine before writing any Speako code** — not assumed from `--help` text
+  alone, which turned out to matter (see the `--bg`/`--print` conflict
+  below, discovered only by actually running the command). All testing used
+  disposable temp git repos created and destroyed within the test/session,
+  never `officercc` or any real project.
+- **The actual hard-block mechanism, confirmed empirically**:
+  `claude --bg "<prompt>" --worktree --permission-mode acceptEdits
+  --disallowedTools "Bash(git commit:*)" "Bash(git push:*)"` — asked a real
+  agent to both create a file *and* commit it. Result: the file edit landed
+  (`acceptEdits`), but the commit was flatly denied — `git log` showed no
+  new commit, the file sat as an untracked change. This is what makes "no
+  commit/push unless approved" a real guarantee enforced by Claude Code's
+  own permission system, not a prompt-level suggestion the agent could
+  ignore or a Speako-side check that could be bypassed by calling the CLI
+  differently.
+- **`--bg` and `-p/--print` are mutually exclusive** — a real, specific CLI
+  error ("--bg and --print conflict: --print never starts the interactive
+  session that `claude agents` attaches to, so the job would be
+  unattachable"), not a guess. Background dispatch uses the bare prompt as
+  a positional argument, never `-p`.
+- **`--worktree` auto-creates a new git worktree with a randomly-generated
+  name** (e.g. `.claude/worktrees/lazy-hatching-wombat`) — Speako never
+  needs to name or manage this itself; the worktree's path is discoverable
+  afterward via `claude agents --json`'s `cwd` field for that session.
+- **`claude agents --json --all` is the polling mechanism** — confirmed two
+  concrete terminal `state` values by direct observation: `"done"` (clean
+  success) and `"blocked"`. The CLI's own `--help` text doesn't enumerate
+  possible state values anywhere, so `pollCodeChangeRequest` treats
+  anything unrecognized as "still running" rather than guessing wrong and
+  failing a task that's actually still in progress.
+- **`"blocked" is NOT a reliable failure signal on its own — found the hard
+  way in a live end-to-end smoke test, after the initial design assumed
+  it always meant failure.** A normal, successful run — file edited, then
+  the agent tries the (intentionally denied) `git commit` as its natural
+  last step — *also* ends in state `"blocked"`, with a perfectly good diff
+  sitting in the worktree. The original polling logic treated every
+  `"blocked"` as a hard failure and discarded that diff. Fixed by treating
+  `"done"` and `"blocked"` the same way: always try `getWorktreeDiff()`
+  first, and only mark the request failed if that diff comes back empty.
+  `"stopped"/"failed"/"error"` still fail immediately — there's nothing to
+  double-check a diff against there.
+- **`--permission-mode acceptEdits` alone was flaky for brand-new file
+  creation** — also found via the live smoke test, not assumed. The exact
+  same command (`--bg ... --permission-mode acceptEdits --disallowedTools
+  ...`) sometimes silently created the file and sometimes left the agent
+  hung forever on an interactive "Do you want to create hello.txt?" prompt
+  it can never answer in `--bg` mode (no TTY). Adding an explicit
+  `--allowedTools "Write" "Edit"` alongside `acceptEdits` closed the race
+  in every rerun after that. The disallowed-tools hard-block for git
+  commit/push is unaffected — confirmed still denied with `allowedTools`
+  set.
+- **A worktree still locked by a live or just-stopped Claude session needs
+  `git worktree remove --force --force` — twice, not once.** A single
+  `--force` only overrides the "worktree is dirty" check; it still refuses
+  with "cannot remove a locked working tree" until force is passed twice.
+  `discardCodeChangeTask()` was updated accordingly.
+- **`claude rm <id>` deliberately refuses to remove a worktree with
+  uncommitted changes** (confirmed via a real test — "kept aed7b73c —
+  worktree has uncommitted changes... resolve that (commit/push, or remove
+  the worktree), then run 'claude rm aed7b73c' again"). Discarding a
+  change *is* choosing to throw those changes away, so
+  `discardCodeChangeTask()` deliberately bypasses this by calling
+  `git worktree remove --force` directly instead of `claude rm` — the right
+  call for this specific case, not a workaround for a bug.
+- **Diff capture requires `git add -A` before `git diff --cached`, not a
+  bare `git diff`** — a plain `git diff` only shows already-tracked
+  modifications; new/untracked files (the common case for an agent creating
+  a new file) don't show up at all without staging first. `getWorktreeDiff()`
+  stages everything in the worktree (never commits — that stays hard-blocked
+  regardless) purely to produce a complete, appliable diff.
+- **The diff is captured once and stored in the DB at 'ready' time**
+  (`code_change_requests.diff`), not re-read live at approval time — so
+  clicking "Approve & Commit" still works correctly even if the worktree
+  has since been cleaned up independently. Approval applies that stored
+  diff via `git apply` against the *real* repo and commits there — this is
+  Speako's own controlled git operation, never something the Claude Code
+  agent does itself.
+- **Commit and push are two separate, explicit gates**, not one bundled
+  "approve" action — `POST .../approve` only commits;
+  `POST .../push` is a distinct later call, only enabled once status is
+  `'applied'`. Read literally from the user's stated constraint: committing
+  and pushing are both things that need approval, treated as two decisions
+  a human has to make, not one.
+- **Polling lives in `server.ts`, not a database timer/cron** — a simple
+  recursive `setTimeout` loop per request (10s interval, 20-minute cap),
+  matching this codebase's existing lightweight-poller conventions
+  (`checkScheduledSessions`, `checkIdleVoiceSessions`) rather than
+  introducing a new scheduling mechanism for what's fundamentally the same
+  shape of problem.
+- **Live end-to-end smoke test completed** against a disposable temp repo
+  (never `officercc`): implement → running → ready → view diff →
+  Approve & Commit → confirmed a real commit landed in the disposable
+  repo via `git log`, with the correct file content. Everything cleaned
+  up afterward (temp repo deleted, `codebaseLocalPaths` setting reverted,
+  test action item/DB rows removed, stray `claude` job state removed).
+  Two real bugs (the `"blocked"` failure-signal bug and the
+  `--allowedTools` race) were only caught by this live pass — the unit
+  tests, which mock the CLI, could not have caught either, since both are
+  about the real CLI's actual runtime behavior. Still not yet tried
+  against `officercc` itself — that's real first-use, not a smoke test.
