@@ -1,6 +1,21 @@
 import { db } from './db';
 import { TranscriptSegment } from '../types';
 
+/**
+ * A lightweight, storage-owned shape — deliberately not importing
+ * integrations/googleCalendar.ts's CalendarEvent here to avoid storage/
+ * depending on integrations/ (the wrong direction). Populated from a
+ * CalendarEvent's location/organizer/attendees/description at session-
+ * creation time (see src/calendar/calendarImport.ts and
+ * POST /api/session/prepare), and just carried through opaquely from then on.
+ */
+export interface CalendarMeetingInfo {
+  location?: string;
+  organizer?: string;
+  attendees?: string[];
+  description?: string;
+}
+
 export interface CreateSessionOptions {
   /** Speako is work-only — defaults to 'work'. 'personal' is retained only as a historical value for pre-existing rows created before this became work-only; nothing creates it anymore. */
   sessionType?: 'personal' | 'work';
@@ -26,6 +41,10 @@ export interface CreateSessionOptions {
   activeFeatures?: string[];
   /** ISO datetime — when set, the session's recording auto-starts at this time instead of waiting for a manual "Start recording" click. See InterfaceServer's schedule poller. */
   scheduledStartAt?: string;
+  /** ISO datetime — when set and this session is the one currently recording, InterfaceServer's schedule poller auto-stops it once this time arrives (e.g. a calendar meeting's end time). Has no effect if the session never actually starts recording, or has already ended some other way. */
+  scheduledEndAt?: string;
+  /** Raw Outlook/Google meeting metadata — set when this session was created from a calendar event (auto-import, or the New Session modal's calendar picker). Undefined for a session with no calendar event at all. */
+  calendarMeetingInfo?: CalendarMeetingInfo;
 }
 
 export function createSession(
@@ -35,8 +54,8 @@ export function createSession(
   options?: CreateSessionOptions
 ): void {
   db.prepare(
-    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, session_kind, meeting_type, calendar_event_id, prep_status, active_tools, scheduled_start_at, active_features)
-     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO sessions (id, started_at, language_codes, name, session_type, session_kind, meeting_type, calendar_event_id, prep_status, active_tools, scheduled_start_at, active_features, scheduled_end_at, calendar_meeting_info)
+     VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId,
     JSON.stringify(languageCodes),
@@ -48,7 +67,9 @@ export function createSession(
     options?.prepStatus || 'none',
     options?.activeTools ? JSON.stringify(options.activeTools) : null,
     options?.scheduledStartAt || null,
-    options?.activeFeatures ? JSON.stringify(options.activeFeatures) : null
+    options?.activeFeatures ? JSON.stringify(options.activeFeatures) : null,
+    options?.scheduledEndAt || null,
+    options?.calendarMeetingInfo ? JSON.stringify(options.calendarMeetingInfo) : null
   );
 }
 
@@ -67,6 +88,11 @@ export function setActiveFeatures(sessionId: string, features: string[]): void {
 /** Sets or cancels (null) a session's scheduled auto-start time. Also called from Session.start() to clear a stale schedule once a session actually goes live, whichever path started it. */
 export function setScheduledStartAt(sessionId: string, iso: string | null): void {
   db.prepare('UPDATE sessions SET scheduled_start_at = ? WHERE id = ?').run(iso, sessionId);
+}
+
+/** Sets or cancels (null) a session's scheduled auto-stop time — see isScheduledEndDue. */
+export function setScheduledEndAt(sessionId: string, iso: string | null): void {
+  db.prepare('UPDATE sessions SET scheduled_end_at = ? WHERE id = ?').run(iso, sessionId);
 }
 
 export interface DueScheduledSession {
@@ -89,6 +115,14 @@ export function getDueScheduledSessions(nowIso: string): DueScheduledSession[] {
     name: r.name,
     languageCodes: r.language_codes ? JSON.parse(r.language_codes) : [],
   }));
+}
+
+/** True if this session has a `scheduledEndAt` and it's already arrived — used by InterfaceServer's schedule poller to auto-stop the currently-recording session at a calendar meeting's end time. Always false for a session with no scheduled end (nothing to compare against). */
+export function isScheduledEndDue(sessionId: string, nowIso: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 FROM sessions WHERE id = ? AND scheduled_end_at IS NOT NULL AND scheduled_end_at <= ?`)
+    .get(sessionId, nowIso);
+  return !!row;
 }
 
 /**
@@ -167,6 +201,11 @@ export function endSession(sessionId: string): void {
   db.prepare('UPDATE sessions SET ended_at = datetime(\'now\') WHERE id = ?').run(sessionId);
 }
 
+/** Clears ended_at so a previously-stopped session can resume recording under the same id — e.g. a calendar-imported session that got cut short by mistake before its real meeting even happened. Existing transcript/summary/etc. rows are untouched; new segments just keep appending to the same session. */
+export function resumeSession(sessionId: string): void {
+  db.prepare('UPDATE sessions SET ended_at = NULL WHERE id = ?').run(sessionId);
+}
+
 export function renameSession(sessionId: string, name: string): void {
   db.prepare('UPDATE sessions SET name = ? WHERE id = ?').run(name || null, sessionId);
 }
@@ -185,15 +224,35 @@ export function renameSession(sessionId: string, name: string): void {
  * started_at if there are none) rather than "now", so the recorded duration
  * isn't inflated by however long the row sat abandoned before this restart.
  */
-export function closeOrphanedSessions(): number {
+/**
+ * A session left with ended_at IS NULL means the previous process never
+ * got to call Session.stop() at all (killed/crashed) — so any leftover
+ * interim_segments row for it is the last thing that speaker was saying
+ * when that happened, with nowhere else it could have ended up. Promoted
+ * to a real (best-effort — possibly a mid-sentence fragment) final segment
+ * rather than left to rot in interim_segments forever, which a normal
+ * Session.stop() already clears for every session that ends cleanly.
+ */
+export function closeOrphanedSessions(): { sessionsClosed: number; segmentsRecovered: number } {
   const orphaned = db.prepare('SELECT id FROM sessions WHERE ended_at IS NULL').all() as { id: string }[];
+  let segmentsRecovered = 0;
   for (const { id } of orphaned) {
+    const interimRows = db.prepare('SELECT speaker, start_ms, end_ms, text FROM interim_segments WHERE session_id = ?').all(id) as
+      { speaker: string; start_ms: number; end_ms: number; text: string }[];
+    for (const row of interimRows) {
+      if (row.text.trim()) {
+        insertFinalSegment({ sessionId: id, speaker: row.speaker, startMs: row.start_ms, endMs: row.end_ms, text: row.text, isFinal: true });
+        segmentsRecovered++;
+      }
+    }
+    db.prepare('DELETE FROM interim_segments WHERE session_id = ?').run(id);
+
     const lastSegment = db
       .prepare('SELECT created_at FROM transcript_segments WHERE session_id = ? ORDER BY id DESC LIMIT 1')
       .get(id) as { created_at: string } | undefined;
     db.prepare('UPDATE sessions SET ended_at = COALESCE(?, started_at) WHERE id = ?').run(lastSegment?.created_at ?? null, id);
   }
-  return orphaned.length;
+  return { sessionsClosed: orphaned.length, segmentsRecovered };
 }
 
 /**
@@ -204,6 +263,7 @@ export function closeOrphanedSessions(): number {
  * via an unhandled rejection).
  */
 export const deleteSession = db.transaction((sessionId: string) => {
+  db.prepare('DELETE FROM interim_segments WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM transcript_segments WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM action_items WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM summaries WHERE session_id = ?').run(sessionId);
@@ -233,12 +293,26 @@ export interface SessionRow {
   activeTools: string[] | null;
   /** null means "all globally-enabled heavy features active" — see src/tools/activeFeatures.ts. */
   activeFeatures: string[] | null;
+  /** null when this session has no calendar event (or the event had nothing to report). */
+  calendarMeetingInfo: CalendarMeetingInfo | null;
+}
+
+/**
+ * Dedup check for calendar auto-import: a calendar event that already has a
+ * session (created by a previous import tick, or manually via the New
+ * Session modal's calendar picker) should never spawn a second one.
+ */
+export function getSessionIdByCalendarEventId(calendarEventId: string): string | undefined {
+  const row = db.prepare(`SELECT id FROM sessions WHERE calendar_event_id = ?`).get(calendarEventId) as
+    | { id: string }
+    | undefined;
+  return row?.id;
 }
 
 export function getSession(sessionId: string): SessionRow | undefined {
   const row = db
     .prepare(
-      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, active_features
+      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, active_features, calendar_meeting_info
        FROM sessions WHERE id = ?`
     )
     .get(sessionId) as
@@ -253,6 +327,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
         prep_status: 'none' | 'pending' | 'ready' | 'failed';
         active_tools: string | null;
         active_features: string | null;
+        calendar_meeting_info: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -267,6 +342,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
     prepStatus: row.prep_status,
     activeTools: row.active_tools ? JSON.parse(row.active_tools) : null,
     activeFeatures: row.active_features ? JSON.parse(row.active_features) : null,
+    calendarMeetingInfo: row.calendar_meeting_info ? JSON.parse(row.calendar_meeting_info) : null,
   };
 }
 
@@ -275,7 +351,7 @@ const insertStmt = db.prepare(`
   VALUES (@sessionId, @speaker, @startMs, @endMs, @text, @isFinal)
 `);
 
-/** Only final segments are persisted; interim results are for live display only. */
+/** Final segments are the durable transcript. Interim (non-final) results are persisted too, but only as a single latest-per-speaker recovery row — see upsertInterimSegment/interim_segments. */
 export function insertFinalSegment(segment: TranscriptSegment): void {
   insertStmt.run({
     sessionId: segment.sessionId,
@@ -285,6 +361,34 @@ export function insertFinalSegment(segment: TranscriptSegment): void {
     text: segment.text,
     isFinal: 1,
   });
+}
+
+const upsertInterimStmt = db.prepare(`
+  INSERT INTO interim_segments (session_id, speaker, start_ms, end_ms, text, updated_at)
+  VALUES (@sessionId, @speaker, @startMs, @endMs, @text, datetime('now'))
+  ON CONFLICT(session_id, speaker) DO UPDATE SET
+    start_ms = excluded.start_ms, end_ms = excluded.end_ms, text = excluded.text, updated_at = excluded.updated_at
+`);
+
+/** Overwrites this speaker's single recovery row — never appended to, see interim_segments' schema comment in db.ts. Caller (session.ts) throttles how often this is called; every call here is cheap regardless. */
+export function upsertInterimSegment(segment: TranscriptSegment): void {
+  upsertInterimStmt.run({
+    sessionId: segment.sessionId,
+    speaker: segment.speaker,
+    startMs: Math.round(segment.startMs),
+    endMs: Math.round(segment.endMs),
+    text: segment.text,
+  });
+}
+
+/** Called once a real final segment for this speaker arrives — the recovery row it was standing in for is now superseded. */
+export function clearInterimSegment(sessionId: string, speaker: string): void {
+  db.prepare('DELETE FROM interim_segments WHERE session_id = ? AND speaker = ?').run(sessionId, speaker);
+}
+
+/** Called on a normal Session.stop() — nothing left to recover once a session has ended cleanly. */
+export function clearInterimSegmentsForSession(sessionId: string): void {
+  db.prepare('DELETE FROM interim_segments WHERE session_id = ?').run(sessionId);
 }
 
 /** Atomically swaps a session's channel-based segments for diarized ones, once available. */
@@ -311,13 +415,14 @@ export interface SessionSummary {
   activeTools: string[] | null;
   activeFeatures: string[] | null;
   scheduledStartAt: string | null;
+  calendarMeetingInfo: CalendarMeetingInfo | null;
 }
 
 export function listSessions(): SessionSummary[] {
   const rows = db
     .prepare(
       `SELECT s.id, s.name, s.started_at, s.ended_at, s.diarized_at, s.language_codes,
-              s.session_type, s.session_kind, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at,
+              s.session_type, s.session_kind, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at, s.calendar_meeting_info,
               (SELECT COUNT(*) FROM transcript_segments t WHERE t.session_id = s.id) AS segment_count,
               (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary
        FROM sessions s
@@ -341,6 +446,7 @@ export function listSessions(): SessionSummary[] {
     activeTools: r.active_tools ? JSON.parse(r.active_tools) : null,
     activeFeatures: r.active_features ? JSON.parse(r.active_features) : null,
     scheduledStartAt: r.scheduled_start_at,
+    calendarMeetingInfo: r.calendar_meeting_info ? JSON.parse(r.calendar_meeting_info) : null,
   }));
 }
 

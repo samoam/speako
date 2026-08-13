@@ -1,7 +1,7 @@
 import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import { toPlainText } from '../transcriptFormat';
-import { NewActionItem } from '../storage/summaryRepository';
+import { NewActionItem, ActionItemType, ACTION_ITEM_TYPES } from '../storage/summaryRepository';
 import { getGeminiClient } from '../gemini/geminiClient';
 import { logGeminiUsage } from '../gemini/logUsage';
 import { createSharedCache } from '../gemini/contextCache';
@@ -35,6 +35,12 @@ statements, hypotheticals, and things that were merely discussed but not committ
 - "dueDate" is whatever was stated (a date, "next week", etc.), or null if none was given.
 - "confidence" is "explicit" if directly stated as a commitment (e.g. "I'll send the report by Friday"),
   or "inferred" if implied by the discussion but not directly committed to.
+- "type" classifies what kind of follow-up this is, so the app can offer the right one-click action:
+  "code_change" for a code/bug/repo change, "email" for something that should be sent as an email,
+  "jira" for a task that belongs in a Jira ticket, "confluence" for documentation that should be
+  written/updated on a Confluence page, "schedule_meeting" for something that needs its own follow-up
+  meeting, "teams_message" for a quick note better sent via Teams chat than any of the above, "reminder"
+  for a simple personal reminder with no external artifact, or "general" if none of these fit.
 Return an empty array if there are no genuine action items — do not invent any.`;
 
 // Object-wrapped, not a bare top-level array — a bare `type:'array'` responseSchema
@@ -53,8 +59,12 @@ const ACTION_ITEMS_SCHEMA = {
           description: { type: 'string' },
           dueDate: { type: 'string', nullable: true },
           confidence: { type: 'string', enum: ['explicit', 'inferred'] },
+          type: {
+            type: 'string',
+            enum: ['general', 'code_change', 'email', 'jira', 'confluence', 'reminder', 'todo', 'schedule_meeting', 'teams_message'],
+          },
         },
-        required: ['description', 'confidence'],
+        required: ['description', 'confidence', 'type'],
       },
     },
   },
@@ -102,7 +112,13 @@ async function extractActionItemsFrom(transcriptOrCache: { transcript: string } 
   });
   logGeminiUsage('extractActionItems', response);
   const parsed = JSON.parse(response.text ?? '{}');
-  return (parsed.actionItems ?? []) as NewActionItem[];
+  const items = (parsed.actionItems ?? []) as NewActionItem[];
+  // Defensive even though the schema enum should already guarantee this —
+  // never trust a model response as blindly as a schema-validated one.
+  return items.map((item) => ({
+    ...item,
+    type: ACTION_ITEM_TYPES.includes(item.type as ActionItemType) ? item.type : 'general',
+  }));
 }
 
 export async function summarizeSession(segments: TranscriptSegment[]): Promise<GeneratedSummary> {

@@ -63,6 +63,8 @@ export class StreamManager extends EventEmitter {
   private lastEndMsBySpeaker: Record<string, number> = { You: 0, Others: 0 };
 
   private stopped = false;
+  /** Set by pause()/cleared by resume() — distinct from `stopped`, which is permanent. */
+  private paused = false;
 
   constructor(
     channelCount: number,
@@ -92,8 +94,47 @@ export class StreamManager extends EventEmitter {
     }
   }
 
+  /**
+   * Unlike restart() (a near-instant swap that buffers audio in memory
+   * across the gap), an explicit user pause can last arbitrarily long — so
+   * this closes the current call outright (no new one opens until
+   * resume()), cancels the periodic restart timer, and — critically —
+   * writeAudio() drops rather than buffers anything that arrives while
+   * paused, since nothing should actually be calling it (the caller stops
+   * feeding audio entirely during a pause; see Session.pause()).
+   */
+  pause(): void {
+    if (this.stopped || this.paused) return;
+    this.paused = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.pendingChunks = [];
+    if (this.call) {
+      try {
+        this.call.end();
+      } catch {
+        // stream may already be closed
+      }
+      this.call = null;
+    }
+  }
+
+  /**
+   * Reopens a fresh call and resumes the restart timer. `streamOffsetMs` is
+   * set to `totalMsWritten` as it stands right now (nothing accrued while
+   * paused, since writeAudio() was a no-op) — so paused wall-clock time
+   * simply doesn't count toward the recording's audio-time axis, and
+   * segment timestamps stay continuous across the gap rather than jumping.
+   */
+  resume(): void {
+    if (this.stopped || !this.paused) return;
+    this.paused = false;
+    this.streamOffsetMs = this.totalMsWritten;
+    this.openStream();
+    this.scheduleRestart();
+  }
+
   writeAudio(chunk: Buffer): void {
-    if (this.stopped) return;
+    if (this.stopped || this.paused) return;
 
     const frames = chunk.length / (BYTES_PER_SAMPLE * this.channelCount);
     this.totalMsWritten += (frames / config.sampleRate) * 1000;

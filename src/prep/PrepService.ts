@@ -52,7 +52,6 @@ export async function runPrep(params: RunPrepParams): Promise<void> {
       synthesizeBrief(meetingType, sessionName, sources, userNotes, cachedRawContent),
       anticipateQA(meetingType, sessionName, sources, userNotes, cachedRawContent),
     ]);
-    const succeeded = sources.length > 0 || hasUserNotes;
 
     createPrepBrief({
       sessionId,
@@ -65,8 +64,17 @@ export async function runPrep(params: RunPrepParams): Promise<void> {
     });
 
     seedMeetingState(sessionId, briefText);
-    setPrepStatus(sessionId, succeeded ? 'ready' : 'failed');
-    onDone?.(sessionId, succeeded ? 'ready' : 'failed');
+    // Reaching here means prep genuinely completed — a real (if necessarily
+    // thin) brief now exists, even when sources.length === 0 and there were
+    // no user notes (synthesizeBrief() still returns an honest "No prep
+    // context was found…" message, not garbage). That's not a failure, just
+    // an unremarkable result — 'failed' is reserved for the catch block
+    // below, a genuine thrown exception (network/API failure), where no
+    // usable brief exists at all. Previously this branch marked a
+    // zero-sources run as 'failed' too, which read as a real error to the
+    // user for a case where nothing had actually gone wrong.
+    setPrepStatus(sessionId, 'ready');
+    onDone?.(sessionId, 'ready');
   } catch (err: any) {
     console.error(`[prep] run failed for session ${sessionId}:`, err.message);
     setPrepStatus(sessionId, 'failed');

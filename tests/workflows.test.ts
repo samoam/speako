@@ -10,6 +10,9 @@ import { gather as oneOnOneGather } from '../src/prep/workflows/oneOnOne';
 import { gather as designDevGather } from '../src/prep/workflows/designDev';
 import { gather as genericGather } from '../src/prep/workflows/generic';
 import { WorkflowContext } from '../src/prep/workflows/types';
+import { createSession } from '../src/storage/segmentRepository';
+import { saveSummaryAndActionItems } from '../src/storage/summaryRepository';
+import * as summaryRepository from '../src/storage/summaryRepository';
 
 function baseCtx(overrides: Partial<WorkflowContext> = {}): WorkflowContext {
   return {
@@ -67,6 +70,27 @@ test('sprintReview workflow: queries jira, confluence, bitbucket, my PR review a
   }
 });
 
+test('sprintReview workflow: includes previous_sprint_review only when there is a previous session with a saved summary', async () => {
+  const spy = mockSearchByTool();
+  try {
+    const { sources: withoutPrevious } = await sprintReviewGather(baseCtx({ sessionName: 'Sprint 12 Review' }));
+    assert.ok(!withoutPrevious.map((s) => s.name).includes('previous_sprint_review'));
+
+    createSession('wf-prev-sprint-review', ['en-US'], 'Sprint 11 Review', { sessionType: 'work' });
+    saveSummaryAndActionItems(
+      'wf-prev-sprint-review',
+      { overview: 'Shipped the new settings page.', keyDecisions: 'Deferred the audio bug fix to next sprint.', discussionTopics: '', nextSteps: '', topics: [], modelUsed: 'test' },
+      []
+    );
+    const { sources: withPrevious } = await sprintReviewGather(
+      baseCtx({ sessionName: 'Sprint 12 Review', previousSession: { id: 'wf-prev-sprint-review', name: 'Sprint 11 Review' } })
+    );
+    assert.ok(withPrevious.map((s) => s.name).includes('previous_sprint_review'));
+  } finally {
+    spy.mock.restore();
+  }
+});
+
 test('retro workflow: queries jira + confluence, includes sentiment signal source name only when there is a previous session', async () => {
   const spy = mockSearchByTool();
   try {
@@ -95,6 +119,25 @@ test('oneOnOne workflow: queries mem0, jira, email, teams, plus local DB-only so
   } finally {
     toolSpy.mock.restore();
     retrieveSpy.mock.restore();
+  }
+});
+
+test('oneOnOne workflow: getOpenActionItemsByOwner is called with the bare person name, not the notes-combined topic', async () => {
+  const toolSpy = mockSearchByTool();
+  const retrieveSpy = mock.method(ragModule, 'retrieve', async () => ({ chunks: [], suppressed: true }));
+  const ownerSpy = mock.method(summaryRepository, 'getOpenActionItemsByOwner', () => []);
+  try {
+    await oneOnOneGather(baseCtx({ sessionName: '1:1 with Sam', userNotes: 'ask about the promotion timeline' }));
+    assert.equal(ownerSpy.mock.calls.length, 1);
+    // Must stay "1:1 with Sam" — getOpenActionItemsByOwner does a plain
+    // substring match against the stored owner name, so appending notes
+    // (searchTopic's combined query, used everywhere else in this workflow)
+    // would make it never match anything.
+    assert.equal(ownerSpy.mock.calls[0].arguments[0], '1:1 with Sam');
+  } finally {
+    toolSpy.mock.restore();
+    retrieveSpy.mock.restore();
+    ownerSpy.mock.restore();
   }
 });
 

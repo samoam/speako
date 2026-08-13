@@ -1,5 +1,7 @@
 import { config } from '../config';
 import { retrieve } from '../rag/rag';
+import { searchCode } from '../codebase/searchCode';
+import { isLocalCodebaseConfigured } from '../codebase/indexCodebase';
 import { TriggerEvent } from '../storage/triggerRepository';
 import { getMeetingStateSnapshot } from '../state/meetingState';
 import { getGeminiClient } from '../gemini/geminiClient';
@@ -16,6 +18,10 @@ const CATEGORY_PROMPTS: Record<string, string> = {
   decision_point: 'Suggest one question to confirm this decision is fully scoped (e.g. missing owner or timeline). Output only the question, nothing else.',
   vagueness: 'Suggest one clarifying question to pin down the missing owner, deadline, or specifics. Output only the question, nothing else.',
   tone_shift: 'Suggest one neutral, low-pressure check-in question appropriate to this sentiment shift. Output only the question, nothing else.',
+  code_reference:
+    'Based ONLY on the retrieved local codebase snippets below, is there something directly relevant worth surfacing — ' +
+    "what a mentioned function/file actually does, or a mismatch between what's being described and the real code? " +
+    'State it in one sentence. If nothing retrieved is clearly relevant, output exactly SKIP and nothing else.',
 };
 
 function fmtMs(ms: number): string {
@@ -40,14 +46,31 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
   const promptInstruction = CATEGORY_PROMPTS[trigger.category];
   if (!promptInstruction) return null;
 
-  const retrieval = await retrieve(segmentText, trigger.sessionId);
-  if (trigger.category === 'factual_claim' && retrieval.suppressed) {
-    return null;
+  // code_reference is grounded in the local codebase index, not past-meeting
+  // RAG — separate retrieval source, but everything past this block (meeting-
+  // state suppression, prompt shape, Gemini call) is shared with every other
+  // category. Same "suppress outright when there's nothing to ground it in"
+  // rule factual_claim already uses for past-meeting context.
+  let contextBlock: string;
+  let citation: string | null;
+  if (trigger.category === 'code_reference') {
+    if (!isLocalCodebaseConfigured()) return null;
+    const matches = await searchCode(segmentText, 3);
+    if (matches.length === 0) return null;
+    contextBlock = matches.map((m) => `- (${m.repoName}/${m.filePath}) ${m.text}`).join('\n');
+    citation = matches.map((m) => `${m.repoName}/${m.filePath}`).join(', ');
+  } else {
+    const retrieval = await retrieve(segmentText, trigger.sessionId);
+    if (trigger.category === 'factual_claim' && retrieval.suppressed) {
+      return null;
+    }
+    contextBlock = retrieval.chunks.length
+      ? retrieval.chunks.map((c) => `- (${c.sessionName || 'a past session'}) ${c.text}`).join('\n')
+      : '(no relevant past context found)';
+    citation = retrieval.chunks.length
+      ? retrieval.chunks.map((c) => `${c.sessionName || 'Past session'} (${fmtMs(c.startMs)})`).join(', ')
+      : null;
   }
-
-  const contextBlock = retrieval.chunks.length
-    ? retrieval.chunks.map((c) => `- (${c.sessionName || 'a past session'}) ${c.text}`).join('\n')
-    : '(no relevant past context found)';
 
   // Improvements Phase §2: check THIS meeting's own state (not just past
   // sessions via RAG above) so a suggestion isn't a duplicate of one already
@@ -61,7 +84,8 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
   const suppressionInstruction =
     'If this same point is already listed below as an OPEN ITEM from earlier in this meeting, or the MEETING SUMMARY SO FAR shows it was already resolved, output exactly SKIP and nothing else — do not repeat it.';
 
-  const prompt = `${promptInstruction}\n${suppressionInstruction}\n\nCurrent moment: "${segmentText}"\nWhy this was flagged: ${trigger.reason}\n\nMeeting summary so far:\n${state.rollingSummary || '(nothing yet)'}\n\nOpen items already tracked this meeting:\n${openItemsBlock}\n\nRetrieved context from past sessions:\n${contextBlock}`;
+  const contextLabel = trigger.category === 'code_reference' ? 'Retrieved code from your local codebase' : 'Retrieved context from past sessions';
+  const prompt = `${promptInstruction}\n${suppressionInstruction}\n\nCurrent moment: "${segmentText}"\nWhy this was flagged: ${trigger.reason}\n\nMeeting summary so far:\n${state.rollingSummary || '(nothing yet)'}\n\nOpen items already tracked this meeting:\n${openItemsBlock}\n\n${contextLabel}:\n${contextBlock}`;
 
   const response = await getGeminiClient().models.generateContent({
     model: config.geminiModel,
@@ -71,10 +95,6 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
 
   const text = (response.text ?? '').trim();
   if (!text || text.toUpperCase() === 'SKIP') return null;
-
-  const citation = retrieval.chunks.length
-    ? retrieval.chunks.map((c) => `${c.sessionName || 'Past session'} (${fmtMs(c.startMs)})`).join(', ')
-    : null;
 
   return { text, citation };
 }

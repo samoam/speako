@@ -1,22 +1,35 @@
 <#
-  Reads upcoming Calendar appointments via classic Outlook's COM Automation
-  object model — same rationale as outlookExport.ps1 (email): works
-  regardless of whether the mailbox is Exchange Online or on-premises/
-  hybrid, since it rides the desktop client's own existing connection.
-  Requires classic desktop Outlook (not "New Outlook").
+  Reads Calendar appointments via classic Outlook's COM Automation object
+  model — same rationale as outlookExport.ps1 (email): works regardless of
+  whether the mailbox is Exchange Online or on-premises/hybrid, since it
+  rides the desktop client's own existing connection. Requires classic
+  desktop Outlook (not "New Outlook").
 
-  Emits a single JSON array on stdout, one object per appointment within
-  [now, now + WindowMinutes], so src/integrations/outlookDesktopCalendar.ts
-  can just JSON.parse the whole output.
+  Two mutually exclusive modes, both emitting a single JSON array on
+  stdout so src/integrations/outlookDesktopCalendar.ts can just
+  JSON.parse the whole output:
+    -WindowMinutes <n>            appointments within [now, now + n]
+    -StartTime/-EndTime <iso>     appointments within an explicit range
+                                   (e.g. the current calendar week, which
+                                   can start before "now")
 #>
 param(
-  [Parameter(Mandatory = $true)][int]$WindowMinutes
+  [int]$WindowMinutes,
+  [string]$StartTime,
+  [string]$EndTime
 )
 
 $ErrorActionPreference = "Stop"
 
-$now = Get-Date
-$windowEnd = $now.AddMinutes($WindowMinutes)
+if ($StartTime -and $EndTime) {
+  $now = [DateTime]::Parse($StartTime).ToLocalTime()
+  $windowEnd = [DateTime]::Parse($EndTime).ToLocalTime()
+} elseif ($WindowMinutes) {
+  $now = Get-Date
+  $windowEnd = $now.AddMinutes($WindowMinutes)
+} else {
+  throw "Either -WindowMinutes or both -StartTime/-EndTime must be provided."
+}
 
 $outlook = New-Object -ComObject Outlook.Application
 $namespace = $outlook.GetNamespace("MAPI")
@@ -56,8 +69,24 @@ foreach ($item in $restricted) {
       # rationale as msGraphSync.ts capping snippet lengths elsewhere.
       description   = if ($item.Body) { $item.Body.Substring(0, [Math]::Min(500, $item.Body.Length)) } else { "" }
       startTime     = ([DateTimeOffset]$item.Start).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+      endTime       = ([DateTimeOffset]$item.End).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
       attendeeCount = $item.Recipients.Count
+      # Recipient.Address is an Exchange DN (e.g. "/o=ExchangeLabs/ou=...
+      # /cn=Recipients/cn=..."), not a usable SMTP email — confirmed
+      # empirically against real appointments. Resolving real addresses
+      # would need AddressEntry.GetExchangeUser() per recipient (slow across
+      # meetings with dozens of attendees), so this deliberately uses just
+      # the display .Name, which is already human-readable on its own.
+      attendees     = @($item.Recipients | ForEach-Object { $_.Name })
+      location      = $item.Location
+      organizer     = $item.Organizer
       isRecurring   = [bool]$item.IsRecurring
+      # MeetingStatus 5 (olMeetingCanceled, organizer canceled) / 7
+      # (olMeetingReceivedAndCanceled, cancellation received) — confirmed
+      # empirically against real canceled appointments, not assumed from
+      # docs alone; deliberately not inferred from the "Canceled: " subject
+      # prefix Outlook adds, since that text is locale-dependent.
+      isCanceled    = ([int]$item.MeetingStatus -in @(5, 7))
     })
   } catch {
     Write-Error "Skipping one appointment: $($_.Exception.Message)" -ErrorAction Continue

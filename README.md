@@ -140,6 +140,14 @@ session is open) — a currently-recording session can't be deleted until
 it's stopped. All of this is read from SQLite, not page state, so it
 survives closing and reopening the browser.
 
+Whichever session is open in the main panel also has its own
+**Start/Pause/Resume/Stop** controls in the header toolbar. **Pause**
+temporarily stops capturing audio and transcribing without ending the
+session — useful for a break mid-meeting — and **Resume** picks back up
+seamlessly; the paused stretch itself doesn't count toward the recording's
+timeline. **Stop** ends the session for good (same as the sidebar-header's
+global Stop button).
+
 ### Speaker identification (optional, on-demand)
 
 The live transcript separates "You" (mic) from "Others" (system audio) by
@@ -245,6 +253,18 @@ Since most work meetings are software-engineering-focused, Design/Dev Discussion
 #### Outlook desktop calendar (fallback for meeting auto-detection)
 
 If Google Calendar isn't configured, Speako falls back to reading upcoming meetings directly from classic desktop Outlook's Calendar folder via the same COM automation used for the email fallback above — no separate setup, and no merging with Google Calendar if both happen to be present (Google wins if configured; this is Outlook-only otherwise). Feeds the same meeting-type auto-detection and "prep this meeting" shortcuts Google Calendar powers. Expect a several-second delay on each call (Outlook COM startup + calendar scan) — this is a real, mostly-fixed cost of the approach, not a bug; see NOTES.md for a Restrict()-based fix that got this down from over a minute to ~9 seconds.
+
+#### Calendar view + automatic session creation
+
+Beyond the "prep this meeting" fallback above, Speako can turn your current-week Outlook calendar into sessions automatically. Click the calendar icon in the sidebar header for a day/week grid of this week's meetings (Monday–Sunday); meetings that already have a Speako session are highlighted and clickable, jumping straight to that session.
+
+A background job polls every `CALENDAR_IMPORT_POLL_MINUTES` (default 15, toggle in Settings > Calendar import) and creates a session — with pre-meeting prep already running — for every not-yet-started meeting in the current week that has at least one other attendee and doesn't already have one. Meetings that have already ended, that have no one else attending (personal blocks, focus time, reminders), or that have been canceled (shown dimmed and struck through in the grid) are never auto-imported. A **Sync calendar now** button in Settings and the calendar view triggers an out-of-cadence run.
+
+This reuses the Outlook desktop COM export above, so the same "Object Model Guard" security-prompt caveat applies — but unlike the manual-only email/calendar-lookup paths, this one **is** polled unattended by design (see NOTES.md for the tradeoff this makes and why).
+
+Each imported session auto-starts recording at the meeting's actual start time (no click needed) and auto-stops at its actual end time, both taken directly from the calendar event. To start a session manually instead — for a session that's "ready — not yet started," or any session you created yourself — click the green **Start recording** button on its card in the sidebar.
+
+A session created from a calendar event (auto-imported, or picked manually from the New Session modal's calendar shortcuts) also carries the meeting's actual location, organizer, and attendee list — shown in that session's **Prep Brief** tab above the AI-synthesized brief.
 
 #### Outlook + Teams (Microsoft Graph)
 

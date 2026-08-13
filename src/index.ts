@@ -2,15 +2,25 @@ import { config } from './config';
 import { InterfaceServer } from './interface/server';
 import { Session } from './session';
 import { closeOrphanedSessions } from './storage/segmentRepository';
+import { patchConsole } from './logging/logStore';
 
 function main(): void {
+  // Wrap console.* first so the Logs panel captures everything logged from
+  // here on — anything a module logged at import time (above) is missed,
+  // but that's earlier-than-earliest and not worth restructuring the entry
+  // point to catch.
+  patchConsole();
+
   // A previous process instance may have died before Session.stop() ran (a
   // crash, a forced kill, the machine sleeping) — that leaves a session
   // stuck with ended_at NULL forever, since nothing else ever sets it. A
   // fresh process means nothing is actually recording yet, so reconcile now.
-  const recovered = closeOrphanedSessions();
-  if (recovered > 0) {
-    console.log(`Recovered ${recovered} session(s) left "recording" by a previous run that didn't shut down cleanly.`);
+  const { sessionsClosed, segmentsRecovered } = closeOrphanedSessions();
+  if (sessionsClosed > 0) {
+    console.log(
+      `Recovered ${sessionsClosed} session(s) left "recording" by a previous run that didn't shut down cleanly` +
+        (segmentsRecovered > 0 ? ` (including ${segmentsRecovered} in-progress transcript fragment(s) that hadn't finalized yet).` : '.')
+    );
   }
 
   const ui = new InterfaceServer();
@@ -26,6 +36,12 @@ function main(): void {
     onStop: () => {
       currentSession?.stop();
       currentSession = null;
+    },
+    onPause: () => {
+      currentSession?.pause();
+    },
+    onResume: () => {
+      currentSession?.resumeRecording();
     },
   });
 

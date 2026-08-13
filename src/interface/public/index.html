@@ -34,8 +34,8 @@
     #sidebarHeader h1 .icon { color: var(--accent); }
     #sidebarHeader h1 .icon-logo { width: 1.4em; height: 1.4em; }
     #sidebarHeader h1 .title-text { flex: 1; }
-    #settingsBtn, #voiceChatBtn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem 0.3rem; line-height: 1; border-radius: 6px; display: inline-flex; }
-    #settingsBtn:hover, #voiceChatBtn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    #settingsBtn, #voiceChatBtn, #insightsBtn, #calendarBtn, #logsBtn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem 0.3rem; line-height: 1; border-radius: 6px; display: inline-flex; }
+    #settingsBtn:hover, #voiceChatBtn:hover, #insightsBtn:hover, #calendarBtn:hover, #logsBtn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
     #voiceChatBtn.active { color: var(--rec); animation: pulse 1.4s infinite; }
 
     /* ---------- Voice panel (chat/practice) ---------- */
@@ -69,12 +69,13 @@
     #voicePanelStopBtn { width: 100%; }
 
     /* ---------- Modals (settings, new session, session tools) ---------- */
-    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay {
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
     }
-    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden] { display: none; }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden] { display: none; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-    #settingsModal, #insightsModal { width: 640px; }
+    #settingsModal, #insightsModal, #extActionModal { width: 640px; }
+    #calendarModal, #logsModal { width: min(1100px, 92vw); }
     #newSessionModal, #sessionToolsPopover { width: 420px; }
     .modal-header, #settingsModalHeader {
       padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;
@@ -129,6 +130,62 @@
     .topic-bar-label { font-size: 0.68rem; color: var(--muted); text-align: center; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .topic-bar-count { font-size: 0.72rem; color: var(--text); }
     .tools-hint { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem; line-height: 1.4; }
+
+    /* ---------- Calendar week grid ---------- */
+    #calendarModal .modal-body { min-height: 420px; max-height: 70vh; overflow: auto; }
+    #calendarHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
+    #calendarSyncStatus { font-size: 0.78rem; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #calendarEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
+    #calendarEmptyState[hidden] { display: none; }
+
+    /* ---------- Logs panel ---------- */
+    #logsModal .modal-body { min-height: 420px; max-height: 70vh; overflow: auto; padding: 0; }
+    #logsHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
+    #logsFilter {
+      font: inherit; font-size: 0.8rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text);
+    }
+    #logsAutoscrollLabel { display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted); }
+    #logsClearBtn { font-size: 0.78rem; }
+    #logsList {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5;
+      padding: 0.75rem 1.1rem; white-space: pre-wrap; word-break: break-word;
+    }
+    .log-line { display: flex; gap: 0.6rem; padding: 0.1rem 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+    .log-line-time { color: var(--muted); flex-shrink: 0; }
+    .log-line-level { flex-shrink: 0; width: 3.2em; text-transform: uppercase; font-weight: 600; }
+    .log-line-message { flex: 1; }
+    .log-line.level-warn .log-line-level, .log-line.level-warn .log-line-message { color: #e0b34d; }
+    .log-line.level-error .log-line-level, .log-line.level-error .log-line-message { color: #f06868; }
+    #logsEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
+    #logsEmptyState[hidden] { display: none; }
+    #calendarEmptyState .icon { width: 28px; height: 28px; opacity: 0.6; }
+    #calendarEmptyState p { margin: 0; font-size: 0.85rem; max-width: 360px; }
+    #calendarGrid { display: grid; grid-template-columns: 56px repeat(7, minmax(110px, 1fr)); }
+    #calCornerCell { position: sticky; top: 0; left: 0; z-index: 3; background: var(--panel); }
+    .cal-day-header {
+      position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--border);
+      text-align: center; padding: 0.4rem 0.2rem; display: flex; flex-direction: column; gap: 0.1rem;
+    }
+    .cal-day-name { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .cal-day-num { font-size: 0.95rem; font-weight: 600; }
+    .cal-day-header.cal-today .cal-day-num { color: var(--accent); }
+    #calHourLabels { display: flex; flex-direction: column; }
+    .cal-hour-label { font-size: 0.68rem; color: var(--muted); text-align: right; padding-right: 0.4rem; box-sizing: border-box; border-top: 1px solid var(--border); transform: translateY(-0.5em); }
+    #calDayColumns { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(7, minmax(110px, 1fr)); position: relative; }
+    .cal-day-column { position: relative; border-left: 1px solid var(--border); background-image: linear-gradient(var(--border) 1px, transparent 1px); background-size: 100% 48px; }
+    .cal-event {
+      position: absolute; left: 2px; right: 2px; border-radius: 4px; overflow: hidden; padding: 0.15rem 0.35rem;
+      background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-left: 3px solid var(--muted);
+      cursor: default; font-size: 0.72rem; line-height: 1.25;
+    }
+    .cal-event.cal-event-linked { border-left-color: var(--accent); background: var(--accent-dim); cursor: pointer; }
+    .cal-event.cal-event-linked:hover { background: var(--accent); }
+    .cal-event.cal-event-canceled { opacity: 0.5; border-left-color: var(--muted); background: rgba(255,255,255,0.03); }
+    .cal-event.cal-event-canceled .cal-event-title { text-decoration: line-through; }
+    .cal-event-time { color: var(--muted); font-size: 0.65rem; }
+    .cal-event.cal-event-linked .cal-event-time { color: inherit; opacity: 0.85; }
+    .cal-event-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tools-checklist { margin-top: 0.3rem; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
     .tools-checklist-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.4rem; }
     .schedule-field { display: flex; flex-direction: column; gap: 0.3rem; position: relative; }
@@ -238,6 +295,7 @@
     .primary-btn:hover { background: #2a2a2f; }
     .primary-btn[hidden] { display: none; }
     #stopBtn { border-color: var(--rec); }
+    #newSessionCreateActions { display: flex; gap: 0.5rem; }
 
     #sessionListHeader {
       padding: 0.75rem 1rem 0.4rem; font-size: 0.72rem; text-transform: uppercase;
@@ -284,6 +342,7 @@
       display: inline-flex; align-items: center; gap: 0.3rem;
     }
     .session-start-recording .icon { width: 0.85em; height: 0.85em; }
+    .session-resume-recording { border-color: var(--muted); background: #26241a; color: var(--muted); }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
     .empty-list { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0.6rem; }
 
@@ -306,6 +365,10 @@
       content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--rec);
       animation: pulse 1.4s infinite; flex-shrink: 0;
     }
+    #mainMeta.paused { color: var(--muted); }
+    #mainMeta.paused::before {
+      content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+    }
 
     .tool-btn {
       padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid var(--border);
@@ -317,6 +380,12 @@
 
     /* ---------- Main header actions: tools/suggestions/kebab ---------- */
     #mainHeaderActions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+    #recordingControls { display: flex; align-items: center; gap: 0.35rem; margin-right: 0.35rem; }
+    #recordingControls .tool-btn { padding: 0.4rem 0.7rem; font-size: 0.8rem; }
+    #recordingControls .tool-btn .icon { width: 0.85em; height: 0.85em; }
+    #mainStartBtn, #mainResumeBtn { border-color: var(--ok); background: #1a2620; color: var(--ok); }
+    #mainPauseBtn { border-color: var(--muted); background: #26241a; color: var(--muted); }
+    #mainStopBtn { border-color: var(--rec); background: #2a1f21; color: var(--rec); }
     .icon-btn {
       background: none; border: 1px solid transparent; color: var(--text); cursor: pointer;
       padding: 0.4rem 0.5rem; border-radius: 6px; line-height: 1; position: relative; display: inline-flex;
@@ -362,6 +431,8 @@
     #codebaseIndexBox button, #communicationsIndexBox button, #msGraphSyncBox button, #outlookDesktopSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
     #codebaseIndexStatus, #communicationsIndexStatus, #msGraphSyncStatus, #outlookDesktopSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     #workPrepBox { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.3rem; }
+    #meetingOnlyFields { display: flex; flex-direction: column; gap: 0.5rem; }
+    #meetingOnlyFields[hidden] { display: none; }
     #calendarShortcuts { display: flex; flex-direction: column; gap: 0.3rem; }
     #userNotesInput {
       padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
@@ -389,6 +460,13 @@
     .prep-badge.failed { background: #3a1f1f; color: var(--rec); }
 
     #prepBriefWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; flex-direction: column; gap: 0.75rem; }
+    #calendarMeetingInfoBox { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 0.9rem; background: #17171a; }
+    #calendarMeetingInfoBox[hidden] { display: none; }
+    #calendarMeetingInfoBox .prep-user-notes-label { color: var(--muted); }
+    .cmi-row { display: flex; gap: 0.5rem; font-size: 0.85rem; line-height: 1.5; }
+    .cmi-row + .cmi-row { margin-top: 0.3rem; }
+    .cmi-row-label { color: var(--muted); flex-shrink: 0; min-width: 5.5rem; }
+    .cmi-description { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; color: var(--muted); }
     #prepUserNotesBox {
       border: 1px solid var(--accent-dim); border-radius: 8px; padding: 0.8rem 0.9rem; background: #16202b;
     }
@@ -432,6 +510,11 @@
     .feedback-suggestion .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; margin-right: 0.4rem; }
     #transcriptWrap { flex: 1; display: flex; min-height: 0; }
     #transcriptMain { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 0; }
+    #transcriptionErrorBanner {
+      background: #2a1f21; border: 1px solid var(--rec); color: var(--rec); border-radius: 6px;
+      padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.85rem;
+    }
+    #transcriptionErrorBanner[hidden] { display: none; }
     #chaptersList { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
     #chaptersList[hidden] { display: none; }
     .chapter-chip { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); cursor: pointer; text-align: left; font: inherit; }
@@ -550,8 +633,42 @@
     .ai-badge { font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px; text-transform: uppercase; }
     .ai-badge.explicit { background: #1c3a2a; color: var(--ok); }
     .ai-badge.inferred { background: #3a331c; color: #e0b84a; }
+    .ai-badge.manual { background: #1c2c3a; color: #4ab0e0; }
+    .ai-type-select {
+      font: inherit; font-size: 0.78rem; padding: 0.2rem 0.35rem; border-radius: 4px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); color-scheme: dark;
+    }
+    .ai-delete { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.15rem; border-radius: 4px; display: inline-flex; }
+    .ai-delete .icon { width: 0.9em; height: 0.9em; }
+    .ai-delete:hover { color: var(--rec); background: #2a1f21; }
+    #actionItemsToolbar { margin-bottom: 0.9rem; }
+    #actionItemsAddForm { display: flex; gap: 0.5rem; margin-bottom: 0.9rem; flex-wrap: wrap; align-items: center; }
+    #actionItemsAddForm[hidden] { display: none; }
+    #actionItemsAddForm input, #actionItemsAddForm select {
+      padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); font: inherit; font-size: 0.85rem; color-scheme: dark;
+    }
+    #actionItemsAddForm input[name="description"] { flex: 1; min-width: 220px; }
+    #actionItemsAddForm input[name="owner"] { width: 140px; }
+    #actionItemsAddForm input[name="dueDate"] { width: 160px; }
+    .ai-external-ref { font-size: 0.78rem; color: var(--ok); }
+    #extActionBody { display: flex; flex-direction: column; gap: 0.6rem; }
+    .ext-mode-toggle { display: flex; gap: 1.2rem; margin-bottom: 0.4rem; font-size: 0.85rem; }
+    .ext-mode-fields { display: flex; flex-direction: column; gap: 0.5rem; }
+    .ext-mode-fields[hidden] { display: none; }
+    .ext-mode-fields label { font-size: 0.78rem; color: var(--muted); margin-bottom: -0.25rem; }
+    .ext-mode-fields input, .ext-mode-fields textarea {
+      padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text); font: inherit; font-size: 0.85rem; resize: vertical;
+    }
+    #extActionError { color: var(--rec); font-size: 0.82rem; padding: 0 1.25rem 0.5rem; }
+    #extActionAiStatus { color: var(--muted); font-size: 0.8rem; padding: 0.6rem 1.25rem 0; }
     .cc-cell { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; min-width: 160px; }
-    .cc-cell button { font-size: 0.76rem; padding: 0.25rem 0.55rem; }
+    .cc-cell button {
+      font-size: 0.76rem; padding: 0.25rem 0.55rem; font-family: inherit; border-radius: 6px;
+      border: 1px solid var(--border); background: #1f1f23; color: var(--text); cursor: pointer;
+    }
+    .cc-cell button:hover { background: #27272c; }
     .cc-status { font-size: 0.8rem; color: var(--muted); }
     .cc-status.cc-error { color: var(--rec); }
     .cc-diff {
@@ -620,12 +737,14 @@
       <symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></symbol>
       <symbol id="icon-circle-fill" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
       <symbol id="icon-square-fill" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="icon-pause-fill" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></symbol>
       <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M3 10h18"/></symbol>
       <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
       <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16.5 6.5a3.2 3.2 0 0 1 0 6.2"/><path d="M18.5 14a6 6 0 0 1 3 5"/></symbol>
       <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
       <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
       <symbol id="icon-insights" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></symbol>
+      <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></symbol>
     </defs>
   </svg>
 
@@ -636,6 +755,8 @@
         <span class="title-text">Speako</span>
         <button id="voiceChatBtn" title="Voice chat"><svg class="icon"><use href="#icon-mic"></use></svg></button>
         <button id="insightsBtn" title="Insights"><svg class="icon"><use href="#icon-insights"></use></svg></button>
+        <button id="calendarBtn" title="Calendar"><svg class="icon"><use href="#icon-calendar"></use></svg></button>
+        <button id="logsBtn" title="Logs"><svg class="icon"><use href="#icon-terminal"></use></svg></button>
         <button id="settingsBtn" title="Settings"><svg class="icon"><use href="#icon-settings"></use></svg></button>
       </h1>
       <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
@@ -658,6 +779,12 @@
       </div>
       <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
       <div id="mainHeaderActions">
+        <div id="recordingControls">
+          <button id="mainStartBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording</button>
+          <button id="mainPauseBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-pause-fill"></use></svg> Pause</button>
+          <button id="mainResumeBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume</button>
+          <button id="mainStopBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-square-fill"></use></svg> Stop</button>
+        </div>
         <button id="sessionToolsBtn" class="icon-btn" title="Tools for this session"><svg class="icon"><use href="#icon-wrench"></use></svg></button>
         <div id="suggestionsToggleWrap">
           <button id="suggestionsToggleBtn" class="icon-btn" title="Suggestions &amp; triggers"><svg class="icon"><use href="#icon-lightbulb"></use></svg><span id="suggestionsUnreadDot" hidden></span></button>
@@ -687,6 +814,7 @@
     </div>
     <div id="transcriptWrap">
       <div id="transcriptMain">
+        <div id="transcriptionErrorBanner" hidden></div>
         <div id="chaptersList" hidden></div>
         <div id="emptyState">Nothing here yet.</div>
         <div id="transcript"></div>
@@ -713,6 +841,10 @@
       <div id="qaContent"></div>
     </div>
     <div id="prepBriefWrap">
+      <div id="calendarMeetingInfoBox" hidden>
+        <div class="prep-user-notes-label">Meeting info (from Outlook/Google Calendar)</div>
+        <div id="calendarMeetingInfoContent"></div>
+      </div>
       <div id="prepUserNotesBox" hidden>
         <div class="prep-user-notes-label">Your notes (given priority when this brief was generated)</div>
         <div id="prepUserNotesText"></div>
@@ -727,6 +859,7 @@
       </div>
       <textarea id="prepBriefText" placeholder="No prep brief for this session."></textarea>
       <div class="prep-brief-actions">
+        <button id="runPrepBtn" class="tool-btn" hidden>Run prep now</button>
         <button id="prepBriefSaveBtn" class="tool-btn">Save edits</button>
         <button id="practiceBtn" class="tool-btn" hidden><svg class="icon"><use href="#icon-users"></use></svg> Practice this meeting</button>
       </div>
@@ -785,56 +918,61 @@
               <option value="retro">Retro</option>
               <option value="one_on_one">One-on-One</option>
               <option value="design_dev">Design / Dev Discussion</option>
+              <option value="chat">Chat with AI</option>
             </select>
-            <div id="workflowPreview">
-              <div class="workflow-preview-label">What this prepares</div>
-              <ul id="workflowPreviewList"></ul>
+            <div id="meetingOnlyFields">
+              <div id="workflowPreview">
+                <div class="workflow-preview-label">What this prepares</div>
+                <ul id="workflowPreviewList"></ul>
+              </div>
+              <div id="calendarShortcutsBox" hidden>
+                <div class="workflow-preview-label">Upcoming calendar events</div>
+                <div id="calendarShortcuts"></div>
+              </div>
+              <textarea id="userNotesInput" placeholder="Anything you want prep to focus on (optional) — e.g. &quot;ask about the auth migration timeline&quot;"></textarea>
+              <div class="schedule-field">
+                <label><svg class="icon"><use href="#icon-calendar"></use></svg> Schedule recording start (optional)</label>
+                <input type="datetime-local" id="scheduledStartInput" hidden />
+                <div class="schedule-input-row">
+                  <button type="button" id="scheduledStartTrigger" class="datetime-trigger">
+                    <svg class="icon"><use href="#icon-calendar"></use></svg>
+                    <span id="scheduledStartLabel">Pick a date &amp; time</span>
+                  </button>
+                  <button id="scheduledStartClear" type="button" title="Clear scheduled time" hidden><svg class="icon"><use href="#icon-x"></use></svg></button>
+                </div>
+                <div id="datetimePicker" class="datetime-picker" hidden>
+                  <div class="dtp-quick-picks">
+                    <button type="button" class="dtp-quick" data-quick="30m">In 30 min</button>
+                    <button type="button" class="dtp-quick" data-quick="1h">In 1 hour</button>
+                    <button type="button" class="dtp-quick" data-quick="tomorrow9">Tomorrow, 9 AM</button>
+                  </div>
+                  <div class="dtp-cal-header">
+                    <button type="button" id="dtpPrevMonth" class="dtp-nav" title="Previous month"><svg class="icon"><use href="#icon-chevron-left"></use></svg></button>
+                    <span id="dtpMonthLabel"></span>
+                    <button type="button" id="dtpNextMonth" class="dtp-nav" title="Next month"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
+                  </div>
+                  <div class="dtp-cal-weekdays">
+                    <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+                  </div>
+                  <div id="dtpCalGrid" class="dtp-cal-grid"></div>
+                  <div class="dtp-time-row">
+                    <svg class="icon"><use href="#icon-clock"></use></svg>
+                    <input type="time" id="dtpTimeInput" />
+                  </div>
+                  <div class="dtp-actions">
+                    <button type="button" id="dtpCancelBtn" class="tool-btn">Cancel</button>
+                    <button type="button" id="dtpApplyBtn" class="primary-btn">Set time</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div id="calendarShortcutsBox" hidden>
-              <div class="workflow-preview-label">Upcoming calendar events</div>
-              <div id="calendarShortcuts"></div>
-            </div>
-            <textarea id="userNotesInput" placeholder="Anything you want prep to focus on (optional) — e.g. &quot;ask about the auth migration timeline&quot;"></textarea>
             <div class="tools-checklist">
               <div class="tools-checklist-label">Tools for this session</div>
               <div id="newSessionToolsChecklist"></div>
             </div>
-            <div class="schedule-field">
-              <label><svg class="icon"><use href="#icon-calendar"></use></svg> Schedule recording start (optional)</label>
-              <input type="datetime-local" id="scheduledStartInput" hidden />
-              <div class="schedule-input-row">
-                <button type="button" id="scheduledStartTrigger" class="datetime-trigger">
-                  <svg class="icon"><use href="#icon-calendar"></use></svg>
-                  <span id="scheduledStartLabel">Pick a date &amp; time</span>
-                </button>
-                <button id="scheduledStartClear" type="button" title="Clear scheduled time" hidden><svg class="icon"><use href="#icon-x"></use></svg></button>
-              </div>
-              <div id="datetimePicker" class="datetime-picker" hidden>
-                <div class="dtp-quick-picks">
-                  <button type="button" class="dtp-quick" data-quick="30m">In 30 min</button>
-                  <button type="button" class="dtp-quick" data-quick="1h">In 1 hour</button>
-                  <button type="button" class="dtp-quick" data-quick="tomorrow9">Tomorrow, 9 AM</button>
-                </div>
-                <div class="dtp-cal-header">
-                  <button type="button" id="dtpPrevMonth" class="dtp-nav" title="Previous month"><svg class="icon"><use href="#icon-chevron-left"></use></svg></button>
-                  <span id="dtpMonthLabel"></span>
-                  <button type="button" id="dtpNextMonth" class="dtp-nav" title="Next month"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
-                </div>
-                <div class="dtp-cal-weekdays">
-                  <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
-                </div>
-                <div id="dtpCalGrid" class="dtp-cal-grid"></div>
-                <div class="dtp-time-row">
-                  <svg class="icon"><use href="#icon-clock"></use></svg>
-                  <input type="time" id="dtpTimeInput" />
-                </div>
-                <div class="dtp-actions">
-                  <button type="button" id="dtpCancelBtn" class="tool-btn">Cancel</button>
-                  <button type="button" id="dtpApplyBtn" class="primary-btn">Set time</button>
-                </div>
-              </div>
+            <div id="newSessionCreateActions">
+              <button id="saveOnlyBtn" class="primary-btn" type="button" title="Prep isn't run automatically — for a meeting, run it later from the Prep Brief tab whenever you want">Save</button>
             </div>
-            <button id="prepareBtn" class="primary-btn">Prepare session</button>
           </div>
         </div>
       </div>
@@ -971,6 +1109,18 @@
           </div>
         </fieldset>
         <fieldset>
+          <legend>Calendar import</legend>
+          <p class="tools-hint">Auto-creates a Speako session (with prep already running) for every upcoming meeting in your current Outlook calendar week — see the calendar view (icon in the header). Unlike the Outlook desktop sync above, this one <em>is</em> polled unattended; Outlook may still show a one-time security prompt the first time it runs in a session.</p>
+          <div class="settings-grid">
+            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-calendarImportEnabled" data-key="calendarImportEnabled" /><label for="setting-calendarImportEnabled">Auto-create sessions from calendar</label></div>
+            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="calendarImportPollMinutes" /></div>
+          </div>
+          <div class="settings-field" id="calendarImportSyncBox">
+            <button id="syncCalendarImportBtn" class="tool-btn" type="button">Sync calendar now</button>
+            <span id="calendarImportSyncStatus"></span>
+          </div>
+        </fieldset>
+        <fieldset>
           <legend>Communications indexing</legend>
           <p class="tools-hint">Chunks + embeds whatever's arrived in external_messages since the last run — from the Microsoft Graph sync above, or a separate daily ingestion task (see docs/EXTERNAL_INGESTION_PROMPT.md) for sources without native support.</p>
           <div class="settings-field" id="communicationsIndexBox">
@@ -1041,12 +1191,77 @@
     </div>
   </div>
 
+  <div id="calendarOverlay" hidden>
+    <div id="calendarModal" class="modal">
+      <div class="modal-header">
+        <h2 id="calendarWeekLabel">This week</h2>
+        <div id="calendarHeaderActions">
+          <button id="calendarSyncBtn" class="tool-btn" type="button">Sync now</button>
+          <span id="calendarSyncStatus"></span>
+          <button id="calendarModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+        </div>
+      </div>
+      <div class="modal-body" id="calendarModalBody">
+        <div id="calendarEmptyState" hidden>
+          <svg class="icon"><use href="#icon-calendar"></use></svg>
+          <p>No Outlook calendar events found for this week — check Settings &gt; Outlook desktop / Calendar import.</p>
+        </div>
+        <div id="calendarGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="logsOverlay" hidden>
+    <div id="logsModal" class="modal">
+      <div class="modal-header">
+        <h2>Logs</h2>
+        <div id="logsHeaderActions">
+          <select id="logsFilter">
+            <option value="all">All levels</option>
+            <option value="warn">Warn + error</option>
+            <option value="error">Error only</option>
+          </select>
+          <label id="logsAutoscrollLabel"><input type="checkbox" id="logsAutoscroll" checked> Auto-scroll</label>
+          <button id="logsClearBtn" class="tool-btn" type="button">Clear</button>
+          <button id="logsModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+        </div>
+      </div>
+      <div class="modal-body" id="logsModalBody">
+        <div id="logsEmptyState" hidden>
+          <svg class="icon"><use href="#icon-terminal"></use></svg>
+          <p>No log output yet.</p>
+        </div>
+        <div id="logsList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="extActionOverlay" hidden>
+    <div id="extActionModal" class="modal">
+      <div class="modal-header">
+        <h2 id="extActionTitle">Jira</h2>
+        <button id="extActionModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+      </div>
+      <div id="extActionAiStatus" hidden></div>
+      <div class="modal-body" id="extActionBody"></div>
+      <div id="extActionError" hidden></div>
+      <div class="modal-footer">
+        <button id="extActionCancelBtn" class="tool-btn" type="button">Cancel</button>
+        <button id="extActionSubmitBtn" class="tool-btn" type="button">Submit</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const sessionList = document.getElementById('sessionList');
     const sessionKindTabBtns = document.querySelectorAll('.kind-tab-btn');
     const nameInput = document.getElementById('nameInput');
     const languageSelect = document.getElementById('languageSelect');
     const stopBtn = document.getElementById('stopBtn');
+    const mainStartBtn = document.getElementById('mainStartBtn');
+    const mainPauseBtn = document.getElementById('mainPauseBtn');
+    const mainResumeBtn = document.getElementById('mainResumeBtn');
+    const mainStopBtn = document.getElementById('mainStopBtn');
     const mainTitle = document.getElementById('mainTitle');
     const mainMeta = document.getElementById('mainMeta');
     const saveBtn = document.getElementById('saveBtn');
@@ -1059,6 +1274,7 @@
     const deleteBtn = document.getElementById('deleteBtn');
     const transcriptEl = document.getElementById('transcript');
     const emptyState = document.getElementById('emptyState');
+    const transcriptionErrorBanner = document.getElementById('transcriptionErrorBanner');
     const tabBtns = document.querySelectorAll('.tab-btn');
     const transcriptWrap = document.getElementById('transcriptWrap');
     const summaryWrap = document.getElementById('summaryWrap');
@@ -1075,6 +1291,7 @@
     const suggestionsPanel = document.getElementById('suggestionsPanel');
     const workPrepBox = document.getElementById('workPrepBox');
     const meetingTypeSelect = document.getElementById('meetingTypeSelect');
+    const meetingOnlyFields = document.getElementById('meetingOnlyFields');
     const userNotesInput = document.getElementById('userNotesInput');
     const calendarShortcutsBox = document.getElementById('calendarShortcutsBox');
     const calendarShortcuts = document.getElementById('calendarShortcuts');
@@ -1090,8 +1307,10 @@
     const dtpTimeInput = document.getElementById('dtpTimeInput');
     const dtpCancelBtn = document.getElementById('dtpCancelBtn');
     const dtpApplyBtn = document.getElementById('dtpApplyBtn');
-    const prepareBtn = document.getElementById('prepareBtn');
+    const saveOnlyBtn = document.getElementById('saveOnlyBtn');
     const prepBriefWrap = document.getElementById('prepBriefWrap');
+    const calendarMeetingInfoBox = document.getElementById('calendarMeetingInfoBox');
+    const calendarMeetingInfoContent = document.getElementById('calendarMeetingInfoContent');
     const prepUserNotesBox = document.getElementById('prepUserNotesBox');
     const prepUserNotesText = document.getElementById('prepUserNotesText');
     const prepLikelyQuestionsBox = document.getElementById('prepLikelyQuestionsBox');
@@ -1100,6 +1319,7 @@
     const prepQuestionsToAskList = document.getElementById('prepQuestionsToAskList');
     const prepBriefText = document.getElementById('prepBriefText');
     const prepBriefSaveBtn = document.getElementById('prepBriefSaveBtn');
+    const runPrepBtn = document.getElementById('runPrepBtn');
     const practiceBtn = document.getElementById('practiceBtn');
     const voiceChatBtn = document.getElementById('voiceChatBtn');
     const voicePanel = document.getElementById('voicePanel');
@@ -1151,6 +1371,31 @@
     const insightsAskStatus = document.getElementById('insightsAskStatus');
     const insightsTopicsChart = document.getElementById('insightsTopicsChart');
     const insightsTopicsDrilldown = document.getElementById('insightsTopicsDrilldown');
+    const calendarBtn = document.getElementById('calendarBtn');
+    const calendarOverlay = document.getElementById('calendarOverlay');
+    const calendarModalClose = document.getElementById('calendarModalClose');
+    const calendarWeekLabel = document.getElementById('calendarWeekLabel');
+    const calendarSyncBtn = document.getElementById('calendarSyncBtn');
+    const calendarSyncStatus = document.getElementById('calendarSyncStatus');
+    const calendarEmptyState = document.getElementById('calendarEmptyState');
+    const calendarGrid = document.getElementById('calendarGrid');
+    const logsBtn = document.getElementById('logsBtn');
+    const logsOverlay = document.getElementById('logsOverlay');
+    const logsModalClose = document.getElementById('logsModalClose');
+    const logsModalBody = document.getElementById('logsModalBody');
+    const logsList = document.getElementById('logsList');
+    const logsEmptyState = document.getElementById('logsEmptyState');
+    const logsFilter = document.getElementById('logsFilter');
+    const logsAutoscroll = document.getElementById('logsAutoscroll');
+    const logsClearBtn = document.getElementById('logsClearBtn');
+    const extActionOverlay = document.getElementById('extActionOverlay');
+    const extActionModalClose = document.getElementById('extActionModalClose');
+    const extActionTitle = document.getElementById('extActionTitle');
+    const extActionAiStatus = document.getElementById('extActionAiStatus');
+    const extActionBody = document.getElementById('extActionBody');
+    const extActionError = document.getElementById('extActionError');
+    const extActionCancelBtn = document.getElementById('extActionCancelBtn');
+    const extActionSubmitBtn = document.getElementById('extActionSubmitBtn');
     const newSessionOpenBtn = document.getElementById('newSessionOpenBtn');
     const newSessionOverlay = document.getElementById('newSessionOverlay');
     const newSessionModalClose = document.getElementById('newSessionModalClose');
@@ -1167,6 +1412,7 @@
     const kebabBtn = document.getElementById('kebabBtn');
     const kebabMenu = document.getElementById('kebabMenu');
     let selectedCalendarEventId = null;
+    let selectedCalendarEvent = null; // the full picked CalendarEvent object — location/organizer/attendees/description sent along at prepare time (see POST /api/session/prepare)
     let availableTools = null; // cached GET /api/tools response: { jira, confluence, bitbucket, mem0, ragCloud, localCodebase, webSearch }
     let currentSessionActiveTools = null; // activeTools of whichever session is open in the main panel
     let availableFeatures = null; // cached GET /api/features response: { sentiment, triggers, rag, meetingState } -> { enabled, label }
@@ -1265,6 +1511,15 @@
     }
 
     async function updateWorkflowPreview() {
+      // "Chat with AI" isn't a real MeetingType with a prep workflow — the
+      // calendar/notes/schedule fields below the dropdown are meaningless
+      // for it (there's nothing to prepare, and a chat starts immediately
+      // rather than being scheduled), so hide that whole section.
+      const isChat = meetingTypeSelect.value === 'chat';
+      meetingOnlyFields.hidden = isChat;
+      saveOnlyBtn.textContent = isChat ? 'Start chat' : 'Save';
+      if (isChat) return;
+
       const steps = await loadWorkflowSteps();
       const forType = steps[meetingTypeSelect.value] || [];
       workflowPreviewList.innerHTML = '';
@@ -1433,11 +1688,28 @@
     let interimEl = null;
     let controlSocket = null; // the live WebSocket instance — voice chat/practice send over this same connection (binary audio frames + JSON control messages)
     let liveSessionId = null; // the session actually recording right now, if any
+    let sessionPaused = false; // true while liveSessionId's recording is paused (still "live," just not capturing)
     let activeSessionId = null; // the session currently shown in the main panel
     let sessions = []; // cached list from GET /api/sessions
     let currentSessionKindTab = 'meeting'; // sidebar filter — 'meeting' | 'practice' | 'chat', see s.sessionKind
     let currentSummary = null;
     let currentActionItems = [];
+
+    // What kind of follow-up an action item is — drives which one-click
+    // action (if any) the "Action" column offers. Kept in sync by hand with
+    // the ActionItemType union in src/storage/summaryRepository.ts.
+    const ACTION_ITEM_TYPE_META = {
+      general: { label: 'General' },
+      code_change: { label: 'Code change' },
+      email: { label: 'Email' },
+      jira: { label: 'Jira' },
+      confluence: { label: 'Confluence' },
+      reminder: { label: 'Reminder' },
+      todo: { label: 'To-do' },
+      schedule_meeting: { label: 'Meeting' },
+      teams_message: { label: 'Teams' },
+    };
+    const ACTION_ITEM_TYPE_ORDER = Object.keys(ACTION_ITEM_TYPE_META);
     let currentTriggers = [];
     let currentSuggestions = [];
     let currentFactChecks = [];
@@ -1578,7 +1850,16 @@
         const card = document.createElement('div');
         card.className = 'session-card' + (s.id === activeSessionId ? ' active' : '');
         const dotClass = s.id === liveSessionId ? 'recording' : s.diarizedAt ? 'diarized' : '';
-        const notYetStarted = !s.endedAt && s.id !== liveSessionId && s.sessionType === 'work';
+        // A session that ended with zero segments never actually recorded
+        // anything (e.g. an auto-started/auto-stopped calendar import that
+        // never got real audio) — "Start recording" is the accurate label
+        // for that case, not "Resume", even though endedAt is already set.
+        const notYetStarted = (!s.endedAt || s.segmentCount === 0) && s.id !== liveSessionId && s.sessionType === 'work';
+        // A stopped session that has real content can always be manually
+        // resumed if needed — e.g. one cut short by mistake before the real
+        // meeting wrapped up. Reuses the exact same start/resume path as
+        // "Start recording".
+        const canResume = !!s.endedAt && s.segmentCount > 0 && s.id !== liveSessionId && s.sessionType === 'work' && s.sessionKind === 'meeting';
         const badge = notYetStarted ? `<span class="prep-badge ${s.prepStatus}">${s.prepStatus}</span>` : '';
         const scheduled = notYetStarted && s.scheduledStartAt;
         card.innerHTML = `
@@ -1595,6 +1876,7 @@
             </div>
           ` : ''}
           ${notYetStarted ? '<button class="session-start-recording"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording</button>' : ''}
+          ${canResume ? '<button class="session-start-recording session-resume-recording"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume recording</button>' : ''}
         `;
         card.addEventListener('click', () => openSession(s.id));
         card.querySelector('.session-delete').addEventListener('click', (e) => {
@@ -1645,6 +1927,7 @@
       switchTab('transcript');
       clearWaveform();
       updateWaveformVisibility();
+      transcriptionErrorBanner.hidden = true;
       setSuggestionsUnread(false);
 
       fetch(`/api/sessions/${id}/segments`)
@@ -1696,13 +1979,46 @@
     function setMainHeader(session) {
       if (!session) return;
       mainTitle.textContent = displayName(session);
-      const recording = !session.endedAt;
+      // A session row exists (and has no endedAt) from the moment it's
+      // created/prepped, well before recording actually starts — e.g. a
+      // calendar-imported or manually-prepped session sitting in "ready —
+      // not yet started". Only the session actually live right now
+      // (liveSessionId) is truly "Recording…"; anything else not-yet-ended
+      // falls through to the same prep/not-started label the sidebar cards
+      // already use via sessionMetaLabel.
+      const live = session.id === liveSessionId;
+      const recording = live && !sessionPaused;
+      const paused = live && sessionPaused;
       mainMeta.classList.toggle('recording', recording);
+      mainMeta.classList.toggle('paused', paused);
       mainMeta.textContent = recording
         ? 'Recording…'
-        : `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`;
+        : paused
+          ? 'Paused'
+          : session.endedAt
+            ? `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`
+            : sessionMetaLabel(session);
       currentSessionActiveTools = session.activeTools ?? null;
       currentSessionActiveFeatures = session.activeFeatures ?? null;
+      updateRecordingControls(session);
+    }
+
+    // Shows exactly one of Start/Pause/Resume/Stop for the session currently
+    // open in the main panel, mirroring the sidebar's notYetStarted/canResume
+    // logic but scoped to "the session I'm looking at right now" rather than
+    // every card in the list.
+    function updateRecordingControls(session) {
+      const live = session.id === liveSessionId;
+      const notYetStarted = (!session.endedAt || session.segmentCount === 0) && !live && session.sessionType === 'work';
+      const canResume = !!session.endedAt && session.segmentCount > 0 && !live && session.sessionType === 'work' && session.sessionKind === 'meeting';
+      mainStartBtn.hidden = !(notYetStarted || canResume);
+      mainStartBtn.textContent = '';
+      mainStartBtn.innerHTML = canResume
+        ? '<svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume recording'
+        : '<svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording';
+      mainPauseBtn.hidden = !(live && !sessionPaused);
+      mainResumeBtn.hidden = !(live && sessionPaused);
+      mainStopBtn.hidden = !live;
     }
 
     mainTitle.addEventListener('focus', () => {
@@ -1734,6 +2050,7 @@
 
     function renderSegment(segment) {
       emptyState.style.display = 'none';
+      transcriptionErrorBanner.hidden = true;
       const alignmentClass = segment.speaker === 'You' ? 'mine' : 'theirs';
       if (!segment.isFinal) {
         if (!interimEl) {
@@ -1844,6 +2161,7 @@
           btn.addEventListener('click', () => {
             nameInput.value = event.title;
             selectedCalendarEventId = event.id;
+            selectedCalendarEvent = event;
             if (event.startTime) scheduledStartInput.value = isoToDatetimeLocal(event.startTime);
             updateScheduledStartClearVisibility();
             for (const card of calendarShortcuts.querySelectorAll('.calendar-shortcut')) card.classList.remove('selected');
@@ -1969,8 +2287,11 @@
       }
     });
 
-    prepareBtn.addEventListener('click', async () => {
-      prepareBtn.disabled = true;
+    // Creates the session but never runs prep here — prep only ever happens
+    // later, on demand, from the Prep Brief tab's "Run prep now" button
+    // (prepStatus: 'none' server-side until then).
+    async function createSessionFromModal() {
+      saveOnlyBtn.disabled = true;
       try {
         const res = await fetch('/api/session/prepare', {
           method: 'POST',
@@ -1984,6 +2305,11 @@
             activeTools: checkedTools(newSessionToolsChecklist),
             activeFeatures: checkedFeatures(newSessionFeaturesChecklist),
             scheduledStartAt: scheduledStartInput.value ? new Date(scheduledStartInput.value).toISOString() : undefined,
+            calendarLocation: selectedCalendarEvent?.location || undefined,
+            calendarOrganizer: selectedCalendarEvent?.organizer || undefined,
+            calendarAttendees: selectedCalendarEvent?.attendees || undefined,
+            calendarDescription: selectedCalendarEvent?.description || undefined,
+            skipPrep: true,
           }),
         });
         const { sessionId } = await res.json();
@@ -1992,12 +2318,38 @@
         scheduledStartInput.value = '';
         updateScheduledStartClearVisibility();
         selectedCalendarEventId = null;
+        selectedCalendarEvent = null;
         closeNewSessionModal();
         await refreshSessions();
         openSession(sessionId);
       } finally {
-        prepareBtn.disabled = false;
+        saveOnlyBtn.disabled = false;
       }
+    }
+
+    // Reuses the exact same chat flow as the sidebar header's mic icon
+    // (startVoice('chat')) — but unlike the mic icon, carries whatever
+    // name/language/tools were set in this modal through to the chat
+    // session instead of always falling back to the global defaults.
+    // "Heavy features" (newSessionFeaturesChecklist) deliberately isn't
+    // sent — chat has no transcript/trigger/meeting-state pipeline for
+    // those to gate anything on.
+    function startChatFromModal() {
+      const name = nameInput.value.trim() || undefined;
+      const languageCode = languageSelect.value || undefined;
+      const activeTools = checkedTools(newSessionToolsChecklist);
+      nameInput.value = '';
+      closeNewSessionModal();
+      startVoice('chat', undefined, { name, languageCode, activeTools });
+    }
+
+    // Single "Save" button — branches on the meeting-type dropdown, since
+    // "Chat with AI" there isn't a real MeetingType, just a UI-level choice
+    // between "create a (not-yet-prepped) meeting session" and "start a
+    // live chat right now."
+    saveOnlyBtn.addEventListener('click', () => {
+      if (meetingTypeSelect.value === 'chat') startChatFromModal();
+      else createSessionFromModal();
     });
 
     function formatCodebaseSummary(repos) {
@@ -2345,6 +2697,293 @@
       }
     }
 
+    // ---------- Calendar week grid ----------
+
+    const CALENDAR_ROW_HEIGHT_PX = 48;
+    const CALENDAR_DEFAULT_DURATION_MIN = 30;
+    const CALENDAR_MIN_HOUR = 7;
+    const CALENDAR_MAX_HOUR = 19;
+
+    function startOfCurrentCalendarWeek() {
+      const now = new Date();
+      const day = now.getDay(); // 0 = Sunday .. 6 = Saturday
+      const diffToMonday = day === 0 ? -6 : 1 - day;
+      const monday = new Date(now);
+      monday.setHours(0, 0, 0, 0);
+      monday.setDate(monday.getDate() + diffToMonday);
+      return monday;
+    }
+
+    function formatCalendarHourLabel(hour) {
+      if (hour === 0) return '12 AM';
+      if (hour < 12) return `${hour} AM`;
+      if (hour === 12) return '12 PM';
+      return `${hour - 12} PM`;
+    }
+
+    function calendarEventEnd(event) {
+      const start = new Date(event.startTime);
+      return event.endTime ? new Date(event.endTime) : new Date(start.getTime() + CALENDAR_DEFAULT_DURATION_MIN * 60_000);
+    }
+
+    function renderCalendarGrid(events) {
+      calendarEmptyState.hidden = events.length > 0;
+      calendarGrid.hidden = events.length === 0;
+      if (events.length === 0) {
+        calendarGrid.innerHTML = '';
+        return;
+      }
+
+      const monday = startOfCurrentCalendarWeek();
+      const days = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        return d;
+      });
+
+      let minHour = CALENDAR_MIN_HOUR;
+      let maxHour = CALENDAR_MAX_HOUR;
+      for (const ev of events) {
+        const start = new Date(ev.startTime);
+        const end = calendarEventEnd(ev);
+        minHour = Math.min(minHour, start.getHours());
+        maxHour = Math.max(maxHour, end.getHours() + (end.getMinutes() > 0 ? 1 : 0));
+      }
+      const hourCount = Math.max(1, maxHour - minHour);
+      const totalHeight = hourCount * CALENDAR_ROW_HEIGHT_PX;
+      const todayKey = new Date().toDateString();
+
+      const eventsByDay = days.map(() => []);
+      for (const ev of events) {
+        const dayIndex = days.findIndex((d) => d.toDateString() === new Date(ev.startTime).toDateString());
+        if (dayIndex !== -1) eventsByDay[dayIndex].push(ev);
+      }
+
+      const dayHeaderHtml = days
+        .map(
+          (d) => `
+        <div class="cal-day-header ${d.toDateString() === todayKey ? 'cal-today' : ''}">
+          <div class="cal-day-name">${d.toLocaleDateString(undefined, { weekday: 'short' })}</div>
+          <div class="cal-day-num">${d.getDate()}</div>
+        </div>
+      `
+        )
+        .join('');
+
+      const hourLabelsHtml = Array.from(
+        { length: hourCount },
+        (_, i) => `<div class="cal-hour-label" style="height:${CALENDAR_ROW_HEIGHT_PX}px">${formatCalendarHourLabel(minHour + i)}</div>`
+      ).join('');
+
+      const dayColumnsHtml = days
+        .map((_, i) => {
+          const dayEventsHtml = eventsByDay[i]
+            .map((ev) => {
+              const start = new Date(ev.startTime);
+              const end = calendarEventEnd(ev);
+              const startMinFromGridTop = (start.getHours() - minHour) * 60 + start.getMinutes();
+              const durationMin = Math.max(15, (end - start) / 60_000);
+              const top = Math.max(0, (startMinFromGridTop / 60) * CALENDAR_ROW_HEIGHT_PX);
+              const height = Math.max(18, (durationMin / 60) * CALENDAR_ROW_HEIGHT_PX);
+              const timeLabel = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+              const hasSession = !!ev.sessionId;
+              const eventClass = [ev.isCanceled ? 'cal-event-canceled' : '', hasSession ? 'cal-event-linked' : ''].filter(Boolean).join(' ');
+              return `
+            <div class="cal-event ${eventClass}" style="top:${top}px; height:${height}px"
+                 data-session-id="${hasSession ? ev.sessionId : ''}" title="${escapeHtml(ev.title)}${ev.isCanceled ? ' (canceled)' : ''}">
+              <div class="cal-event-time">${timeLabel}</div>
+              <div class="cal-event-title">${escapeHtml(ev.title)}</div>
+            </div>
+          `;
+            })
+            .join('');
+          return `<div class="cal-day-column" style="height:${totalHeight}px">${dayEventsHtml}</div>`;
+        })
+        .join('');
+
+      calendarGrid.innerHTML = `
+        <div id="calCornerCell"></div>
+        ${dayHeaderHtml}
+        <div id="calHourLabels">${hourLabelsHtml}</div>
+        <div id="calDayColumns" style="height:${totalHeight}px">${dayColumnsHtml}</div>
+      `;
+
+      calendarGrid.querySelectorAll('.cal-event-linked').forEach((el) => {
+        el.addEventListener('click', () => {
+          const sessionId = el.dataset.sessionId;
+          if (!sessionId) return;
+          closeCalendarModal();
+          refreshSessions().then(() => openSession(sessionId));
+        });
+      });
+    }
+
+    async function loadCalendarWeek() {
+      try {
+        const events = await fetch('/api/calendar/week').then((r) => r.json());
+        renderCalendarGrid(events);
+      } catch {
+        renderCalendarGrid([]);
+      }
+    }
+
+    function formatCalendarImportStatus(status) {
+      if (!status.configured) return 'Not configured — see Settings > Calendar import.';
+      if (status.lastError) return `Last sync failed: ${status.lastError}`;
+      if (status.lastRunAt) return `Last synced ${new Date(status.lastRunAt).toLocaleTimeString()}`;
+      return 'Not synced yet.';
+    }
+
+    let calendarImportPollTimer = null;
+
+    function stopCalendarImportPoll() {
+      if (calendarImportPollTimer) {
+        clearTimeout(calendarImportPollTimer);
+        calendarImportPollTimer = null;
+      }
+    }
+
+    // Self-scheduling: as long as a sync is in progress, this reschedules
+    // itself every 2s instead of checking once and leaving the "Syncing…"
+    // text stuck forever if the real Outlook COM export takes longer than a
+    // single fixed delay (it routinely does — see NOTES.md's timing notes).
+    // Called both right after clicking "Sync now" and whenever the calendar
+    // view opens, in case a sync (manual or the background poller's) is
+    // already running.
+    async function refreshCalendarImportStatus() {
+      stopCalendarImportPoll();
+      try {
+        const status = await fetch('/api/calendar/import/status').then((r) => r.json());
+        calendarSyncBtn.disabled = status.inProgress || !status.configured;
+        if (status.inProgress) {
+          calendarSyncStatus.textContent = 'Syncing… approve the Outlook prompt if one appears';
+          calendarImportPollTimer = setTimeout(() => {
+            refreshCalendarImportStatus();
+            if (!calendarOverlay.hidden) loadCalendarWeek();
+          }, 2000);
+        } else {
+          calendarSyncStatus.textContent = formatCalendarImportStatus(status);
+        }
+      } catch {
+        // Feature unset/unreachable — leave status blank, same as other optional integrations.
+      }
+    }
+
+    function openCalendarModal() {
+      calendarOverlay.hidden = false;
+      const monday = startOfCurrentCalendarWeek();
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      calendarWeekLabel.textContent = `This week — ${fmt(monday)} – ${fmt(sunday)}`;
+      loadCalendarWeek();
+      refreshCalendarImportStatus();
+    }
+
+    function closeCalendarModal() {
+      calendarOverlay.hidden = true;
+    }
+
+    calendarBtn.addEventListener('click', openCalendarModal);
+    calendarModalClose.addEventListener('click', closeCalendarModal);
+    calendarOverlay.addEventListener('click', (e) => {
+      if (e.target === calendarOverlay) closeCalendarModal();
+    });
+    calendarSyncBtn.addEventListener('click', async () => {
+      calendarSyncBtn.disabled = true;
+      calendarSyncStatus.textContent = 'Syncing… approve the Outlook prompt if one appears';
+      try {
+        const res = await fetch('/api/calendar/import', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok) {
+          calendarSyncStatus.textContent = body.error || 'Sync failed.';
+          calendarSyncBtn.disabled = false;
+          return;
+        }
+      } catch {
+        calendarSyncStatus.textContent = 'Sync failed.';
+        calendarSyncBtn.disabled = false;
+        return;
+      }
+      refreshCalendarImportStatus();
+    });
+
+    // ---------- Logs panel ----------
+
+    const LOG_ENTRIES_CAP = 1000;
+    let logEntries = [];
+
+    function logLineMatchesFilter(entry) {
+      const filter = logsFilter.value;
+      if (filter === 'error') return entry.level === 'error';
+      if (filter === 'warn') return entry.level === 'warn' || entry.level === 'error';
+      return true;
+    }
+
+    function logLineHtml(entry) {
+      const time = new Date(entry.timestamp).toLocaleTimeString(undefined, { hour12: false }) +
+        '.' + String(new Date(entry.timestamp).getMilliseconds()).padStart(3, '0');
+      return `<div class="log-line level-${entry.level}">` +
+        `<span class="log-line-time">${time}</span>` +
+        `<span class="log-line-level">${entry.level}</span>` +
+        `<span class="log-line-message">${escapeHtml(entry.message)}</span>` +
+        `</div>`;
+    }
+
+    function renderLogsList() {
+      const visible = logEntries.filter(logLineMatchesFilter);
+      logsEmptyState.hidden = visible.length > 0;
+      logsList.innerHTML = visible.map(logLineHtml).join('');
+      if (logsAutoscroll.checked) logsModalBody.scrollTop = logsModalBody.scrollHeight;
+    }
+
+    // Called for every log line as it streams in over the websocket — kept
+    // separate from renderLogsList() so a line that doesn't match the
+    // current filter is still buffered (switching the filter later shows it)
+    // without re-rendering the whole (potentially long) list on every line.
+    function appendLogLine(entry) {
+      logEntries.push(entry);
+      if (logEntries.length > LOG_ENTRIES_CAP) logEntries.shift();
+      if (logsOverlay.hidden) return;
+      if (!logLineMatchesFilter(entry)) return;
+      logsEmptyState.hidden = true;
+      logsList.insertAdjacentHTML('beforeend', logLineHtml(entry));
+      if (logsAutoscroll.checked) logsModalBody.scrollTop = logsModalBody.scrollHeight;
+    }
+
+    async function openLogsModal() {
+      logsOverlay.hidden = false;
+      try {
+        const body = await fetch('/api/logs').then((r) => r.json());
+        logEntries = body.logs || [];
+      } catch {
+        logEntries = [];
+      }
+      renderLogsList();
+    }
+
+    function closeLogsModal() {
+      logsOverlay.hidden = true;
+    }
+
+    logsBtn.addEventListener('click', openLogsModal);
+    logsModalClose.addEventListener('click', closeLogsModal);
+    logsOverlay.addEventListener('click', (e) => {
+      if (e.target === logsOverlay) closeLogsModal();
+    });
+    logsFilter.addEventListener('change', renderLogsList);
+    logsClearBtn.addEventListener('click', () => {
+      logEntries = [];
+      renderLogsList();
+    });
+
+    extActionModalClose.addEventListener('click', closeExtActionDialog);
+    extActionCancelBtn.addEventListener('click', closeExtActionDialog);
+    extActionOverlay.addEventListener('click', (e) => {
+      if (e.target === extActionOverlay) closeExtActionDialog();
+    });
+    extActionSubmitBtn.addEventListener('click', submitExtActionDialog);
+
     // ---------- New-session modal ----------
 
     function openNewSessionModal() {
@@ -2460,7 +3099,63 @@
         .join('');
     }
 
+    // Raw Outlook/Google calendar metadata for the session — independent of
+    // whether a prep brief exists at all (a calendar-imported session always
+    // has this the moment it's created; the AI-synthesized brief below it
+    // can still fail/be pending). Reads from the already-cached `sessions`
+    // array rather than a separate fetch, same as practiceBtn's lookup just
+    // below.
+    function renderCalendarMeetingInfo(sessionId) {
+      const session = sessions.find((s) => s.id === sessionId);
+      const info = session && session.calendarMeetingInfo;
+      calendarMeetingInfoBox.hidden = !info;
+      if (!info) return;
+
+      const rows = [];
+      if (info.organizer) rows.push(`<div class="cmi-row"><span class="cmi-row-label">Organizer</span><span>${escapeHtml(info.organizer)}</span></div>`);
+      if (info.location) rows.push(`<div class="cmi-row"><span class="cmi-row-label">Location</span><span>${escapeHtml(info.location)}</span></div>`);
+      if (info.attendees && info.attendees.length) {
+        rows.push(`<div class="cmi-row"><span class="cmi-row-label">Attendees</span><span>${escapeHtml(info.attendees.join(', '))}</span></div>`);
+      }
+      const description = info.description
+        ? `<div class="cmi-description">${escapeHtml(info.description)}</div>`
+        : '';
+      calendarMeetingInfoContent.innerHTML = rows.join('') + description;
+    }
+
+    // Only shown for a session that skipped prep at creation ("Just save")
+    // or whose prep previously failed — 'pending'/'ready' sessions already
+    // have (or are getting) a brief, so there's nothing to manually trigger.
+    function updateRunPrepBtn(sessionId) {
+      const session = sessions.find((s) => s.id === sessionId);
+      const canRunPrep = session && session.sessionType === 'work' && (session.prepStatus === 'none' || session.prepStatus === 'failed');
+      runPrepBtn.hidden = !canRunPrep;
+      runPrepBtn.disabled = false;
+      runPrepBtn.textContent = session && session.prepStatus === 'failed' ? 'Retry prep' : 'Run prep now';
+    }
+
+    runPrepBtn.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      runPrepBtn.disabled = true;
+      runPrepBtn.textContent = 'Preparing…';
+      try {
+        const res = await fetch(`/api/sessions/${activeSessionId}/prep`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(data.error || 'Could not start prep.');
+          updateRunPrepBtn(activeSessionId);
+          return;
+        }
+        await refreshSessions();
+        updateRunPrepBtn(activeSessionId);
+      } catch {
+        updateRunPrepBtn(activeSessionId);
+      }
+    });
+
     async function loadPrepBrief(sessionId) {
+      renderCalendarMeetingInfo(sessionId);
+      updateRunPrepBtn(sessionId);
       try {
         const res = await fetch(`/api/sessions/${sessionId}/prep-brief`);
         if (!res.ok) {
@@ -2758,8 +3453,21 @@
 
     function renderActionItems(items) {
       currentActionItems = items;
+      const typeOptionsHtml = ACTION_ITEM_TYPE_ORDER.map((t) => `<option value="${t}">${ACTION_ITEM_TYPE_META[t].label}</option>`).join('');
+      const toolbarAndForm = `
+        <div id="actionItemsToolbar"><button id="actionItemsAddBtn" class="tool-btn" type="button">+ Add action item</button></div>
+        <form id="actionItemsAddForm" hidden>
+          <input name="description" placeholder="Task" required />
+          <input name="owner" placeholder="Owner (optional)" />
+          <input name="dueDate" type="date" />
+          <select name="type">${typeOptionsHtml}</select>
+          <button type="submit" class="tool-btn">Add</button>
+          <button type="button" id="actionItemsAddCancel" class="tool-btn">Cancel</button>
+        </form>
+      `;
       if (!items.length) {
-        actionItemsContent.innerHTML = '<div id="emptyState" style="display:block">No action items yet — click "Generate summary".</div>';
+        actionItemsContent.innerHTML = toolbarAndForm + '<div id="emptyState" style="display:block">No action items yet — click "Generate summary", or add one manually.</div>';
+        wireActionItemsAddForm();
         return;
       }
       const rows = items
@@ -2768,20 +3476,45 @@
         <tr class="${item.status === 'done' ? 'done' : ''}" data-id="${item.id}">
           <td><input type="checkbox" class="ai-check" ${item.status === 'done' ? 'checked' : ''} /></td>
           <td>${item.owner || 'TBD'}</td>
-          <td>${item.description}</td>
+          <td>${escapeHtml(item.description)}</td>
           <td>${item.dueDate || 'TBD'}</td>
+          <td><select class="ai-type-select">${ACTION_ITEM_TYPE_ORDER.map((t) => `<option value="${t}" ${t === item.type ? 'selected' : ''}>${ACTION_ITEM_TYPE_META[t].label}</option>`).join('')}</select></td>
           <td><span class="ai-badge ${item.confidence}">${item.confidence}</span></td>
-          <td class="cc-cell"><button class="cc-implement-btn">Implement with Claude Code</button></td>
+          <td class="cc-cell">${actionCellHtml(item)}</td>
+          <td><button class="ai-delete" title="Delete action item"><svg class="icon"><use href="#icon-x"></use></svg></button></td>
         </tr>
       `
         )
         .join('');
-      actionItemsContent.innerHTML = `
+      actionItemsContent.innerHTML = toolbarAndForm + `
         <table class="ai-table">
-          <thead><tr><th></th><th>Owner</th><th>Task</th><th>Due</th><th>Confidence</th><th>Code change</th></tr></thead>
+          <thead><tr><th></th><th>Owner</th><th>Task</th><th>Due</th><th>Type</th><th>Confidence</th><th>Action</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
+      wireActionItemsAddForm();
+      actionItemsContent.querySelectorAll('.ai-type-select').forEach((select) => {
+        select.addEventListener('change', async () => {
+          const row = select.closest('tr');
+          const id = Number(row.dataset.id);
+          const res = await fetch(`/api/action-items/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: select.value }),
+          });
+          if (!res.ok) return;
+          const updated = await res.json();
+          renderActionItems(currentActionItems.map((i) => (i.id === id ? updated : i)));
+        });
+      });
+      actionItemsContent.querySelectorAll('.ai-action-btn').forEach((button) => {
+        button.addEventListener('click', () => {
+          const row = button.closest('tr');
+          const id = Number(row.dataset.id);
+          const item = currentActionItems.find((i) => i.id === id);
+          if (item) runActionItemAction(item, button);
+        });
+      });
       actionItemsContent.querySelectorAll('.ai-check').forEach((checkbox) => {
         checkbox.addEventListener('change', () => {
           const row = checkbox.closest('tr');
@@ -2798,9 +3531,352 @@
           });
         });
       });
+      actionItemsContent.querySelectorAll('.ai-delete').forEach((button) => {
+        button.addEventListener('click', () => {
+          const row = button.closest('tr');
+          const id = Number(row.dataset.id);
+          if (!confirm('Delete this action item?')) return;
+          fetch(`/api/action-items/${id}`, { method: 'DELETE' })
+            .then((res) => {
+              if (!res.ok) return;
+              renderActionItems(currentActionItems.filter((i) => i.id !== id));
+            });
+        });
+      });
       for (const item of items) {
-        refreshCodeChangeCell(item.id);
+        if (item.type === 'code_change') refreshCodeChangeCell(item.id);
       }
+    }
+
+    // Builds the "Action" cell for a freshly-rendered row — codeChangeCellHtml()
+    // (used only for type === 'code_change') is refreshed async right after via
+    // refreshCodeChangeCell(), same as before this cell became type-dependent.
+    // jira/confluence show a link to whatever was actually created/updated
+    // last time, alongside a button to do it again (e.g. transition status a
+    // second time, or add another comment).
+    function actionCellHtml(item) {
+      const ref = item.externalRef;
+      const refHtml = ref
+        ? `<a class="ai-external-ref" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener">${escapeHtml(ref.key)} ${ref.action} ↗</a>`
+        : '';
+      switch (item.type) {
+        case 'code_change':
+          return '<button class="cc-implement-btn">Implement with Claude Code</button>';
+        case 'email':
+          return '<button class="ai-action-btn">Draft email</button>';
+        case 'jira':
+          return refHtml + `<button class="ai-action-btn">${ref ? 'Update Jira again' : 'Create / update Jira'}</button>`;
+        case 'confluence':
+          return refHtml + `<button class="ai-action-btn">${ref ? 'Update Confluence again' : 'Create / update Confluence'}</button>`;
+        case 'schedule_meeting':
+          return '<button class="ai-action-btn">Schedule on Google Calendar</button>';
+        case 'teams_message':
+          return '<button class="ai-action-btn">Open in Teams</button>';
+        case 'reminder':
+          return '<button class="ai-action-btn">Remind me</button>';
+        default:
+          return '';
+      }
+    }
+
+    // One-click actions per type. jira/confluence are real writes — they
+    // open a small dialog (openExtActionDialog) so the user picks/confirms
+    // project+issue type (or an existing issue key + status transition) /
+    // space key before anything is actually created or updated; nothing
+    // fires without that explicit confirm. email/teams_message/
+    // schedule_meeting stay deep-link-only (never sent/posted/created by
+    // Speako itself — the target app is still where the user reviews and
+    // finishes it), but the link is now built from an AI-drafted subject/
+    // body/message/title instead of the raw sentence — see NOTES.md.
+    function runActionItemAction(item, button) {
+      switch (item.type) {
+        case 'email':
+          draftThenOpen(item, button, 'email/suggest', (d) => `mailto:?subject=${encodeURIComponent(d.subject || item.description)}&body=${encodeURIComponent(d.body || '')}`, false);
+          break;
+        case 'jira':
+          openExtActionDialog(item, 'jira');
+          break;
+        case 'confluence':
+          openExtActionDialog(item, 'confluence');
+          break;
+        case 'schedule_meeting':
+          draftThenOpen(item, button, 'schedule-meeting/suggest', (d) => `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(d.title || item.description)}&details=${encodeURIComponent(d.details || '')}`, true);
+          break;
+        case 'teams_message':
+          draftThenOpen(item, button, 'teams-message/suggest', (d) => `https://teams.microsoft.com/l/chat/0/0?message=${encodeURIComponent(d.message || item.description)}`, true);
+          break;
+        case 'reminder':
+          scheduleActionItemReminder(item);
+          break;
+      }
+    }
+
+    // Shared by email/teams_message/schedule_meeting: fetches an AI-drafted
+    // version of the link's text (see actionItemDrafts.ts), then opens the
+    // resulting URL — falling back to the raw description if the draft call
+    // fails, so a Gemini hiccup never blocks the deep link outright.
+    // usesPopup=true reserves a blank tab synchronously (before the await)
+    // since popup blockers drop window.open() calls made after one; mailto
+    // navigation (usesPopup=false) has no such restriction.
+    async function draftThenOpen(item, button, suggestPath, buildUrl, usesPopup) {
+      const win = usesPopup ? window.open('', '_blank') : null;
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Drafting…';
+      let url;
+      try {
+        const res = await fetch(`/api/action-items/${item.id}/${suggestPath}`);
+        url = buildUrl(res.ok ? await res.json() : {});
+      } catch {
+        url = buildUrl({});
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+      if (usesPopup) {
+        if (win) win.location.href = url;
+        else window.open(url, '_blank');
+      } else {
+        window.location.href = url;
+      }
+    }
+
+    // ---------- Jira/Confluence "create or update" dialog ----------
+
+    let extActionContext = null; // { item, tool: 'jira' | 'confluence' }
+
+    function detectJiraKey(text) {
+      const m = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/);
+      return m ? m[0] : '';
+    }
+
+    function extModeFieldsHtml(mode, activeMode, html) {
+      return `<div class="ext-mode-fields" data-mode="${mode}" ${mode !== activeMode ? 'hidden' : ''}>${html}</div>`;
+    }
+
+    function jiraDialogBodyHtml(item) {
+      const detectedKey = detectJiraKey(item.description);
+      const activeMode = detectedKey ? 'update' : 'create';
+      const createHtml = `
+        <label>Project key</label><input name="projectKey" placeholder="e.g. PROJ" />
+        <label>Issue type</label><input name="issueType" value="Task" placeholder="Task / Bug / Story / Epic" />
+        <label>Summary</label><input name="summary" value="${escapeHtml(item.description)}" />
+        <label>Description (optional)</label><textarea name="description" rows="3"></textarea>
+      `;
+      const updateHtml = `
+        <label>Issue key</label><input name="issueKey" value="${escapeHtml(detectedKey)}" placeholder="e.g. PROJ-123" />
+        <label>Transition to status (optional)</label><input name="transition" placeholder="e.g. In Progress, Done" />
+        <label>Comment (optional)</label><textarea name="comment" rows="3">${escapeHtml(item.description)}</textarea>
+      `;
+      return `
+        <div class="ext-mode-toggle">
+          <label><input type="radio" name="extMode" value="create" ${activeMode === 'create' ? 'checked' : ''}> Create new issue</label>
+          <label><input type="radio" name="extMode" value="update" ${activeMode === 'update' ? 'checked' : ''}> Update existing issue</label>
+        </div>
+        ${extModeFieldsHtml('create', activeMode, createHtml)}
+        ${extModeFieldsHtml('update', activeMode, updateHtml)}
+      `;
+    }
+
+    function confluenceDialogBodyHtml(item) {
+      const title = escapeHtml(item.description.slice(0, 120));
+      const content = escapeHtml(item.description);
+      const createHtml = `
+        <label>Space key</label><input name="spaceKey" placeholder="e.g. DEV" />
+        <label>Title</label><input name="title" value="${title}" />
+        <label>Content (markdown)</label><textarea name="content" rows="4">${content}</textarea>
+        <label>Parent page ID (optional)</label><input name="parentId" />
+      `;
+      const updateHtml = `
+        <label>Page ID</label><input name="pageId" placeholder="e.g. 12345678" />
+        <label>Title</label><input name="title" value="${title}" />
+        <label>Content (markdown)</label><textarea name="content" rows="4">${content}</textarea>
+      `;
+      return `
+        <div class="ext-mode-toggle">
+          <label><input type="radio" name="extMode" value="create" checked> Create new page</label>
+          <label><input type="radio" name="extMode" value="update"> Update existing page</label>
+        </div>
+        ${extModeFieldsHtml('create', 'create', createHtml)}
+        ${extModeFieldsHtml('update', 'create', updateHtml)}
+      `;
+    }
+
+    function openExtActionDialog(item, tool) {
+      extActionContext = { item, tool };
+      extActionTitle.textContent = tool === 'jira' ? 'Jira' : 'Confluence';
+      extActionError.hidden = true;
+      extActionAiStatus.hidden = true;
+      extActionBody.innerHTML = tool === 'jira' ? jiraDialogBodyHtml(item) : confluenceDialogBodyHtml(item);
+      extActionBody.querySelectorAll('input[name="extMode"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          extActionBody.querySelectorAll('.ext-mode-fields').forEach((div) => {
+            div.hidden = div.dataset.mode !== radio.value;
+          });
+        });
+      });
+      // Fields the user starts typing into are left alone once the AI
+      // suggestion below comes back — never overwrite something they're
+      // already editing.
+      extActionBody.querySelectorAll('input, textarea').forEach((el) => {
+        el.addEventListener('input', () => { el.dataset.dirty = '1'; }, { once: true });
+      });
+      extActionOverlay.hidden = false;
+      loadAiFieldSuggestion(item, tool);
+    }
+
+    function closeExtActionDialog() {
+      extActionOverlay.hidden = true;
+      extActionContext = null;
+    }
+
+    function setExtFieldIfClean(name, value) {
+      if (!value) return;
+      extActionBody.querySelectorAll(`[name="${name}"]`).forEach((el) => {
+        if (!el.dataset.dirty) el.value = value;
+      });
+    }
+
+    // Fires once per dialog open — drafts Jira/Confluence fields from the
+    // action item's description via Gemini (src/summarization/
+    // actionItemDrafts.ts) so the user reviews/edits an AI-written starting
+    // point instead of a blank or copy-pasted-verbatim one. Never itself
+    // decides create-vs-update mode, and never submits anything — see
+    // NOTES.md.
+    async function loadAiFieldSuggestion(item, tool) {
+      extActionAiStatus.hidden = false;
+      extActionAiStatus.textContent = 'Asking AI for suggestions…';
+      const stillRelevant = () => extActionContext && extActionContext.item.id === item.id && extActionContext.tool === tool;
+      try {
+        const res = await fetch(`/api/action-items/${item.id}/${tool}/suggest`);
+        const data = await res.json();
+        if (!stillRelevant()) return;
+        if (!res.ok) {
+          extActionAiStatus.textContent = data.error || 'AI suggestion failed — fill in manually.';
+          return;
+        }
+        if (tool === 'jira') {
+          setExtFieldIfClean('issueType', data.issueType);
+          setExtFieldIfClean('summary', data.summary);
+          setExtFieldIfClean('description', data.description);
+          setExtFieldIfClean('transition', data.transition);
+          setExtFieldIfClean('comment', data.comment);
+        } else {
+          setExtFieldIfClean('title', data.title);
+          setExtFieldIfClean('content', data.content);
+        }
+        extActionAiStatus.hidden = true;
+      } catch {
+        if (stillRelevant()) extActionAiStatus.textContent = 'AI suggestion failed — fill in manually.';
+      }
+    }
+
+    function activeExtModeFields() {
+      const mode = extActionBody.querySelector('input[name="extMode"]:checked').value;
+      return { mode, fields: extActionBody.querySelector(`.ext-mode-fields[data-mode="${mode}"]`) };
+    }
+
+    function fieldValue(fields, name) {
+      const el = fields.querySelector(`[name="${name}"]`);
+      return el ? el.value.trim() : '';
+    }
+
+    async function submitExtActionDialog() {
+      const { item, tool } = extActionContext;
+      const { mode, fields } = activeExtModeFields();
+      const body =
+        tool === 'jira'
+          ? mode === 'create'
+            ? { mode, projectKey: fieldValue(fields, 'projectKey'), issueType: fieldValue(fields, 'issueType'), summary: fieldValue(fields, 'summary'), description: fieldValue(fields, 'description') }
+            : { mode, issueKey: fieldValue(fields, 'issueKey'), transition: fieldValue(fields, 'transition'), comment: fieldValue(fields, 'comment') }
+          : mode === 'create'
+            ? { mode, spaceKey: fieldValue(fields, 'spaceKey'), title: fieldValue(fields, 'title'), content: fieldValue(fields, 'content'), parentId: fieldValue(fields, 'parentId') }
+            : { mode, pageId: fieldValue(fields, 'pageId'), title: fieldValue(fields, 'title'), content: fieldValue(fields, 'content') };
+      extActionSubmitBtn.disabled = true;
+      extActionError.hidden = true;
+      try {
+        const res = await fetch(`/api/action-items/${item.id}/${tool}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed.');
+        closeExtActionDialog();
+        renderActionItems(currentActionItems.map((i) => (i.id === data.id ? data : i)));
+      } catch (err) {
+        extActionError.textContent = err.message;
+        extActionError.hidden = false;
+      } finally {
+        extActionSubmitBtn.disabled = false;
+      }
+    }
+
+    // Browser Notification API only — no server/OS-level reminder exists, so
+    // this only fires while the tab stays open. Best-effort at 9am local time
+    // on the due date since dueDate has no time component; falls back to
+    // asking for one right now if there's no due date to anchor to.
+    // The actual due-time check runs server-side now (InterfaceServer.
+    // checkReminders(), on the same 20s timer as scheduled-session checks,
+    // plus once whenever a tab connects) — this button's only job is
+    // getting Notification permission granted ahead of time, so the popup
+    // in the 'reminder-due' handler below can actually fire when the
+    // moment comes. The old client-only setTimeout is gone: it overflowed
+    // for anything more than ~24.8 days out and lost the reminder outright
+    // on any page refresh.
+    async function scheduleActionItemReminder(item) {
+      if (!item.dueDate) {
+        alert('Add a due date to this action item first, so there is something to remind you at.');
+        return;
+      }
+      if (!('Notification' in window)) {
+        alert(`This browser doesn't support notifications — Speako will still track this reminder, but check the Action Items tab around ${item.dueDate} instead of expecting a popup.`);
+        return;
+      }
+      let permission = Notification.permission;
+      if (permission === 'default') permission = await Notification.requestPermission();
+      const target = new Date(`${item.dueDate}T09:00:00`);
+      if (permission !== 'granted') {
+        alert(`Reminder tracked for ${target.toLocaleDateString()}, but notification permission wasn't granted — you won't get a popup. Check the Action Items tab around then instead.`);
+        return;
+      }
+      alert(`Reminder set — Speako will notify you around ${target.toLocaleString()}, as long as the app is open in a browser tab then (or the next time you open it afterward).`);
+    }
+
+    function wireActionItemsAddForm() {
+      const addBtn = document.getElementById('actionItemsAddBtn');
+      const form = document.getElementById('actionItemsAddForm');
+      const cancelBtn = document.getElementById('actionItemsAddCancel');
+      addBtn.addEventListener('click', () => {
+        form.hidden = false;
+        addBtn.hidden = true;
+        form.querySelector('input[name="description"]').focus();
+      });
+      cancelBtn.addEventListener('click', () => {
+        form.reset();
+        form.hidden = true;
+        addBtn.hidden = false;
+      });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!activeSessionId) return;
+        const description = form.description.value.trim();
+        if (!description) return;
+        const body = { description, owner: form.owner.value.trim(), dueDate: form.dueDate.value, type: form.type.value };
+        const res = await fetch(`/api/sessions/${activeSessionId}/action-items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) return;
+        const item = await res.json();
+        // The server also broadcasts this over the websocket (so other open
+        // tabs pick it up) — that broadcast can arrive and get applied before
+        // this fetch resolves, so guard against appending it a second time.
+        if (!currentActionItems.some((i) => i.id === item.id)) {
+          renderActionItems([...currentActionItems, item]);
+        }
+      });
     }
 
     // ---------- Triggers (raw detection log) ----------
@@ -3244,8 +4320,12 @@
       activeSessionId = null;
       clearTranscriptDom();
       mainTitle.textContent = 'No session selected';
-      mainMeta.classList.remove('recording');
+      mainMeta.classList.remove('recording', 'paused');
       mainMeta.textContent = 'Start a new session or pick one from the list';
+      mainStartBtn.hidden = true;
+      mainPauseBtn.hidden = true;
+      mainResumeBtn.hidden = true;
+      mainStopBtn.hidden = true;
       saveBtn.disabled = true;
       identifyBtn.disabled = true;
       summarizeBtn.disabled = true;
@@ -3292,6 +4372,49 @@
         mainMeta.textContent = `Error stopping: ${err.message}`;
       } finally {
         stopBtn.disabled = false;
+      }
+    });
+
+    mainStartBtn.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      mainStartBtn.disabled = true;
+      try {
+        const session = sessions.find((s) => s.id === activeSessionId);
+        await fetch('/api/session/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: activeSessionId, languageCode: session?.languageCodes?.[0] }),
+        });
+        openSession(activeSessionId);
+      } finally {
+        mainStartBtn.disabled = false;
+      }
+    });
+
+    mainPauseBtn.addEventListener('click', async () => {
+      mainPauseBtn.disabled = true;
+      try {
+        await fetch('/api/session/pause', { method: 'POST' });
+      } finally {
+        mainPauseBtn.disabled = false;
+      }
+    });
+
+    mainResumeBtn.addEventListener('click', async () => {
+      mainResumeBtn.disabled = true;
+      try {
+        await fetch('/api/session/resume', { method: 'POST' });
+      } finally {
+        mainResumeBtn.disabled = false;
+      }
+    });
+
+    mainStopBtn.addEventListener('click', async () => {
+      mainStopBtn.disabled = true;
+      try {
+        await fetch('/api/session/stop', { method: 'POST' });
+      } finally {
+        mainStopBtn.disabled = false;
       }
     });
 
@@ -3357,12 +4480,14 @@
 
         if (msg.type === 'status') {
           liveSessionId = msg.recording ? msg.sessionId : null;
+          sessionPaused = !!msg.paused;
           setRecordingUiState(msg.recording);
           if (msg.recording && !activeSessionId) openSession(msg.sessionId);
           updateWaveformVisibility();
           refreshSessions();
         } else if (msg.type === 'session-start') {
           liveSessionId = msg.sessionId;
+          sessionPaused = false;
           setRecordingUiState(true);
           clearWaveform();
           updateWaveformVisibility();
@@ -3371,10 +4496,17 @@
           // which re-renders the sidebar — but the schedule poller starts a
           // session with no client-side driver at all, so without this the
           // sidebar would never show it's now recording or that its
-          // schedule badge cleared.
-          refreshSessions();
+          // schedule badge cleared. If that auto-started session also
+          // happens to be the one already open in the main panel, its
+          // header needs the same refresh — otherwise it stays stuck on
+          // whatever "ready — not yet started"/"preparing…" label it had
+          // before recording actually began.
+          refreshSessions().then(() => {
+            if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
+          });
         } else if (msg.type === 'session-stop') {
           liveSessionId = null;
+          sessionPaused = false;
           setRecordingUiState(false);
           updateWaveformVisibility();
           // openSession() reads the session's endedAt from the in-memory
@@ -3384,6 +4516,18 @@
           refreshSessions().then(() => {
             if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
           });
+        } else if (msg.type === 'session-pause') {
+          sessionPaused = true;
+          if (msg.sessionId === activeSessionId) {
+            const session = sessions.find((s) => s.id === activeSessionId);
+            if (session) setMainHeader(session);
+          }
+        } else if (msg.type === 'session-resume') {
+          sessionPaused = false;
+          if (msg.sessionId === activeSessionId) {
+            const session = sessions.find((s) => s.id === activeSessionId);
+            if (session) setMainHeader(session);
+          }
         } else if (msg.type === 'waveform') {
           if (msg.sessionId === activeSessionId && msg.sessionId === liveSessionId) {
             pushWaveformEnvelope(msg.envelope);
@@ -3407,6 +4551,26 @@
           if (msg.factCheck.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
         } else if (msg.type === 'fact-check-updated') {
           if (msg.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
+        } else if (msg.type === 'log-line') {
+          appendLogLine(msg.entry);
+        } else if (msg.type === 'transcription-error') {
+          if (msg.sessionId === activeSessionId) {
+            transcriptionErrorBanner.hidden = false;
+            transcriptionErrorBanner.textContent = `Transcription error: ${msg.message} — check the Logs panel or your Google Cloud Speech-to-Text configuration. Recording continues, but speech may not be transcribed.`;
+          }
+        } else if (msg.type === 'reminder-due') {
+          const item = msg.actionItem;
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('Speako reminder', { body: item.description });
+          } else {
+            // No permission (or unsupported) — the Logs panel is the only
+            // other place this can visibly land; still better than the
+            // reminder silently firing into nothing.
+            console.warn(`[reminder] "${item.description}" is due, but Notification permission isn't granted — open Action Items to see it.`);
+          }
+          if (item.sessionId === activeSessionId) {
+            renderActionItems(currentActionItems.map((i) => (i.id === item.id ? item : i)));
+          }
         } else if (msg.type === 'live-query') {
           if (msg.query.sessionId === activeSessionId) appendQuery(msg.query);
         } else if (msg.type === 'diarizing') {
@@ -3477,6 +4641,17 @@
             const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
             if (idx !== -1) currentActionItems[idx] = msg.actionItem;
           }
+        } else if (msg.type === 'action-item-added') {
+          // Only reflects it into the live array for other open tabs/windows
+          // — the tab that actually submitted the form already re-rendered
+          // itself from the POST response.
+          if (msg.sessionId === activeSessionId && !currentActionItems.some((i) => i.id === msg.actionItem.id)) {
+            renderActionItems([...currentActionItems, msg.actionItem]);
+          }
+        } else if (msg.type === 'action-item-deleted') {
+          if (msg.sessionId === activeSessionId && currentActionItems.some((i) => i.id === msg.actionItemId)) {
+            renderActionItems(currentActionItems.filter((i) => i.id !== msg.actionItemId));
+          }
         } else if (msg.type === 'session-renamed') {
           if (msg.sessionId === activeSessionId) mainTitle.textContent = msg.name || displayName({ startedAt: null });
           refreshSessions();
@@ -3485,9 +4660,21 @@
           refreshSessions();
         } else if (msg.type === 'session-schedule-updated') {
           refreshSessions();
+        } else if (msg.type === 'prep-started') {
+          refreshSessions().then(() => {
+            if (msg.sessionId === activeSessionId) updateRunPrepBtn(msg.sessionId);
+          });
         } else if (msg.type === 'prep-ready') {
-          if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
+          // Refresh the cached `sessions` array (has the new prepStatus)
+          // before loadPrepBrief() reads it via updateRunPrepBtn() — the old
+          // order left "Run prep now" visibly stale until some unrelated
+          // refresh happened to run later.
+          refreshSessions().then(() => {
+            if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
+          });
+        } else if (msg.type === 'calendar-session-created') {
           refreshSessions();
+          if (!calendarOverlay.hidden) loadCalendarWeek();
         } else if (msg.type === 'codebase-index-progress') {
           if (msg.status === 'started') {
             codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
@@ -3607,7 +4794,7 @@
       if (e.key === 'Enter') sendVoiceText();
     });
 
-    async function startVoice(mode, sourceSessionId) {
+    async function startVoice(mode, sourceSessionId, chatOptions) {
       if (voiceMode) return;
       if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) {
         voicePanelTitleText.textContent = mode === 'practice' ? 'Practicing meeting' : 'Voice chat';
@@ -3678,7 +4865,7 @@
         }
       }, 15_000);
 
-      controlSocket.send(JSON.stringify({ type: 'voice-start', mode, sourceSessionId }));
+      controlSocket.send(JSON.stringify({ type: 'voice-start', mode, sourceSessionId, ...chatOptions }));
     }
 
     // Idempotent — also used to dismiss the panel when startVoice() bailed

@@ -6,7 +6,8 @@ export type TriggerCategory =
   | 'vagueness'
   | 'tone_shift'
   | 'unanswered_question'
-  | 'anticipated_answer';
+  | 'anticipated_answer'
+  | 'code_reference';
 
 export interface TriggerEvent {
   id: number;

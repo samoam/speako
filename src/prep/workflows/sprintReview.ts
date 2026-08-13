@@ -1,16 +1,23 @@
-import { WorkflowContext, WorkflowResult, gatherSources, gatherToolSources } from './types';
+import { WorkflowContext, WorkflowResult, gatherSources, gatherToolSources, previousSessionNotes, searchTopic, trySource } from './types';
 
-/** §4.2 Sprint Review: sprint tickets by status, sprint-goal/release-notes doc, recent commits for demo-relevant activity, plus any stakeholder email threads. */
+/**
+ * §4.2 Sprint Review: sprint tickets by status, sprint-goal/release-notes doc,
+ * recent commits for demo-relevant activity, stakeholder email threads, and
+ * the previous review's notes (what was planned to ship last time, against
+ * what actually shipped) — same "last time's notes" pattern every other
+ * workflow with a recurring predecessor already uses.
+ */
 export async function gather(ctx: WorkflowContext): Promise<WorkflowResult> {
-  const topic = ctx.sessionName || 'this sprint';
+  const topic = searchTopic(ctx, 'this sprint');
 
-  return gatherSources(
-    gatherToolSources(ctx, [
+  return gatherSources([
+    trySource('previous_sprint_review', () => previousSessionNotes(ctx.previousSession)),
+    ...gatherToolSources(ctx, [
       { tool: 'jira', name: 'jira_sprint_tickets', query: 'current sprint OR just closed sprint', limit: 10 },
-      { tool: 'confluence', name: 'confluence_sprint_goal', query: `${ctx.sessionName || ''} sprint goal release notes`, limit: 3 },
+      { tool: 'confluence', name: 'confluence_sprint_goal', query: `${topic} sprint goal release notes`, limit: 3 },
       { tool: 'bitbucket', name: 'bitbucket_recent_commits', query: 'recent changes', limit: 5 },
       { tool: 'bitbucketReviews', name: 'bitbucket_my_pr_activity', query: '', limit: 5 },
       { tool: 'email', name: 'email_context', query: topic, limit: 5 },
-    ])
-  );
+    ]),
+  ]);
 }

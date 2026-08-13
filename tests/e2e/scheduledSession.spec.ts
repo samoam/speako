@@ -38,13 +38,12 @@ async function scheduleForRightNow(page: Page): Promise<void> {
 test('scheduled session: setting a schedule shows it in the sidebar, and it can be canceled', async ({ page }) => {
   await page.goto('/');
   await page.click('#newSessionOpenBtn');
-  await page.click('#workTypeBtn');
 
   const sessionName = `e2e-scheduled-${Date.now()}`;
   await page.fill('#nameInput', sessionName);
   await scheduleInOneHour(page);
   await expect(page.locator('#scheduledStartLabel')).not.toHaveText('Pick a date & time');
-  await page.click('#prepareBtn');
+  await page.click('#saveOnlyBtn');
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
 
@@ -63,12 +62,11 @@ test.skip(!soxAvailable(), 'SoX not resolvable on this machine — skipping the 
 test('scheduled session: auto-starts recording at the scheduled time without any manual click', async ({ page }) => {
   await page.goto('/');
   await page.click('#newSessionOpenBtn');
-  await page.click('#workTypeBtn');
 
   const sessionName = `e2e-autostart-${Date.now()}`;
   await page.fill('#nameInput', sessionName);
   await scheduleForRightNow(page);
-  await page.click('#prepareBtn');
+  await page.click('#saveOnlyBtn');
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
 

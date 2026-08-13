@@ -5,13 +5,14 @@ import { isConfluenceConfigured } from '../../src/integrations/confluenceMcp';
 
 const canRunPrep = !!config.geminiApiKey && (isJiraConfigured() || isConfluenceConfigured());
 
-test('new session modal: type toggle, workflow preview, tool checklist, and a real prep run', async ({ page }) => {
+test('new session modal: workflow preview, tool checklist, save (no auto-prep), then "Run prep now"', async ({ page }) => {
   await page.goto('/');
   await page.click('#newSessionOpenBtn');
   await expect(page.locator('#newSessionOverlay')).toBeVisible();
 
-  await page.click('#workTypeBtn');
-  await expect(page.locator('#workPrepBox')).toBeVisible();
+  // Speako is work-only (no personal/work toggle button anymore) — the work
+  // prep section is unconditionally visible, nothing to click to reveal it.
+  await expect(page.locator('#meetingOnlyFields')).toBeVisible();
 
   await page.selectOption('#meetingTypeSelect', 'design_dev');
   await expect(page.locator('#workflowPreviewList li').first()).toBeVisible();
@@ -20,15 +21,39 @@ test('new session modal: type toggle, workflow preview, tool checklist, and a re
 
   const sessionName = `e2e-newSession-${Date.now()}`;
   await page.fill('#nameInput', sessionName);
-  await page.click('#prepareBtn');
+  await expect(page.locator('#saveOnlyBtn')).toHaveText('Save');
+  await page.click('#saveOnlyBtn');
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
   await expect(page.locator('#mainTitle')).toHaveText(sessionName);
 
+  // Prep never runs automatically anymore — it's created with prepStatus
+  // 'none' and only starts when explicitly triggered from this tab.
   await page.click('.tab-btn[data-tab="prepBrief"]');
   await expect(page.locator('#prepBriefWrap')).toBeVisible();
+  await expect(page.locator('#runPrepBtn')).toBeVisible();
+  await expect(page.locator('#runPrepBtn')).toHaveText('Run prep now');
 
-  test.skip(!canRunPrep, 'Gemini + Jira/Confluence not configured — skipping real prep-content assertion.');
+  test.skip(!canRunPrep, 'Gemini + Jira/Confluence not configured — skipping real prep run.');
 
+  await page.click('#runPrepBtn');
+  await expect(page.locator('#runPrepBtn')).toBeHidden({ timeout: 60_000 });
   await expect(page.locator('#prepBriefText')).not.toHaveValue('', { timeout: 60_000 });
+});
+
+test('new session modal: "Chat with AI" in the type dropdown hides meeting-only fields and starts a chat instead', async ({ page }) => {
+  await page.goto('/');
+  await page.click('#newSessionOpenBtn');
+  await expect(page.locator('#newSessionOverlay')).toBeVisible();
+  await expect(page.locator('#meetingOnlyFields')).toBeVisible();
+
+  await page.selectOption('#meetingTypeSelect', 'chat');
+  await expect(page.locator('#meetingOnlyFields')).toBeHidden();
+  await expect(page.locator('#saveOnlyBtn')).toHaveText('Start chat');
+  // Tools still apply to a chat session — that checklist stays visible.
+  await expect(page.locator('#newSessionToolsChecklist')).toBeVisible();
+
+  await page.click('#saveOnlyBtn');
+  await expect(page.locator('#newSessionOverlay')).toBeHidden();
+  await expect(page.locator('#voicePanel')).toBeVisible();
 });

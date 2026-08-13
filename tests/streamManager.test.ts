@@ -142,3 +142,70 @@ test('reconstructs absolute timestamps across a restart via the running audio of
 
   sm.stop();
 });
+
+test('pause(): closes the current call, opens no new one, and drops audio written while paused', async () => {
+  const calls: FakeCall[] = [];
+  const sm = new StreamManager(1, ['en-US'], () => {
+    const c = new FakeCall();
+    calls.push(c);
+    return c;
+  }) as any;
+
+  sm.start();
+  const call0: FakeCall = calls[0];
+  sm.pause();
+  assert.equal(call0.ended, true);
+
+  sm.writeAudio(Buffer.from([9, 9])); // must be dropped outright, not buffered for later
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 1, 'no new call should open while paused');
+  sm.stop();
+});
+
+test('resume(): reopens a call, and segment timestamps continue from actual audio time — the pause itself contributes nothing', async () => {
+  const sampleRate = 16000;
+  const calls: FakeCall[] = [];
+  const sm = new StreamManager(1, ['en-US'], () => {
+    const c = new FakeCall();
+    calls.push(c);
+    return c;
+  }) as any;
+
+  sm.start();
+  sm.writeAudio(makeChunk(1000, sampleRate, 1)); // 1s of real audio before pausing
+  sm.pause();
+  await new Promise((resolve) => setImmediate(resolve)); // let the paused call's (harmless) 'end' fire
+
+  sm.resume();
+  assert.equal(calls.length, 2, 'resume() should open a fresh call');
+  const newCall: FakeCall = calls[1];
+
+  const segments: any[] = [];
+  sm.on('segment', (s: any) => segments.push(s));
+
+  newCall.emit('data', {
+    results: [
+      {
+        alternatives: [{ transcript: 'after pause' }],
+        isFinal: true,
+        channelTag: 1,
+        resultEndOffset: { seconds: 0, nanos: 200000000 },
+      },
+    ],
+  });
+
+  // 1000ms of real audio before the pause + 200ms into the resumed stream —
+  // however long the pause lasted in wall-clock time, it adds zero.
+  assert.equal(segments[0].endMs, 1200);
+
+  sm.stop();
+});
+
+test('pause(): a no-op once the stream is already fully stopped', () => {
+  const sm = new StreamManager(1, ['en-US'], () => new FakeCall()) as any;
+  sm.start();
+  sm.stop();
+  sm.pause();
+  assert.equal(sm.paused, false);
+});

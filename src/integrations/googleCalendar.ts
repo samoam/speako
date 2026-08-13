@@ -7,8 +7,16 @@ export interface CalendarEvent {
   title: string;
   description: string;
   startTime: string;
+  /** Optional — not every consumer (classifyMeetingType, existing test fixtures) needs it; the week-grid calendar view falls back to a default block duration when absent. */
+  endTime?: string;
   attendeeCount: number;
   isRecurring: boolean;
+  /** Optional for the same reason as endTime above — a canceled meeting that's still on the calendar (Outlook keeps them visible, marked "Canceled: "). */
+  isCanceled?: boolean;
+  /** Display names (not necessarily resolvable email addresses — see outlookDesktopCalendar.ts) of everyone invited, organizer included. Optional: absent when the source has nothing to report. */
+  attendees?: string[];
+  location?: string;
+  organizer?: string;
 }
 
 /** Fully configured means both the OAuth client secret AND a saved token exist — the one-time `npm run gcal-auth` setup has been completed. */
@@ -57,7 +65,12 @@ export async function listUpcomingEvents(windowMinutes: number): Promise<Calenda
     title: event.summary || '(untitled event)',
     description: event.description || '',
     startTime: event.start?.dateTime || event.start?.date || '',
+    endTime: event.end?.dateTime || event.end?.date || undefined,
     attendeeCount: event.attendees?.length || 0,
     isRecurring: !!event.recurringEventId,
+    isCanceled: event.status === 'cancelled',
+    attendees: event.attendees?.map((a) => a.displayName || a.email || '').filter(Boolean) || undefined,
+    location: event.location || undefined,
+    organizer: event.organizer?.displayName || event.organizer?.email || undefined,
   }));
 }

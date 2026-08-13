@@ -16,9 +16,12 @@ import {
   setActiveTools,
   setActiveFeatures,
   setScheduledStartAt,
+  setScheduledEndAt,
   getDueScheduledSessions,
+  isScheduledEndDue,
   endSession,
   insertFinalSegment,
+  setPrepStatus,
 } from '../storage/segmentRepository';
 import { LiveVoiceSession, VOICE_TOOL_KEYS } from '../voice/liveVoiceSession';
 import { buildChatInstruction, buildPracticeInstruction } from '../voice/systemInstructions';
@@ -31,9 +34,17 @@ import {
   getActionItems,
   getActionItem,
   setActionItemStatus,
+  setActionItemType,
+  setActionItemExternalRef,
+  getUnnotifiedReminders,
+  markReminderNotified,
   saveSummaryAndActionItems,
+  insertManualActionItem,
+  deleteActionItem,
   Summary,
   ActionItem,
+  ActionItemType,
+  ACTION_ITEM_TYPES,
 } from '../storage/summaryRepository';
 import { getSentimentScoresForSession } from '../storage/sentimentRepository';
 import { getTriggersForSession, getTrigger, updateTriggerSegmentText, TriggerEvent } from '../storage/triggerRepository';
@@ -56,15 +67,23 @@ import { saveChapters, getChapters, MeetingChapters } from '../storage/chaptersR
 import { getTopicFrequencies } from '../insights/topicTrend';
 import { getRelationshipTrend } from '../insights/relationshipTrend';
 import { answerAcrossAllMeetings } from '../qa/crossSessionQa';
+import { getLogBuffer, onLogEntry, LogEntry } from '../logging/logStore';
 import { insertCrossSessionQuery, getCrossSessionQueryHistory } from '../storage/crossSessionQueryRepository';
 import { runCodebaseIndex } from '../codebase/indexCodebase';
 import { getIndexedRepoSummary } from '../storage/codeRepository';
 import { updateSettings } from '../settingsStore';
-import { ALL_TOOL_KEYS } from '../tools/activeTools';
+import { ALL_TOOL_KEYS, ToolKey } from '../tools/activeTools';
 import { ALL_FEATURE_KEYS, FEATURE_LABELS } from '../tools/activeFeatures';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
-import { isJiraConfigured } from '../integrations/jiraMcp';
-import { isConfluenceConfigured } from '../integrations/confluenceMcp';
+import { isJiraConfigured, createJiraIssue, updateJiraIssue } from '../integrations/jiraMcp';
+import { isConfluenceConfigured, createConfluencePage, updateConfluencePage } from '../integrations/confluenceMcp';
+import {
+  suggestJiraFields,
+  suggestConfluenceFields,
+  suggestEmailFields,
+  suggestTeamsMessageFields,
+  suggestScheduleMeetingFields,
+} from '../summarization/actionItemDrafts';
 import { isMem0Configured } from '../integrations/mem0Client';
 import { isRagConfigured } from '../integrations/ragClient';
 import { isLocalCodebaseConfigured } from '../codebase/indexCodebase';
@@ -75,6 +94,8 @@ import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../stora
 import { isMsGraphConfigured } from '../integrations/msGraphAuth';
 import { syncOutlookAndTeams } from '../integrations/msGraphSync';
 import { isOutlookDesktopConfigured, syncOutlookDesktop } from '../integrations/outlookDesktop';
+import { getCurrentWeekEvents, importUpcomingEventsThisWeek } from '../calendar/calendarImport';
+import { getSessionIdByCalendarEventId } from '../storage/segmentRepository';
 import {
   isClaudeCodeConfigured,
   resolveLocalRepoPath,
@@ -124,6 +145,8 @@ const SETTINGS_FIELDS = [
   'msGraphPollMinutes',
   'msGraphLookbackHours',
   'outlookDesktopLookbackHours',
+  'calendarImportEnabled',
+  'calendarImportPollMinutes',
   'prepEnabled',
   'sentimentEnabled',
   'triggerDetectionEnabled',
@@ -157,13 +180,19 @@ function serializeSettingValue(key: (typeof SETTINGS_FIELDS)[number]): string {
 
 type StartHandler = (languageCode?: string, name?: string, existingSessionId?: string, activeFeatures?: string[] | null) => string;
 type StopHandler = () => void;
+type PauseHandler = () => void;
+type ResumeHandler = () => void;
 
 export class InterfaceServer {
   private wss: WebSocketServer;
   private httpServer: http.Server;
   private currentSessionId: string | null = null;
+  /** True while the currently-recording session is paused — distinct from currentSessionId being null (stopped entirely). Reset whenever a session starts or stops. */
+  private paused = false;
   private onStartHandler: StartHandler | null = null;
   private onStopHandler: StopHandler | null = null;
+  private onPauseHandler: PauseHandler | null = null;
+  private onResumeHandler: ResumeHandler | null = null;
   /** Voice (chat/practice) is per-client, unlike currentSessionId's single-global-recording model — each connected browser tab can have at most one active Live session. */
   private voiceSessions = new Map<
     WebSocket,
@@ -184,9 +213,13 @@ export class InterfaceServer {
   private outlookDesktopSyncInProgress = false;
   private outlookDesktopLastSyncAt: string | null = null;
   private outlookDesktopLastError: string | null = null;
+  private calendarImportInProgress = false;
+  private calendarImportLastRunAt: string | null = null;
+  private calendarImportLastError: string | null = null;
   private scheduleTimer: NodeJS.Timeout | null = null;
   private voiceIdleCheckTimer: NodeJS.Timeout | null = null;
   private msGraphSyncTimer: NodeJS.Timeout | null = null;
+  private calendarImportTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     const app = express();
@@ -194,11 +227,15 @@ export class InterfaceServer {
     app.use(express.static(path.join(__dirname, 'public')));
 
     app.get('/api/status', (_req, res) => {
-      res.json({ recording: !!this.currentSessionId, sessionId: this.currentSessionId });
+      res.json({ recording: !!this.currentSessionId, sessionId: this.currentSessionId, paused: this.paused });
     });
 
     app.get('/api/languages', (_req, res) => {
       res.json(SUPPORTED_LANGUAGES);
+    });
+
+    app.get('/api/logs', (_req, res) => {
+      res.json({ logs: getLogBuffer() });
     });
 
     // Settings page: current effective value of every dynamic config field
@@ -329,28 +366,82 @@ export class InterfaceServer {
         ? req.body.activeFeatures.filter((f: unknown) => typeof f === 'string' && ALL_FEATURE_KEYS.includes(f as any))
         : undefined;
       const scheduledStartAt = typeof req.body?.scheduledStartAt === 'string' ? req.body.scheduledStartAt : undefined;
+      // Raw Outlook/Google metadata for the picked calendar event, if any —
+      // sent by the New Session modal's calendar-shortcut picker, which
+      // already has the full CalendarEvent object client-side (see
+      // loadCalendarShortcuts() in index.html). Only meaningful alongside
+      // calendarEventId; a manually-typed session with no calendar event
+      // simply won't send any of these.
+      const calendarLocation = typeof req.body?.calendarLocation === 'string' ? req.body.calendarLocation : undefined;
+      const calendarOrganizer = typeof req.body?.calendarOrganizer === 'string' ? req.body.calendarOrganizer : undefined;
+      const calendarAttendees = Array.isArray(req.body?.calendarAttendees)
+        ? req.body.calendarAttendees.filter((a: unknown): a is string => typeof a === 'string')
+        : undefined;
+      const calendarDescription = typeof req.body?.calendarDescription === 'string' ? req.body.calendarDescription.slice(0, 2000) : undefined;
+      const calendarMeetingInfo = calendarEventId
+        ? { location: calendarLocation, organizer: calendarOrganizer, attendees: calendarAttendees, description: calendarDescription }
+        : undefined;
+
+      // "Just save the session" — skips running prep now (see prepStatus:
+      // 'none', distinct from 'pending') so a manually-created session isn't
+      // forced through prep up front; POST /api/sessions/:id/prep below
+      // triggers it later, on demand, using what's already stored here.
+      const skipPrep = req.body?.skipPrep === true;
 
       const sessionId = uuid();
       createPrepSession(sessionId, languageCodes, name, {
-        prepStatus: 'pending',
+        prepStatus: skipPrep ? 'none' : 'pending',
         meetingType,
         calendarEventId,
         activeTools,
         activeFeatures,
         scheduledStartAt,
+        calendarMeetingInfo,
       });
+
+      if (!skipPrep) {
+        runPrep({
+          sessionId,
+          sessionName: name,
+          meetingType,
+          calendarEventId,
+          userNotes,
+          activeTools: activeTools ?? null,
+          onDone: (id, status) => this.broadcast({ type: 'prep-ready', sessionId: id, status }),
+        }).catch((err: any) => console.error(`[prep] unexpected failure for session ${sessionId}:`, err.message));
+      }
+
+      res.json({ sessionId });
+    });
+
+    // Manual "run prep now" for a session that skipped it at creation
+    // (prepStatus: 'none') or whose prep previously failed — reuses the
+    // meetingType/calendarEventId/activeTools already stored on the row;
+    // there's no fresh userNotes input at this point (that only exists in
+    // the New Session modal), so this reruns without any.
+    app.post('/api/sessions/:id/prep', (req, res) => {
+      const sessionId = req.params.id;
+      const session = getSession(sessionId);
+      if (!session) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      if (session.prepStatus === 'pending') {
+        res.status(409).json({ error: 'Prep is already running for this session.' });
+        return;
+      }
+      setPrepStatus(sessionId, 'pending');
+      this.broadcast({ type: 'prep-started', sessionId });
+      res.json({ started: true });
 
       runPrep({
         sessionId,
-        sessionName: name,
-        meetingType,
-        calendarEventId,
-        userNotes,
-        activeTools: activeTools ?? null,
+        sessionName: session.name || undefined,
+        meetingType: (session.meetingType || 'generic') as MeetingType,
+        calendarEventId: session.calendarEventId || undefined,
+        activeTools: session.activeTools,
         onDone: (id, status) => this.broadcast({ type: 'prep-ready', sessionId: id, status }),
       }).catch((err: any) => console.error(`[prep] unexpected failure for session ${sessionId}:`, err.message));
-
-      res.json({ sessionId });
     });
 
     // Editable anytime, independent of prep — affects live fact-checking going
@@ -389,6 +480,10 @@ export class InterfaceServer {
     // Set (or, with null, cancel) when a not-yet-started session should auto-start
     // recording — see checkScheduledSessions() below. Editable/cancelable anytime
     // before the session actually starts; Session.start() clears it once it does.
+    // This manual endpoint has no way to specify an auto-stop time, so it always
+    // clears scheduledEndAt too — otherwise a calendar-imported session's original
+    // meeting-end time could linger and immediately auto-stop a later manual
+    // recording that has nothing to do with that original schedule.
     app.patch('/api/sessions/:id/schedule', (req, res) => {
       const sessionId = req.params.id;
       if (!getSession(sessionId)) {
@@ -397,6 +492,7 @@ export class InterfaceServer {
       }
       const scheduledStartAt = typeof req.body?.scheduledStartAt === 'string' ? req.body.scheduledStartAt : null;
       setScheduledStartAt(sessionId, scheduledStartAt);
+      setScheduledEndAt(sessionId, null);
       this.broadcast({ type: 'session-schedule-updated', sessionId, scheduledStartAt });
       res.json({ sessionId, scheduledStartAt });
     });
@@ -553,6 +649,50 @@ export class InterfaceServer {
       });
     });
 
+    // Every meeting in the current calendar week (Mon-Sun, local time), each
+    // annotated with whether it already has a Speako session — the week-grid
+    // calendar view's data source. Never errors on missing config, same
+    // rationale as /api/calendar/upcoming.
+    app.get('/api/calendar/week', async (_req, res) => {
+      try {
+        const events = await getCurrentWeekEvents();
+        const withSessions = events.map((event) => ({
+          ...event,
+          sessionId: getSessionIdByCalendarEventId(event.id) ?? null,
+        }));
+        res.json(withSessions);
+      } catch (err: any) {
+        console.error('[calendar] failed to list this week\'s events:', err.message);
+        res.json([]);
+      }
+    });
+
+    // Manual out-of-cadence trigger for the same import a background timer
+    // (see start()) runs every config.calendarImportPollMinutes — lets the
+    // calendar view's "Sync now" button get fresh sessions immediately
+    // rather than waiting for the next tick.
+    app.post('/api/calendar/import', (_req, res) => {
+      if (!isOutlookDesktopConfigured()) {
+        res.status(400).json({ error: 'Outlook desktop calendar import is only available on Windows.' });
+        return;
+      }
+      if (this.calendarImportInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.runCalendarImport();
+      res.json({ started: true });
+    });
+
+    app.get('/api/calendar/import/status', (_req, res) => {
+      res.json({
+        configured: isOutlookDesktopConfigured() && config.calendarImportEnabled,
+        inProgress: this.calendarImportInProgress,
+        lastRunAt: this.calendarImportLastRunAt,
+        lastError: this.calendarImportLastError,
+      });
+    });
+
     app.post('/api/session/stop', (_req, res) => {
       if (!this.currentSessionId) {
         res.json({ stopped: false });
@@ -561,8 +701,34 @@ export class InterfaceServer {
       const stoppedId = this.currentSessionId;
       this.onStopHandler?.();
       this.currentSessionId = null;
+      this.paused = false;
       this.broadcast({ type: 'session-stop', sessionId: stoppedId });
       res.json({ stopped: true, sessionId: stoppedId });
+    });
+
+    // Temporarily halts capture/transcription without ending the session —
+    // distinct from /api/session/stop, which is terminal (sets ended_at).
+    // Only meaningful for whichever session is actually recording right now.
+    app.post('/api/session/pause', (_req, res) => {
+      if (!this.currentSessionId || this.paused) {
+        res.json({ paused: false });
+        return;
+      }
+      this.onPauseHandler?.();
+      this.paused = true;
+      this.broadcast({ type: 'session-pause', sessionId: this.currentSessionId });
+      res.json({ paused: true, sessionId: this.currentSessionId });
+    });
+
+    app.post('/api/session/resume', (_req, res) => {
+      if (!this.currentSessionId || !this.paused) {
+        res.json({ resumed: false });
+        return;
+      }
+      this.onResumeHandler?.();
+      this.paused = false;
+      this.broadcast({ type: 'session-resume', sessionId: this.currentSessionId });
+      res.json({ resumed: true, sessionId: this.currentSessionId });
     });
 
     app.get('/api/sessions', (_req, res) => {
@@ -624,6 +790,203 @@ export class InterfaceServer {
     app.get('/api/sessions/:id/summary', (req, res) => {
       const sessionId = req.params.id;
       res.json({ summary: getSummary(sessionId) || null, actionItems: getActionItems(sessionId) });
+    });
+
+    // User-entered action items — independent of AI summarization, so they
+    // work whether or not a summary has ever been generated for this
+    // session, and survive future re-summarization (see
+    // saveSummaryAndActionItems' confidence filter).
+    app.post('/api/sessions/:id/action-items', (req, res) => {
+      const sessionId = req.params.id;
+      if (!getSession(sessionId)) {
+        res.status(404).json({ error: 'Unknown session.' });
+        return;
+      }
+      const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+      if (!description) {
+        res.status(400).json({ error: 'Description is required.' });
+        return;
+      }
+      const owner = typeof req.body?.owner === 'string' ? req.body.owner.trim() : null;
+      const dueDate = typeof req.body?.dueDate === 'string' ? req.body.dueDate.trim() : null;
+      const type = ACTION_ITEM_TYPES.includes(req.body?.type) ? (req.body.type as ActionItemType) : 'general';
+      const item = insertManualActionItem(sessionId, { owner, description, dueDate, type });
+      this.broadcast({ type: 'action-item-added', sessionId, actionItem: item });
+      res.json(item);
+    });
+
+    app.delete('/api/action-items/:id', (req, res) => {
+      const id = Number(req.params.id);
+      const item = getActionItem(id);
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      deleteActionItem(id);
+      this.broadcast({ type: 'action-item-deleted', sessionId: item.sessionId, actionItemId: id });
+      res.json({ ok: true });
+    });
+
+    // AI-drafted starting point for the Jira/Confluence dialogs — read-only,
+    // never itself creates/updates anything. Fired once when a dialog opens;
+    // the user still reviews and can edit every field before submitting.
+    app.get('/api/action-items/:id/jira/suggest', async (req, res) => {
+      const item = getActionItem(Number(req.params.id));
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        res.json(await suggestJiraFields(item));
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/action-items/:id/confluence/suggest', async (req, res) => {
+      const item = getActionItem(Number(req.params.id));
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        res.json(await suggestConfluenceFields(item));
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    // Same "draft, then the user still reviews/sends it themselves" pattern
+    // as the Jira/Confluence suggest routes above, for the deep-link-only
+    // action types — read-only, never sends/posts/creates anything itself.
+    app.get('/api/action-items/:id/email/suggest', async (req, res) => {
+      const item = getActionItem(Number(req.params.id));
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        res.json(await suggestEmailFields(item));
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/action-items/:id/teams-message/suggest', async (req, res) => {
+      const item = getActionItem(Number(req.params.id));
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        res.json(await suggestTeamsMessageFields(item));
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/action-items/:id/schedule-meeting/suggest', async (req, res) => {
+      const item = getActionItem(Number(req.params.id));
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        res.json(await suggestScheduleMeetingFields(item));
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    // Real write — actually creates or updates a Jira issue (see
+    // src/integrations/jiraMcp.ts's createJiraIssue/updateJiraIssue).
+    // Explicit, user-confirmed, one item at a time — reached only from the
+    // Action Items tab's "Create/update Jira" dialog, never automatically.
+    app.post('/api/action-items/:id/jira', async (req, res) => {
+      const id = Number(req.params.id);
+      const item = getActionItem(id);
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        let result;
+        let action: 'created' | 'updated';
+        if (req.body?.mode === 'update') {
+          const issueKey = typeof req.body?.issueKey === 'string' ? req.body.issueKey.trim() : '';
+          const transition = typeof req.body?.transition === 'string' ? req.body.transition.trim() : '';
+          const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
+          if (!issueKey) {
+            res.status(400).json({ error: 'Issue key is required.' });
+            return;
+          }
+          if (!transition && !comment) {
+            res.status(400).json({ error: 'Provide a status transition and/or a comment.' });
+            return;
+          }
+          result = await updateJiraIssue({ issueKey, transition: transition || undefined, comment: comment || undefined });
+          action = 'updated';
+        } else {
+          const projectKey = typeof req.body?.projectKey === 'string' ? req.body.projectKey.trim() : '';
+          const issueType = typeof req.body?.issueType === 'string' ? req.body.issueType.trim() : '';
+          const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : item.description;
+          const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+          if (!projectKey || !issueType) {
+            res.status(400).json({ error: 'Project key and issue type are required.' });
+            return;
+          }
+          result = await createJiraIssue({ projectKey, issueType, summary, description: description || undefined });
+          action = 'created';
+        }
+        setActionItemExternalRef(id, { tool: 'jira', action, key: result.key, url: result.url, at: new Date().toISOString() });
+        const updated = getActionItem(id)!;
+        this.broadcast({ type: 'action-item-updated', sessionId: item.sessionId, actionItem: updated });
+        res.json(updated);
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    // Real write — actually creates or updates a Confluence page (see
+    // src/integrations/confluenceMcp.ts). Same explicit, one-item-at-a-time
+    // pattern as the Jira route above.
+    app.post('/api/action-items/:id/confluence', async (req, res) => {
+      const id = Number(req.params.id);
+      const item = getActionItem(id);
+      if (!item) {
+        res.status(404).json({ error: 'Unknown action item.' });
+        return;
+      }
+      try {
+        let result;
+        let action: 'created' | 'updated';
+        const title = typeof req.body?.title === 'string' && req.body.title.trim() ? req.body.title.trim() : item.description.slice(0, 200);
+        const content = typeof req.body?.content === 'string' && req.body.content.trim() ? req.body.content.trim() : item.description;
+        if (req.body?.mode === 'update') {
+          const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId.trim() : '';
+          if (!pageId) {
+            res.status(400).json({ error: 'Page ID is required.' });
+            return;
+          }
+          result = await updateConfluencePage({ pageId, title, content });
+          action = 'updated';
+        } else {
+          const spaceKey = typeof req.body?.spaceKey === 'string' ? req.body.spaceKey.trim() : '';
+          const parentId = typeof req.body?.parentId === 'string' ? req.body.parentId.trim() : '';
+          if (!spaceKey) {
+            res.status(400).json({ error: 'Space key is required.' });
+            return;
+          }
+          result = await createConfluencePage({ spaceKey, title, content, parentId: parentId || undefined });
+          action = 'created';
+        }
+        setActionItemExternalRef(id, { tool: 'confluence', action, key: result.id, url: result.url, at: new Date().toISOString() });
+        const updated = getActionItem(id)!;
+        this.broadcast({ type: 'action-item-updated', sessionId: item.sessionId, actionItem: updated });
+        res.json(updated);
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
     });
 
     // On-demand only — nothing is sent to Gemini automatically. Runs in the
@@ -758,8 +1121,12 @@ export class InterfaceServer {
         res.status(404).json({ error: 'Unknown action item.' });
         return;
       }
-      const status = req.body?.status === 'done' ? 'done' : 'open';
-      setActionItemStatus(id, status);
+      if (req.body?.status !== undefined) {
+        setActionItemStatus(id, req.body.status === 'done' ? 'done' : 'open');
+      }
+      if (ACTION_ITEM_TYPES.includes(req.body?.type)) {
+        setActionItemType(id, req.body.type as ActionItemType);
+      }
       const updated = getActionItem(id)!;
       this.broadcast({ type: 'action-item-updated', sessionId: item.sessionId, actionItem: updated });
       res.json(updated);
@@ -1080,7 +1447,9 @@ export class InterfaceServer {
     this.wss = new WebSocketServer({ server: this.httpServer });
 
     this.wss.on('connection', (client) => {
-      client.send(JSON.stringify({ type: 'status', recording: !!this.currentSessionId, sessionId: this.currentSessionId }));
+      client.send(JSON.stringify({ type: 'status', recording: !!this.currentSessionId, sessionId: this.currentSessionId, paused: this.paused }));
+      // Catches a reminder that came due while every tab was closed — see checkReminders()'s doc comment.
+      this.checkReminders();
 
       // Voice chat/practice reuses this same connection rather than opening a
       // second one — ws's message event already distinguishes binary frames
@@ -1103,7 +1472,19 @@ export class InterfaceServer {
           return;
         }
         if (msg.type === 'voice-start') {
-          this.startVoiceSession(client, msg.mode, msg.sourceSessionId).catch((err: any) => {
+          // name/languageCode/activeTools only ever come from the "Chat with
+          // AI" button in the New Session modal (index.html's chatWithAiBtn
+          // handler) — the sidebar header's mic icon still starts a chat with
+          // none of these set, falling back to the global defaults exactly
+          // as before this existed.
+          const chatOptions = {
+            name: typeof msg.name === 'string' ? msg.name.trim().slice(0, 200) || undefined : undefined,
+            languageCode: typeof msg.languageCode === 'string' ? msg.languageCode : undefined,
+            activeTools: Array.isArray(msg.activeTools)
+              ? msg.activeTools.filter((t: unknown): t is string => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
+              : undefined,
+          };
+          this.startVoiceSession(client, msg.mode, msg.sourceSessionId, chatOptions).catch((err: any) => {
             console.error('[voice] failed to start session:', err.message);
             client.send(JSON.stringify({ type: 'voice-error', error: err.message }));
           });
@@ -1120,18 +1501,33 @@ export class InterfaceServer {
 
       client.on('close', () => this.stopVoiceSession(client));
     });
+
+    // Streams every console.log/info/warn/error to every connected client —
+    // subscribed once here (not per-connection) since it's a single global
+    // firehose, same lifetime as the server itself.
+    onLogEntry((entry) => this.broadcastLogLine(entry));
   }
 
   /** mode 'practice': creates a new session (grounded by sourceSessionId's prep brief) so the roleplay gets full history + real coaching feedback afterward, same as any real meeting. mode 'chat': also creates a real session now (session_kind='chat'), so it shows up in the sidebar's Chat history tab — no coaching analysis, since it's not a roleplay run. */
-  private async startVoiceSession(client: WebSocket, mode: 'chat' | 'practice', sourceSessionId?: string): Promise<void> {
+  private async startVoiceSession(
+    client: WebSocket,
+    mode: 'chat' | 'practice',
+    sourceSessionId?: string,
+    chatOptions?: { name?: string; languageCode?: string; activeTools?: string[] }
+  ): Promise<void> {
     if (this.voiceSessions.has(client)) return;
     if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
 
-    // config.voiceToolKeys (user's choice, Settings > Voice chat tools) is
-    // filtered down to whichever of those are actually configured — picking
-    // a tool here does nothing on its own if it has no real credentials/path.
-    const configuredTools = config.voiceToolKeys.filter((tool) => {
-      if (!VOICE_TOOL_KEYS.includes(tool)) return false; // ignore anything outside the eligible ceiling (stale setting, manual edit, etc.)
+    // A chat session created via the New Session modal's "Chat with AI"
+    // button carries its own explicit tool selection (chatOptions.activeTools,
+    // possibly an empty array — "no tools", a real choice) — otherwise (the
+    // sidebar mic icon, or practice mode) fall back to the global
+    // Settings > Voice chat tools default, same as always. Either way,
+    // still filtered down to whichever are actually configured — picking a
+    // tool here does nothing on its own if it has no real credentials/path.
+    const requestedTools: string[] = (mode === 'chat' ? chatOptions?.activeTools : undefined) ?? config.voiceToolKeys;
+    const configuredTools = requestedTools.filter((tool): tool is ToolKey => {
+      if (!VOICE_TOOL_KEYS.includes(tool as ToolKey)) return false; // ignore anything outside the eligible ceiling (stale setting, manual edit, non-voice-eligible tool picked in the modal)
       switch (tool) {
         case 'jira':
           return isJiraConfigured();
@@ -1170,7 +1566,16 @@ export class InterfaceServer {
     } else {
       persistedSessionId = uuid();
       persistedSessionKind = 'chat';
-      createPrepSession(persistedSessionId, config.languageCodes, `Chat ${new Date().toLocaleString()}`, { sessionKind: 'chat' });
+      const languageCodes = chatOptions?.languageCode ? [chatOptions.languageCode] : config.languageCodes;
+      createPrepSession(persistedSessionId, languageCodes, chatOptions?.name || `Chat ${new Date().toLocaleString()}`, {
+        sessionKind: 'chat',
+        // The raw, unfiltered selection from the modal (undefined when
+        // started via the sidebar mic icon instead) — null on the row means
+        // "all globally-configured tools," same convention as meeting
+        // sessions. configuredTools above is the filtered-for-Gemini subset,
+        // never what gets persisted.
+        activeTools: chatOptions?.activeTools,
+      });
       systemInstruction = buildChatInstruction();
     }
 
@@ -1334,9 +1739,11 @@ export class InterfaceServer {
   }
 
   /** Wires session start/stop to actual capture+transcription logic, owned by the caller (index.ts). */
-  setHandlers(handlers: { onStart: StartHandler; onStop: StopHandler }): void {
+  setHandlers(handlers: { onStart: StartHandler; onStop: StopHandler; onPause: PauseHandler; onResume: ResumeHandler }): void {
     this.onStartHandler = handlers.onStart;
     this.onStopHandler = handlers.onStop;
+    this.onPauseHandler = handlers.onPause;
+    this.onResumeHandler = handlers.onResume;
   }
 
   start(): void {
@@ -1353,15 +1760,21 @@ export class InterfaceServer {
       console.log(`Live transcript view: http://localhost:${config.httpPort}`);
     });
 
-    this.scheduleTimer = setInterval(() => this.checkScheduledSessions(), 20_000);
+    this.scheduleTimer = setInterval(() => {
+      this.checkScheduledSessions();
+      this.checkScheduledEndSessions();
+      this.checkReminders();
+    }, 20_000);
     this.voiceIdleCheckTimer = setInterval(() => this.checkIdleVoiceSessions(), 30_000);
     this.msGraphSyncTimer = setInterval(() => this.runMsGraphSync(), config.msGraphPollMinutes * 60_000);
+    this.calendarImportTimer = setInterval(() => this.runCalendarImport(), config.calendarImportPollMinutes * 60_000);
   }
 
   stop(): void {
     if (this.scheduleTimer) clearInterval(this.scheduleTimer);
     if (this.voiceIdleCheckTimer) clearInterval(this.voiceIdleCheckTimer);
     if (this.msGraphSyncTimer) clearInterval(this.msGraphSyncTimer);
+    if (this.calendarImportTimer) clearInterval(this.calendarImportTimer);
     for (const [client] of this.voiceSessions) this.stopVoiceSession(client);
     this.wss.close();
     this.httpServer.close();
@@ -1389,6 +1802,36 @@ export class InterfaceServer {
       })
       .finally(() => {
         this.msGraphSyncInProgress = false;
+      });
+  }
+
+  /**
+   * Fire-and-forget, called both by the poll timer and the manual "Sync
+   * calendar" route. Runs on a timer despite the same Outlook Object Model
+   * Guard risk documented on /api/outlook-desktop/sync above — a deliberate,
+   * explicitly-requested exception to that precedent for this feature (see
+   * NOTES.md); the underlying export script's 60s timeout at least keeps a
+   * stuck run from hanging the poll loop forever. Broadcasts one
+   * 'calendar-session-created' event per newly-imported session so the
+   * sidebar and calendar view can refresh without a manual reload.
+   */
+  private runCalendarImport(): void {
+    if (this.calendarImportInProgress || !isOutlookDesktopConfigured() || !config.calendarImportEnabled) return;
+    this.calendarImportInProgress = true;
+    importUpcomingEventsThisWeek((sessionId, event) => {
+      this.broadcast({ type: 'calendar-session-created', sessionId, eventId: event.id, name: event.title });
+    })
+      .then((result) => {
+        this.calendarImportLastRunAt = new Date().toISOString();
+        this.calendarImportLastError = null;
+        console.log(`[calendar-import] created ${result.createdSessionIds.length} session(s), ${result.skipped} already imported`);
+      })
+      .catch((err: any) => {
+        this.calendarImportLastError = err.message;
+        console.error('[calendar-import] failed:', err.message);
+      })
+      .finally(() => {
+        this.calendarImportInProgress = false;
       });
   }
 
@@ -1486,8 +1929,49 @@ export class InterfaceServer {
     this.onStartHandler(next.languageCodes[0], next.name ?? undefined, next.id);
   }
 
+  /**
+   * Mirrors checkScheduledSessions() but for the other end of a scheduled
+   * meeting — auto-stops the currently-recording session once its
+   * `scheduledEndAt` (set from a calendar event's end time by
+   * src/calendar/calendarImport.ts) arrives, reusing the exact same
+   * onStopHandler + broadcast sequence POST /api/session/stop uses. Only
+   * ever checks the one session actually recording (Speako's single-
+   * concurrent-recording model) — a session that never started recording,
+   * or already ended some other way, has nothing to auto-stop.
+   */
+  private checkScheduledEndSessions(): void {
+    if (!this.currentSessionId || !this.onStopHandler) return;
+    if (!isScheduledEndDue(this.currentSessionId, new Date().toISOString())) return;
+    const stoppedId = this.currentSessionId;
+    this.onStopHandler();
+    this.currentSessionId = null;
+    this.broadcast({ type: 'session-stop', sessionId: stoppedId });
+  }
+
+  /**
+   * Replaces the old client-only setTimeout-based reminder (index.html) —
+   * that overflowed silently for anything more than ~24.8 days out
+   * (setTimeout's delay is a 32-bit signed int) and lost the pending
+   * reminder outright on any page refresh, with no way to re-arm it.
+   * Checked on the same 20s timer as the scheduling logic above, plus once
+   * whenever a new client connects (see this.wss.on('connection', ...)) so
+   * a reminder that came due while every tab was closed still fires the
+   * moment the app is next opened, instead of being silently marked
+   * notified with nobody around to see it.
+   */
+  private checkReminders(): void {
+    const now = Date.now();
+    for (const item of getUnnotifiedReminders()) {
+      const target = new Date(`${item.dueDate}T09:00:00`).getTime();
+      if (Number.isNaN(target) || target > now) continue;
+      markReminderNotified(item.id);
+      this.broadcast({ type: 'reminder-due', actionItem: item });
+    }
+  }
+
   setSession(sessionId: string, name?: string): void {
     this.currentSessionId = sessionId;
+    this.paused = false;
     this.broadcast({ type: 'session-start', sessionId, name: name || null });
   }
 
@@ -1577,6 +2061,14 @@ export class InterfaceServer {
 
   broadcastLiveQuery(query: LiveQuery): void {
     this.broadcast({ type: 'live-query', query });
+  }
+
+  broadcastLogLine(entry: LogEntry): void {
+    this.broadcast({ type: 'log-line', entry });
+  }
+
+  broadcastTranscriptionError(sessionId: string, message: string): void {
+    this.broadcast({ type: 'transcription-error', sessionId, message });
   }
 
   private broadcast(payload: unknown): void {

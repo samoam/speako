@@ -31,6 +31,23 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_segments_session ON transcript_segments(session_id);
 
+  -- Holds only the LATEST in-progress (non-final) result per speaker per
+  -- session — overwritten in place, not appended to. Recovery-only: lets a
+  -- crash mid-utterance (process killed before Google ever sends a final
+  -- result) be recovered as a best-effort final segment at the next
+  -- startup instead of silently losing whatever was being said. Cleared the
+  -- moment a real final segment supersedes it, and on a normal session
+  -- stop — see closeOrphanedSessions()/segmentRepository.ts.
+  CREATE TABLE IF NOT EXISTS interim_segments (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    speaker TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, speaker)
+  );
+
   CREATE TABLE IF NOT EXISTS summaries (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id),
     overview TEXT NOT NULL,
@@ -289,7 +306,7 @@ db.exec(`
 db.exec('DROP TABLE IF EXISTS voice_emotion_scores');
 
 const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
-for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', 'calendar_event_id', 'active_tools', 'scheduled_start_at', 'active_features']) {
+for (const column of ['diarized_at', 'language_codes', 'name', 'meeting_type', 'calendar_event_id', 'active_tools', 'scheduled_start_at', 'active_features', 'scheduled_end_at', 'calendar_meeting_info']) {
   if (!sessionColumns.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
   }
@@ -344,4 +361,31 @@ for (const column of ['you_interrupted_others_count', 'others_interrupted_you_co
 const summaryColumns = db.prepare('PRAGMA table_info(summaries)').all() as { name: string }[];
 if (!summaryColumns.some((c) => c.name === 'topics')) {
   db.exec("ALTER TABLE summaries ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'");
+}
+
+const actionItemColumns = db.prepare('PRAGMA table_info(action_items)').all() as { name: string }[];
+if (!actionItemColumns.some((c) => c.name === 'type')) {
+  // Every action item created before this migration is a plain follow-up
+  // note — 'general' is the honest default, not a guess at what it "really"
+  // was. Existing rows whose description already reads as a code change
+  // (the only type with a pre-existing specialized flow, "Implement with
+  // Claude Code") are left as 'general' too — backfilling a guess from free
+  // text isn't worth the false positives it'd create.
+  db.exec("ALTER TABLE action_items ADD COLUMN type TEXT NOT NULL DEFAULT 'general'");
+}
+if (!actionItemColumns.some((c) => c.name === 'reminder_notified_at')) {
+  // Set once a 'reminder'-type item's due-time notification has actually
+  // been broadcast — checked server-side on a timer (see
+  // InterfaceServer.checkReminders()) instead of a client-side setTimeout,
+  // which overflowed for anything >~24.8 days out (setTimeout's delay is a
+  // 32-bit signed int) and lost the pending reminder outright on any page
+  // refresh with no way to re-arm it.
+  db.exec('ALTER TABLE action_items ADD COLUMN reminder_notified_at TEXT');
+}
+if (!actionItemColumns.some((c) => c.name === 'external_ref')) {
+  // JSON: { tool: 'jira'|'confluence', action: 'created'|'updated', key, url, at }
+  // — set once a jira/confluence action item's real create/update actually
+  // succeeds, so the UI can show the resulting issue/page link and the user
+  // isn't left wondering whether clicking the button did anything.
+  db.exec('ALTER TABLE action_items ADD COLUMN external_ref TEXT');
 }

@@ -4,7 +4,18 @@ import { SoxCapture } from './audio-capture/soxCapture';
 import { WavRecorder } from './audio-capture/wavRecorder';
 import { StreamManager } from './transcription/streamManager';
 import { InterfaceServer } from './interface/server';
-import { createSession, endSession, insertFinalSegment, getSegmentsForSession, setScheduledStartAt, getSession } from './storage/segmentRepository';
+import {
+  createSession,
+  endSession,
+  resumeSession,
+  insertFinalSegment,
+  upsertInterimSegment,
+  clearInterimSegment,
+  clearInterimSegmentsForSession,
+  getSegmentsForSession,
+  setScheduledStartAt,
+  getSession,
+} from './storage/segmentRepository';
 import { isFeatureActive } from './tools/activeFeatures';
 import { insertSentimentScore } from './storage/sentimentRepository';
 import { analyzeSentiment } from './sentiment/sentiment';
@@ -45,6 +56,10 @@ export class Session {
    * globally-enabled heavy feature is active" (see src/tools/activeFeatures.ts).
    */
   private activeFeatures: string[] | null = null;
+  /** True between pause() and resumeRecording() — distinct from the session having ended (see those methods). */
+  private paused = false;
+  /** Throttles how often an interim (non-final) result gets persisted as a crash-recovery row — see interim_segments in db.ts. Keyed by speaker; without this, every partial STT result (multiple/sec) would hit SQLite. */
+  private lastInterimWriteAtBySpeaker: Record<string, number> = {};
 
   constructor(
     private ui: InterfaceServer,
@@ -73,6 +88,12 @@ export class Session {
       // scheduled auto-start time now that it's actually recording, whether
       // this was a manual "Start recording" click or the schedule poller.
       setScheduledStartAt(this.existingSessionId, null);
+      // Also clears ended_at, a no-op for the common "never started yet"
+      // case but essential for resuming a session that already stopped
+      // (e.g. clicking "Resume recording" on one cut short by mistake) —
+      // otherwise it would keep recording under a row the rest of the app
+      // still considers ended.
+      resumeSession(this.existingSessionId);
     }
     this.activeFeatures = getSession(this.id)?.activeFeatures ?? null;
     this.ui.setSession(this.id, this.name);
@@ -90,8 +111,23 @@ export class Session {
     this.streamManager.on('segment', (segment: TranscriptSegment) => {
       segment.sessionId = this.id;
       this.ui.broadcastSegment(segment);
-      if (!segment.isFinal) return;
+      if (!segment.isFinal) {
+        // Crash-recovery only, throttled — writing every partial result
+        // (multiple/sec in active conversation) would hammer SQLite for no
+        // benefit, since only the LATEST partial per speaker is ever kept.
+        const lastWriteAt = this.lastInterimWriteAtBySpeaker[segment.speaker] ?? 0;
+        if (Date.now() - lastWriteAt >= 1500) {
+          this.lastInterimWriteAtBySpeaker[segment.speaker] = Date.now();
+          try {
+            upsertInterimSegment(segment);
+          } catch (err: any) {
+            console.error(`[storage] failed to persist interim recovery row for session ${this.id}:`, err.message);
+          }
+        }
+        return;
+      }
       try {
+        clearInterimSegment(this.id, segment.speaker);
         // Google can deliver trailing results for already-buffered audio after
         // stop() is called — if the session's row was deleted in the meantime
         // (a legitimate concurrent user action), this insert fails its foreign
@@ -142,6 +178,12 @@ export class Session {
       if (err.details) console.error('  details:', err.details);
       if (err.metadata) console.error('  metadata:', JSON.stringify(err.metadata));
       if (err.code) console.error('  code:', err.code);
+      // Previously console-only — a failed/dead transcription stream left the
+      // user staring at a silently empty transcript with zero indication
+      // anything was wrong (found via a real NOT_FOUND from Google STT that
+      // produced 0 segments for an entire recording). Now also surfaced live
+      // in the main panel so a broken stream is visible the moment it happens.
+      this.ui.broadcastTranscriptionError(this.id, err.message || String(err));
     });
     this.streamManager.start();
 
@@ -153,7 +195,13 @@ export class Session {
         if (envelope.length > 0) this.ui.broadcastWaveform(this.id, envelope);
       }
     });
-    this.capture.on('log', (line: string) => console.error('[sox]', line));
+    // SoX writes its normal startup banner and progress meter to stderr —
+    // that's just how SoX behaves, not a sign anything's wrong. Real capture
+    // failures come through the 'error' event below (nonzero exit, spawn
+    // failure), which does stay console.error. Logging routine SoX chatter
+    // as an error was misleading in the Logs panel (built this session) —
+    // every recording's normal startup banner showed up tagged "error".
+    this.capture.on('log', (line: string) => console.log('[sox]', line));
     this.capture.on('error', (err: Error) => console.error('[audio-capture] error:', err.message));
     this.capture.start();
 
@@ -170,6 +218,12 @@ export class Session {
     this.capture.stop();
     this.streamManager.stop();
     endSession(this.id);
+    // A session ending cleanly has nothing left to recover — interim_segments
+    // is a crash-recovery mechanism (see db.ts), not meant to accumulate for
+    // sessions that stopped normally. Safe to clear even if a trailing final
+    // result is still about to arrive (its own handler above already clears
+    // this same row too; clearing twice is a harmless no-op).
+    clearInterimSegmentsForSession(this.id);
     this.wavRecorder.finish().catch((err) => console.error('[audio] failed to finalize recording:', err.message));
     this.triggerDetector.stop();
     console.log(`Session ${this.id} stopped.`);
@@ -186,6 +240,33 @@ export class Session {
         });
       }, 3000);
     }
+  }
+
+  /**
+   * Temporarily stops capturing/transcribing without ending the session —
+   * unlike stop(), this never calls endSession() or wavRecorder.finish()
+   * (that's a one-shot/terminal operation; calling it twice would throw).
+   * capture.stop()/capture.start() are safe to call repeatedly on the same
+   * SoxCapture instance — start() just respawns the SoX child process, and
+   * the 'data'/'log'/'error' listeners wired once in start() above stay
+   * attached across the respawn since they're on the SoxCapture
+   * EventEmitter itself, not the underlying process.
+   */
+  pause(): void {
+    if (this.paused) return;
+    this.paused = true;
+    this.capture.stop();
+    this.streamManager.pause();
+    console.log(`Session ${this.id} paused.`);
+  }
+
+  /** Reopens capture + the transcription stream from where pause() left off. Named to avoid confusion with the constructor's existingSessionId "resume" concept (continuing a never-started or already-ended session), which is a different thing. */
+  resumeRecording(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.streamManager.resume();
+    this.capture.start();
+    console.log(`Session ${this.id} resumed.`);
   }
 
   /** Fire-and-forget: grounds a fired trigger via RAG, generates a suggestion, persists/broadcasts it. Never throws. */

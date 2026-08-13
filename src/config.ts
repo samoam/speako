@@ -380,6 +380,22 @@ export const config = {
   get outlookDesktopLookbackHours(): number {
     return num('outlookDesktopLookbackHours', 'OUTLOOK_DESKTOP_LOOKBACK_HOURS', 48);
   },
+
+  /**
+   * Auto-creates a Speako session (with prep already running) for every
+   * not-yet-started meeting in the current week's Outlook calendar — see
+   * src/calendar/calendarImport.ts. Unlike outlookDesktopLookbackHours'
+   * mail sync above, this IS polled unattended, so the same Object Model
+   * Guard security-prompt risk noted there applies on first use in a
+   * session; the export script's existing 60s timeout keeps a stuck prompt
+   * from hanging the poll loop forever (see NOTES.md).
+   */
+  get calendarImportEnabled(): boolean {
+    return bool('calendarImportEnabled', 'CALENDAR_IMPORT_ENABLED', true);
+  },
+  get calendarImportPollMinutes(): number {
+    return num('calendarImportPollMinutes', 'CALENDAR_IMPORT_POLL_MINUTES', 15);
+  },
 };
 
 export type SpeakoConfig = typeof config;

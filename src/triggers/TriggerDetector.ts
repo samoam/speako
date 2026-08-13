@@ -4,6 +4,7 @@ import { TranscriptSegment } from '../types';
 import { classifySegment, CategoryResult } from './classify';
 import { insertTrigger, TriggerCategory, TriggerEvent } from '../storage/triggerRepository';
 import { getMeetingStateSnapshot } from '../state/meetingState';
+import { looksCodeRelated } from '../router';
 
 const SENTIMENT_WINDOW_SIZE = 5;
 
@@ -67,6 +68,22 @@ export class TriggerDetector extends EventEmitter {
     this.maybeFire('factual_claim', classification.factualClaim, segment);
     this.maybeFire('decision_point', classification.decisionPoint, segment);
     this.maybeFire('vagueness', classification.vagueness, segment);
+
+    // Plain keyword heuristic, not a Gemini classification — same
+    // looksCodeRelated() check generic.ts/router.ts already use to decide
+    // whether to query Bitbucket at prep time, reused here to fire live
+    // instead of only at prep. Always fires on a match regardless of
+    // whether any code source is actually configured, same as
+    // factual_claim: the raw detection is still worth logging in the
+    // Triggers tab; generateSuggestion() is what suppresses when there's
+    // nothing to ground it in (see suggestions/generate.ts).
+    if (looksCodeRelated(segment.text)) {
+      this.maybeFire(
+        'code_reference',
+        { present: true, confidence: 0.6, reason: 'Mentions code/technical terminology.' },
+        segment
+      );
+    }
   }
 
   /** Called once a sentiment score is available for a segment (see session.ts's scoreSentiment). */

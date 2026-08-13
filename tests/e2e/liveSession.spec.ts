@@ -23,13 +23,18 @@ test.skip(!soxAvailable(), 'SoX not resolvable on this machine — skipping the 
 test('live session: start recording, real audio pipeline runs, stop, appears in history', async ({ page }) => {
   await page.goto('/');
   await page.click('#newSessionOpenBtn');
-  await page.click('#personalTypeBtn');
 
   const sessionName = `e2e-liveSession-${Date.now()}`;
   await page.fill('#nameInput', sessionName);
-  await page.click('#startBtn');
+  // Prep never runs at creation time anymore regardless — this test is
+  // exercising the audio/transcription pipeline, not prep, so there's no
+  // real Gemini/Jira/Confluence round-trip to wait on either way.
+  await page.click('#saveOnlyBtn');
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
+  await expect(page.locator('#mainTitle')).toHaveText(sessionName);
+  await page.click('#mainStartBtn');
+
   await expect(page.locator('#mainMeta')).toHaveClass(/recording/, { timeout: 15_000 });
   await expect(page.locator('#stopBtn')).toBeVisible();
 

@@ -15,8 +15,13 @@ interface OutlookAppointment {
   subject?: string | null;
   description?: string | null;
   startTime: string;
+  endTime?: string;
   attendeeCount?: number;
   isRecurring?: boolean;
+  isCanceled?: boolean;
+  attendees?: string[];
+  location?: string | null;
+  organizer?: string | null;
 }
 
 function mapAppointmentToCalendarEvent(item: OutlookAppointment): CalendarEvent {
@@ -25,8 +30,13 @@ function mapAppointmentToCalendarEvent(item: OutlookAppointment): CalendarEvent 
     title: item.subject || '(untitled event)',
     description: item.description || '',
     startTime: item.startTime,
+    endTime: item.endTime || undefined,
     attendeeCount: item.attendeeCount || 0,
     isRecurring: !!item.isRecurring,
+    isCanceled: !!item.isCanceled,
+    attendees: item.attendees?.length ? item.attendees : undefined,
+    location: item.location || undefined,
+    organizer: item.organizer || undefined,
   };
 }
 
@@ -46,6 +56,24 @@ export async function listUpcomingOutlookEvents(windowMinutes: number): Promise<
   const { stdout } = await execFileAsync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, '-WindowMinutes', String(windowMinutes)],
+    { maxBuffer: MAX_BUFFER_BYTES, timeout: TIMEOUT_MS }
+  );
+  const items: OutlookAppointment[] = JSON.parse(stdout);
+  return items.map(mapAppointmentToCalendarEvent);
+}
+
+/**
+ * Same COM export, but for an explicit [startIso, endIso) range rather than
+ * a forward-looking window from "now" — what the week-grid calendar view
+ * needs, since a work week can include days that have already started (or
+ * fully elapsed) today.
+ */
+export async function listOutlookEventsInRange(startIso: string, endIso: string): Promise<CalendarEvent[]> {
+  if (!isOutlookDesktopConfigured()) return [];
+
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, '-StartTime', startIso, '-EndTime', endIso],
     { maxBuffer: MAX_BUFFER_BYTES, timeout: TIMEOUT_MS }
   );
   const items: OutlookAppointment[] = JSON.parse(stdout);

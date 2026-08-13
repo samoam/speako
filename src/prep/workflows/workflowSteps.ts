@@ -32,6 +32,7 @@ export const WORKFLOW_STEPS: Record<MeetingType, WorkflowStep[]> = {
     { label: 'Notes from the last planning session' },
   ],
   sprint_review: [
+    { label: 'Notes from the last sprint review' },
     { label: 'Current / just-closed sprint tickets', tool: 'jira' },
     { label: 'Sprint goal / release notes', tool: 'confluence' },
     { label: 'Recent commits for demo-relevant activity', tool: 'bitbucket' },

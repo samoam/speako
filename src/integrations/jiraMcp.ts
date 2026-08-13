@@ -116,3 +116,79 @@ export async function searchJira(query: string, limit = 5): Promise<JiraMatch[]>
 
   return matches.slice(0, limit);
 }
+
+export interface CreateJiraIssueInput {
+  projectKey: string;
+  issueType: string;
+  summary: string;
+  description?: string;
+}
+
+export interface JiraIssueResult {
+  key: string;
+  url: string;
+}
+
+function issueUrl(key: string): string {
+  return `${config.jiraUrl.replace(/\/$/, '')}/browse/${key}`;
+}
+
+/**
+ * Real write — actually creates a Jira issue via mcp-atlassian's
+ * jira_create_issue tool (exact parameter names verified against the
+ * project's own tools-reference docs, not guessed). Never called from the
+ * fact-check/live-Q&A paths (those only ever use the read-only helpers
+ * above) — this is only reachable from the Action Items tab's explicit
+ * "Create/update Jira" dialog, one click at a time.
+ */
+export async function createJiraIssue(input: CreateJiraIssueInput): Promise<JiraIssueResult> {
+  if (!isJiraConfigured()) {
+    throw new Error('Jira is not configured — see NOTES.md.');
+  }
+  const result = await getClient().callTool('jira_create_issue', {
+    project_key: input.projectKey,
+    issue_type: input.issueType,
+    summary: input.summary,
+    ...(input.description ? { description: input.description } : {}),
+  });
+  const text = extractResultText(result);
+  if (result?.isError) {
+    throw new Error(text || 'Failed to create Jira issue.');
+  }
+  let key: string | undefined;
+  try {
+    const parsed = JSON.parse(text);
+    key = parsed.key ?? parsed.issue?.key;
+  } catch {
+    // Not JSON-parseable, but isError was false — the issue was very likely
+    // still created; fall through to the "no key found" error below rather
+    // than silently reporting success with no way to link to it.
+  }
+  if (!key) {
+    throw new Error(`Jira issue may have been created, but its key could not be parsed from the response: ${text.slice(0, 300)}`);
+  }
+  return { key, url: issueUrl(key) };
+}
+
+export interface UpdateJiraIssueInput {
+  issueKey: string;
+  transition?: string;
+  comment?: string;
+}
+
+/** Real write — transitions status and/or adds a comment on an existing issue via jira_update_issue. At least one of transition/comment is required (enforced by the caller, src/interface/server.ts). */
+export async function updateJiraIssue(input: UpdateJiraIssueInput): Promise<JiraIssueResult> {
+  if (!isJiraConfigured()) {
+    throw new Error('Jira is not configured — see NOTES.md.');
+  }
+  const result = await getClient().callTool('jira_update_issue', {
+    issue_key: input.issueKey,
+    ...(input.transition ? { transition: input.transition } : {}),
+    ...(input.comment ? { comment: input.comment } : {}),
+  });
+  const text = extractResultText(result);
+  if (result?.isError) {
+    throw new Error(text || 'Failed to update Jira issue.');
+  }
+  return { key: input.issueKey, url: issueUrl(input.issueKey) };
+}
