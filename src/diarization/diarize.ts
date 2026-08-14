@@ -57,18 +57,39 @@ function wordsToSegments(sessionId: string, words: DiarizedWord[]): TranscriptSe
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * batchRecognize occasionally rejects a request with an opaque
- * "Config contains unsupported fields" INVALID_ARGUMENT immediately after
- * uploading a new GCS object — confirmed transient by reproducing the exact
- * same request against the exact same already-uploaded file moments later
- * and having it succeed. Retrying with a short backoff absorbs this.
+ * batchRecognize (or the long-running operation it returns) occasionally
+ * rejects a request with an opaque "Config contains unsupported fields"
+ * INVALID_ARGUMENT shortly after uploading a new GCS object — this has been
+ * seen to be transient GCS read-after-write propagation lag (reproducing the
+ * exact same request against the exact same already-uploaded file moments
+ * later succeeds). But it has ALSO been reproduced failing identically 5/5
+ * retries in a row for a session recorded with languageCodes: ['ar-MA'] —
+ * Chirp 3's documented Arabic support is via the broader 'ar-XA' locale, so
+ * a narrower dialect-specific code like 'ar-MA' most likely isn't one Chirp
+ * 3 recognizes for BatchRecognize+diarization at all, which the API reports
+ * with this same generic message. The gRPC message never names the actual
+ * unsupported field — err.statusDetails/err.metadata (the "error_details_ext"
+ * it refers to) come back empty from this client library, so the two causes
+ * can't be told apart programmatically; retry still cheaply absorbs the
+ * transient case, and the final error message below covers the other one.
  */
-async function batchRecognizeWithRetry(request: Parameters<typeof speechClient.batchRecognize>[0], attempts = 3) {
+async function batchRecognizeWithRetry(request: Parameters<typeof speechClient.batchRecognize>[0], attempts = 5) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await speechClient.batchRecognize(request);
-    } catch (err) {
-      if (attempt >= attempts) throw err;
+      const [operation] = await speechClient.batchRecognize(request);
+      return await operation.promise();
+    } catch (err: any) {
+      const isUnsupportedFieldsError = err?.code === 3 && /unsupported fields/i.test(err?.message || '');
+      if (attempt >= attempts || !isUnsupportedFieldsError) {
+        if (isUnsupportedFieldsError) {
+          const languageCodes = (request.config as any)?.languageCodes?.join(', ') || 'unknown';
+          throw new Error(
+            `Config contains unsupported fields (Google Speech-to-Text). This can be transient GCS propagation lag, but it can also mean the ${config.speechModel} model doesn't support diarization for this session's language code(s) (${languageCodes}) — some regional/dialect codes (e.g. a narrow Arabic dialect code instead of the broader 'ar-XA') aren't recognized. Try again in a moment, or re-check the session's language setting.`
+          );
+        }
+        throw err;
+      }
+      console.warn(`[diarization] batchRecognize attempt ${attempt} hit the transient "unsupported fields" error, retrying:`, err.message);
       await sleep(1500 * attempt);
     }
   }
@@ -93,7 +114,7 @@ export async function diarizeSession(sessionId: string, wavPath: string, languag
   await storage.bucket(config.gcsBucket).upload(wavPath, { destination: objectName });
   const gcsUri = `gs://${config.gcsBucket}/${objectName}`;
 
-  const [operation] = await batchRecognizeWithRetry({
+  const [response] = await batchRecognizeWithRetry({
     recognizer: buildRecognizerPath(),
     config: {
       autoDecodingConfig: {},
@@ -111,8 +132,6 @@ export async function diarizeSession(sessionId: string, wavPath: string, languag
     files: [{ uri: gcsUri }],
     recognitionOutputConfig: { inlineResponseConfig: {} },
   });
-
-  const [response] = await operation.promise();
   const fileResult = (response.results as Record<string, any>)?.[gcsUri];
   const results = fileResult?.inlineResult?.transcript?.results || [];
 

@@ -14,6 +14,7 @@ import {
   clearInterimSegmentsForSession,
   getSegmentsForSession,
   setScheduledStartAt,
+  setScheduledEndAt,
   getSession,
 } from './storage/segmentRepository';
 import { isFeatureActive } from './tools/activeFeatures';
@@ -88,6 +89,15 @@ export class Session {
       // scheduled auto-start time now that it's actually recording, whether
       // this was a manual "Start recording" click or the schedule poller.
       setScheduledStartAt(this.existingSessionId, null);
+      // Also clear any scheduled auto-STOP time — same footgun the manual
+      // PATCH /api/sessions/:id/schedule route already guards against
+      // (real bug found and fixed: a calendar-imported session's
+      // scheduled_end_at can easily be in the past by the time someone
+      // manually (re)starts/resumes it later, and checkScheduledEndSessions'
+      // 20s poller has no idea this new recording has nothing to do with
+      // that stale meeting time — without this, it auto-stops the freshly
+      // started recording within seconds).
+      setScheduledEndAt(this.existingSessionId, null);
       // Also clears ended_at, a no-op for the common "never started yet"
       // case but essential for resuming a session that already stopped
       // (e.g. clicking "Resume recording" on one cut short by mistake) —

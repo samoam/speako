@@ -117,6 +117,66 @@ export async function searchJira(query: string, limit = 5): Promise<JiraMatch[]>
   return matches.slice(0, limit);
 }
 
+export interface JiraTaskMatch {
+  key: string;
+  summary: string;
+  url: string;
+  priorityName: string | null;
+  statusName: string | null;
+  dueDate: string | null;
+  updated: string | null;
+}
+
+/**
+ * Issues currently assigned to the authenticated Jira account, unresolved,
+ * ordered by Jira's own priority then recency — the "what's on my plate"
+ * source for the orchestrator's tasks board (src/orchestrator/taskSync.ts).
+ * `currentUser()` resolves server-side against the same token searchJira
+ * already authenticates with — no separate username config needed.
+ * Response shape (`jira_search`'s normalized JSON, verified directly
+ * against a real `mcp-atlassian` call, not assumed): a flat
+ * `{key, summary, browse_url, status: {name}, priority: {name}, updated}`
+ * object per issue — notably NOT the raw Jira REST API's nested
+ * `fields: {...}` shape searchJira/getJiraIssue parse elsewhere in this
+ * file, since jira_search's plain-JQL mode returns this flatter shape.
+ * `duedate` did not appear on any real result during verification (either
+ * genuinely unset on those tickets, or not surfaced by this tool at all) —
+ * read defensively and treated as absent when missing.
+ */
+export async function getMyOpenJiraIssues(limit = 20): Promise<JiraTaskMatch[]> {
+  if (!isJiraConfigured()) {
+    throw new Error('Jira is not configured — see NOTES.md.');
+  }
+
+  const jql = `assignee = currentUser() AND resolution = Unresolved ORDER BY priority DESC, updated DESC`;
+  const result = await getClient().callTool('jira_search', {
+    jql,
+    limit,
+    fields: 'summary,status,assignee,updated,issuetype,priority,duedate',
+  });
+
+  const text = extractResultText(result);
+  if (!text || result?.isError) return [];
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+
+  const issues = Array.isArray(parsed) ? parsed : (parsed.issues ?? parsed.values ?? []);
+  return issues.map((issue: any) => ({
+    key: issue.key,
+    summary: issue.summary ?? issue.fields?.summary ?? '',
+    url: issue.browse_url ?? issueUrl(issue.key),
+    priorityName: issue.priority?.name ?? issue.fields?.priority?.name ?? null,
+    statusName: issue.status?.name ?? issue.fields?.status?.name ?? null,
+    dueDate: issue.due_date ?? issue.duedate ?? issue.fields?.duedate ?? null,
+    updated: issue.updated ?? issue.fields?.updated ?? null,
+  }));
+}
+
 export interface CreateJiraIssueInput {
   projectKey: string;
   issueType: string;

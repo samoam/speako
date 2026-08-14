@@ -56,6 +56,8 @@ export interface BitbucketPullRequest {
   link: string;
   /** Only present when this PR was fetched with role=REVIEWER and the caller's own review status could be identified. */
   myApprovalStatus?: string;
+  /** Epoch-derived ISO timestamp, same conversion as BitbucketPullRequestComment.createdDate — used by the orchestrator's task scoring to age a still-open review request. Null if Bitbucket's response omits it (shouldn't happen in practice, defensive only). */
+  createdDate: string | null;
 }
 
 function mapPullRequest(raw: any): BitbucketPullRequest {
@@ -71,6 +73,7 @@ function mapPullRequest(raw: any): BitbucketPullRequest {
     authorName: raw.author?.user?.displayName ?? raw.author?.user?.name ?? 'unknown',
     link: raw.links?.self?.[0]?.href ?? '',
     myApprovalStatus: myReviewer?.status,
+    createdDate: raw.createdDate ? new Date(raw.createdDate).toISOString() : null,
   };
 }
 

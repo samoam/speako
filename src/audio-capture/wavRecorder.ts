@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import { config } from '../config';
-
-const BYTES_PER_SAMPLE = 2; // LINEAR16
+import { buildWavHeader } from './wavHeader';
 
 /**
  * Buffers raw PCM to disk during a session, then wraps it in a WAV header on
@@ -33,33 +32,11 @@ export class WavRecorder {
       this.stream.end((err: NodeJS.ErrnoException | null | undefined) => (err ? reject(err) : resolve()));
     });
 
-    const header = this.buildWavHeader(this.bytesWritten);
+    const header = buildWavHeader(this.bytesWritten, config.sampleRate, this.channelCount);
     const raw = fs.readFileSync(this.rawPath);
     fs.writeFileSync(this.wavPath, Buffer.concat([header, raw]));
     fs.unlinkSync(this.rawPath);
 
     return this.wavPath;
-  }
-
-  private buildWavHeader(dataBytes: number): Buffer {
-    const byteRate = config.sampleRate * this.channelCount * BYTES_PER_SAMPLE;
-    const blockAlign = this.channelCount * BYTES_PER_SAMPLE;
-    const header = Buffer.alloc(44);
-
-    header.write('RIFF', 0);
-    header.writeUInt32LE(36 + dataBytes, 4);
-    header.write('WAVE', 8);
-    header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16); // fmt chunk size
-    header.writeUInt16LE(1, 20); // PCM
-    header.writeUInt16LE(this.channelCount, 22);
-    header.writeUInt32LE(config.sampleRate, 24);
-    header.writeUInt32LE(byteRate, 28);
-    header.writeUInt16LE(blockAlign, 32);
-    header.writeUInt16LE(BYTES_PER_SAMPLE * 8, 34); // bits per sample
-    header.write('data', 36);
-    header.writeUInt32LE(dataBytes, 40);
-
-    return header;
   }
 }

@@ -118,6 +118,18 @@ export const config = {
     return str('geminiFastModel', 'GEMINI_FAST_MODEL', 'gemini-flash-lite-latest');
   },
   /**
+   * Text-to-speech model for Audio Overview generation (src/summarization/
+   * generateAudioOverview.ts) — a dedicated TTS model, not geminiModel/
+   * geminiFastModel, which don't support the AUDIO response modality.
+   * Confirmed via direct API testing that this model supports two-speaker
+   * "podcast style" dialogue via speechConfig.multiSpeakerVoiceConfig,
+   * returning raw PCM16 mono at 24kHz (the response's mimeType states the
+   * actual rate — never hardcode 24000 elsewhere, parse it from there).
+   */
+  get geminiTtsModel(): string {
+    return str('geminiTtsModel', 'GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
+  },
+  /**
    * Which tools voice chat/practice's function-calling is allowed to use —
    * user-configurable (Settings > Voice chat tools) subset of
    * liveVoiceSession.ts's VOICE_TOOL_KEYS ceiling. server.ts further filters
@@ -395,6 +407,11 @@ export const config = {
   },
   get calendarImportPollMinutes(): number {
     return num('calendarImportPollMinutes', 'CALENDAR_IMPORT_POLL_MINUTES', 15);
+  },
+
+  /** How often the "My Plate" orchestrator re-syncs Jira/Bitbucket/action-items into the unified tasks board — see src/orchestrator/taskSync.ts. */
+  get orchestratorPollMinutes(): number {
+    return num('orchestratorPollMinutes', 'ORCHESTRATOR_POLL_MINUTES', 15);
   },
 };
 

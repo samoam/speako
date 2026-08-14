@@ -19,8 +19,8 @@ export interface CalendarMeetingInfo {
 export interface CreateSessionOptions {
   /** Speako is work-only — defaults to 'work'. 'personal' is retained only as a historical value for pre-existing rows created before this became work-only; nothing creates it anymore. */
   sessionType?: 'personal' | 'work';
-  /** Distinguishes real recorded meetings from voice-chat/practice sessions for the sidebar history tabs — orthogonal to sessionType (personal/work only applies to 'meeting'). Defaults to 'meeting'. */
-  sessionKind?: 'meeting' | 'practice' | 'chat';
+  /** Distinguishes real recorded meetings from voice-chat/practice/audio-overview sessions for the sidebar history tabs — orthogonal to sessionType (personal/work only applies to 'meeting'). Defaults to 'meeting'. */
+  sessionKind?: 'meeting' | 'practice' | 'chat' | 'audioOverview';
   /**
    * Explicit signal for whether this row wants the pre-meeting prep workflow
    * to run — deliberately NOT derived from sessionType anymore. Before
@@ -277,6 +277,7 @@ export const deleteSession = db.transaction((sessionId: string) => {
   db.prepare('DELETE FROM prep_briefs WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM coaching_feedback WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM meeting_chapters WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM audio_overviews WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 });
 
@@ -286,6 +287,8 @@ export interface SessionRow {
   endedAt: string | null;
   name: string | null;
   sessionType: 'personal' | 'work';
+  /** Distinguishes real recorded meetings from voice-chat/practice/audio-overview sessions. */
+  sessionKind: 'meeting' | 'practice' | 'chat' | 'audioOverview';
   meetingType: string | null;
   calendarEventId: string | null;
   prepStatus: 'none' | 'pending' | 'ready' | 'failed';
@@ -312,7 +315,7 @@ export function getSessionIdByCalendarEventId(calendarEventId: string): string |
 export function getSession(sessionId: string): SessionRow | undefined {
   const row = db
     .prepare(
-      `SELECT id, ended_at, language_codes, name, session_type, meeting_type, calendar_event_id, prep_status, active_tools, active_features, calendar_meeting_info
+      `SELECT id, ended_at, language_codes, name, session_type, session_kind, meeting_type, calendar_event_id, prep_status, active_tools, active_features, calendar_meeting_info
        FROM sessions WHERE id = ?`
     )
     .get(sessionId) as
@@ -322,6 +325,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
         language_codes: string | null;
         name: string | null;
         session_type: 'personal' | 'work';
+        session_kind: 'meeting' | 'practice' | 'chat' | 'audioOverview';
         meeting_type: string | null;
         calendar_event_id: string | null;
         prep_status: 'none' | 'pending' | 'ready' | 'failed';
@@ -337,6 +341,7 @@ export function getSession(sessionId: string): SessionRow | undefined {
     languageCodes: row.language_codes ? JSON.parse(row.language_codes) : ['en-US'],
     name: row.name,
     sessionType: row.session_type,
+    sessionKind: row.session_kind || 'meeting',
     meetingType: row.meeting_type,
     calendarEventId: row.calendar_event_id,
     prepStatus: row.prep_status,
@@ -407,9 +412,10 @@ export interface SessionSummary {
   languageCodes: string[];
   segmentCount: number;
   hasSummary: boolean;
+  hasAudioOverview: boolean;
   sessionType: 'personal' | 'work';
-  /** Distinguishes real recorded meetings from voice-chat/practice sessions for the sidebar history tabs. */
-  sessionKind: 'meeting' | 'practice' | 'chat';
+  /** Distinguishes real recorded meetings from voice-chat/practice/audio-overview sessions for the sidebar history tabs. */
+  sessionKind: 'meeting' | 'practice' | 'chat' | 'audioOverview';
   meetingType: string | null;
   prepStatus: 'none' | 'pending' | 'ready' | 'failed';
   activeTools: string[] | null;
@@ -424,7 +430,8 @@ export function listSessions(): SessionSummary[] {
       `SELECT s.id, s.name, s.started_at, s.ended_at, s.diarized_at, s.language_codes,
               s.session_type, s.session_kind, s.meeting_type, s.prep_status, s.active_tools, s.active_features, s.scheduled_start_at, s.calendar_meeting_info,
               (SELECT COUNT(*) FROM transcript_segments t WHERE t.session_id = s.id) AS segment_count,
-              (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary
+              (SELECT COUNT(*) FROM summaries u WHERE u.session_id = s.id) AS has_summary,
+              (SELECT COUNT(*) FROM audio_overviews a WHERE a.session_id = s.id) AS has_audio_overview
        FROM sessions s
        ORDER BY s.started_at DESC`
     )
@@ -439,8 +446,9 @@ export function listSessions(): SessionSummary[] {
     languageCodes: r.language_codes ? JSON.parse(r.language_codes) : [],
     segmentCount: r.segment_count,
     hasSummary: !!r.has_summary,
+    hasAudioOverview: !!r.has_audio_overview,
     sessionType: r.session_type,
-    sessionKind: r.session_kind,
+    sessionKind: r.session_kind || 'meeting',
     meetingType: r.meeting_type,
     prepStatus: r.prep_status,
     activeTools: r.active_tools ? JSON.parse(r.active_tools) : null,

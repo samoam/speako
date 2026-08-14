@@ -1,6 +1,7 @@
 import { execFileSync } from 'child_process';
 import { test, expect, Page } from '@playwright/test';
 import { config } from '../../src/config';
+import { createSession } from './fixtures';
 
 function soxAvailable(): boolean {
   try {
@@ -76,6 +77,34 @@ test('scheduled session: auto-starts recording at the scheduled time without any
   // No click on "Start recording" — the schedule poller should do it.
   await expect(card.locator('.session-dot')).toHaveClass(/recording/, { timeout: 60_000 });
   await expect(card.locator('.session-schedule')).toHaveCount(0);
+
+  await page.click('#stopBtn');
+});
+
+test.skip(!soxAvailable(), 'SoX not resolvable on this machine — skipping the stale-scheduled-end regression test.');
+
+// Real bug: a calendar-imported session's scheduled_end_at can easily be in
+// the past by the time someone manually starts/resumes recording on it much
+// later (the meeting it was imported for already happened, or never did) —
+// Session.start()'s resume path used to clear scheduled_start_at but never
+// scheduled_end_at, so checkScheduledEndSessions' 20s poller would see the
+// stale end time as immediately "due" and auto-stop the freshly started
+// recording within seconds. Fixed by also clearing scheduled_end_at on start.
+test('scheduled session: a stale (already-past) scheduledEndAt does not auto-stop a freshly started recording', async ({ page }) => {
+  const sessionId = `e2e-stale-end-${Date.now()}`;
+  const sessionName = `e2e-stale-end-name-${Date.now()}`;
+  const staleEnd = new Date(Date.now() - 60 * 60_000).toISOString();
+  createSession(sessionId, ['en-US'], sessionName, { sessionType: 'work', scheduledEndAt: staleEnd });
+
+  await page.goto('/');
+  const card = page.locator('.session-card', { hasText: sessionName });
+  await card.locator('.session-start-recording').click();
+  await expect(card.locator('.session-dot')).toHaveClass(/recording/, { timeout: 15_000 });
+
+  // The scheduled-end poller ticks every 20s — wait past a full tick and
+  // confirm the recording is still going, not silently auto-stopped.
+  await page.waitForTimeout(25_000);
+  await expect(card.locator('.session-dot')).toHaveClass(/recording/);
 
   await page.click('#stopBtn');
 });

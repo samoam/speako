@@ -15,6 +15,14 @@ export function buildRecognizerPath(): string {
 
 /** First message sent on every streaming call: config only, no audio. */
 export function buildStreamingConfigRequest(channelCount: number, languageCodes: string[] = config.languageCodes) {
+  // Confirmed empirically: combining an inline-phrase-set `adaptation` config
+  // with automatic language detection (`languageCodes: ['auto']`) makes the
+  // streaming call fail outright with "5 NOT_FOUND: Requested entity was not
+  // found" — every real segment is lost for the whole session, not just a
+  // degraded-quality result. Adaptation is genuinely useless in auto mode
+  // anyway (phrase-set boosting doesn't know which language to apply to), so
+  // it's omitted whenever 'auto' is present rather than only worked around.
+  const isAutoDetect = languageCodes.includes('auto');
   return {
     recognizer: buildRecognizerPath(),
     streamingConfig: {
@@ -26,7 +34,7 @@ export function buildStreamingConfigRequest(channelCount: number, languageCodes:
         },
         model: config.speechModel,
         languageCodes,
-        adaptation: buildAdaptationConfig(),
+        adaptation: isAutoDetect ? undefined : buildAdaptationConfig(),
         features: {
           enableAutomaticPunctuation: true,
           ...(channelCount > 1

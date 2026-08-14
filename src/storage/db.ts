@@ -298,6 +298,48 @@ db.exec(`
     asked_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- session_id is nullable: set only for "audio overview of this specific
+  -- session" (its own summary as the grounding source); null for a
+  -- subject-driven overview grounded across the whole meeting corpus via
+  -- RAG (see src/qa/crossSessionQa.ts's identical scoping). Session-linked
+  -- rows get cleaned up (row + audio file) by deleteSession(); subject-
+  -- driven rows persist independently, like cross_session_queries above.
+  CREATE TABLE IF NOT EXISTS audio_overviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT REFERENCES sessions(id),
+    subject_text TEXT NOT NULL,
+    script_text TEXT NOT NULL,
+    audio_path TEXT NOT NULL,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_audio_overviews_session ON audio_overviews(session_id);
+
+  -- The "My Plate" orchestrator's unified cross-source task board — one row
+  -- per actionable item (a Jira issue assigned to you, a Bitbucket PR
+  -- awaiting your review, an open cross-session action item), deduped by
+  -- (source, external_ref) so re-syncing the same still-open item is an
+  -- idempotent upsert rather than a duplicate row. Deliberately no FK to
+  -- sessions — an action-item-sourced task references a session via
+  -- external_ref/url only, and outlives that reference the same way
+  -- cross_session_queries above has no FK either.
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    external_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    url TEXT,
+    due_date TEXT,
+    urgency_score INTEGER NOT NULL,
+    importance_score INTEGER NOT NULL,
+    priority_score INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_ref ON tasks(source, external_ref);
+
 `);
 
 // Voice-emotion (Imentiv AI) support was removed — drop the table for anyone

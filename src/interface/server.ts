@@ -69,6 +69,15 @@ import { getRelationshipTrend } from '../insights/relationshipTrend';
 import { answerAcrossAllMeetings } from '../qa/crossSessionQa';
 import { getLogBuffer, onLogEntry, LogEntry } from '../logging/logStore';
 import { insertCrossSessionQuery, getCrossSessionQueryHistory } from '../storage/crossSessionQueryRepository';
+import { generateAudioOverview } from '../summarization/generateAudioOverview';
+import { gatherAudioOverviewContext } from '../summarization/audioOverviewContext';
+import {
+  insertAudioOverview,
+  getAudioOverview,
+  getAudioOverviewForSession,
+  deleteAudioOverview,
+  AudioOverview,
+} from '../storage/audioOverviewRepository';
 import { runCodebaseIndex } from '../codebase/indexCodebase';
 import { getIndexedRepoSummary } from '../storage/codeRepository';
 import { updateSettings } from '../settingsStore';
@@ -96,6 +105,8 @@ import { syncOutlookAndTeams } from '../integrations/msGraphSync';
 import { isOutlookDesktopConfigured, syncOutlookDesktop } from '../integrations/outlookDesktop';
 import { getCurrentWeekEvents, importUpcomingEventsThisWeek } from '../calendar/calendarImport';
 import { getSessionIdByCalendarEventId } from '../storage/segmentRepository';
+import { syncTasks } from '../orchestrator/taskSync';
+import { getOpenTasks, dismissTask } from '../storage/taskRepository';
 import {
   isClaudeCodeConfigured,
   resolveLocalRepoPath,
@@ -122,6 +133,7 @@ const SETTINGS_FIELDS = [
   'geminiModel',
   'geminiLiveModel',
   'geminiFastModel',
+  'geminiTtsModel',
   'jiraUrl',
   'jiraPersonalToken',
   'confluenceUrl',
@@ -216,10 +228,14 @@ export class InterfaceServer {
   private calendarImportInProgress = false;
   private calendarImportLastRunAt: string | null = null;
   private calendarImportLastError: string | null = null;
+  private orchestratorSyncInProgress = false;
+  private orchestratorLastRunAt: string | null = null;
+  private orchestratorLastError: string | null = null;
   private scheduleTimer: NodeJS.Timeout | null = null;
   private voiceIdleCheckTimer: NodeJS.Timeout | null = null;
   private msGraphSyncTimer: NodeJS.Timeout | null = null;
   private calendarImportTimer: NodeJS.Timeout | null = null;
+  private orchestratorSyncTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     const app = express();
@@ -693,6 +709,35 @@ export class InterfaceServer {
       });
     });
 
+    // "My Plate" — the unified cross-source task board (src/orchestrator/taskSync.ts).
+    app.get('/api/plate', (_req, res) => {
+      res.json(getOpenTasks());
+    });
+
+    // Manual out-of-cadence trigger, same shape as /api/calendar/import above.
+    app.post('/api/plate/sync', (_req, res) => {
+      if (this.orchestratorSyncInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.runOrchestratorSync();
+      res.json({ started: true });
+    });
+
+    app.get('/api/plate/status', (_req, res) => {
+      res.json({
+        inProgress: this.orchestratorSyncInProgress,
+        lastRunAt: this.orchestratorLastRunAt,
+        lastError: this.orchestratorLastError,
+      });
+    });
+
+    app.post('/api/plate/:id/dismiss', (req, res) => {
+      dismissTask(Number(req.params.id));
+      this.broadcast({ type: 'plate-updated' });
+      res.json({ dismissed: true });
+    });
+
     app.post('/api/session/stop', (_req, res) => {
       if (!this.currentSessionId) {
         res.json({ stopped: false });
@@ -1069,6 +1114,111 @@ export class InterfaceServer {
         });
     });
 
+    app.get('/api/sessions/:id/audio-overview', (req, res) => {
+      res.json({ overview: getAudioOverviewForSession(req.params.id) || null });
+    });
+
+    app.get('/api/audio-overviews/:id/audio', (req, res) => {
+      const overview = getAudioOverview(Number(req.params.id));
+      if (!overview || !fs.existsSync(overview.audioPath)) {
+        res.status(404).json({ error: 'Unknown or missing audio overview.' });
+        return;
+      }
+      res.setHeader('Content-Type', 'audio/wav');
+      fs.createReadStream(overview.audioPath).pipe(res);
+    });
+
+    // Async started/broadcast, same shape as chapters/summarize — TTS
+    // generation is slow enough that this shouldn't be a synchronous
+    // awaited request like /api/insights/ask is. Exactly one of
+    // subject/sessionId must be given: subject spins up a new
+    // sessionKind:'audioOverview' session (like Chat) and grounds via that
+    // session's own activeTools fanned out through gatherAudioOverviewContext
+    // (same machinery the prep workflows use); sessionId grounds in an
+    // existing ended meeting's own summary + open action items.
+    app.post('/api/audio-overviews', async (req, res) => {
+      const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : '';
+      let sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+      if (!subject && !sessionId) {
+        res.status(400).json({ error: 'Provide a subject or a sessionId.' });
+        return;
+      }
+      if (!config.geminiApiKey) {
+        res.status(400).json({ error: 'GEMINI_API_KEY is not configured — see NOTES.md.' });
+        return;
+      }
+
+      let subjectLabel: string;
+      let activeTools: string[] | null = null;
+      let gatherContext: () => Promise<string>;
+      if (sessionId) {
+        const session = getSession(sessionId);
+        if (!session) {
+          res.status(404).json({ error: 'Unknown session.' });
+          return;
+        }
+        if (!session.endedAt) {
+          res.status(409).json({ error: 'Session is still recording — stop it first.' });
+          return;
+        }
+        const summary = getSummary(sessionId);
+        if (!summary) {
+          res.status(409).json({ error: 'Generate a summary for this session first.' });
+          return;
+        }
+        subjectLabel = session.name || 'this meeting';
+        const openItems = getActionItems(sessionId).filter((a) => a.status === 'open');
+        const contextBlock = [
+          `Overview: ${summary.overview}`,
+          `Key decisions: ${summary.keyDecisions}`,
+          `Discussion: ${summary.discussionTopics}`,
+          `Next steps: ${summary.nextSteps}`,
+          openItems.length ? `Open action items:\n${openItems.map((i) => `- ${i.description} (${i.owner || 'unowned'})`).join('\n')}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+        gatherContext = async () => contextBlock;
+      } else {
+        subjectLabel = subject;
+        activeTools = Array.isArray(req.body?.activeTools) ? req.body.activeTools : null;
+        sessionId = uuid();
+        createPrepSession(sessionId, [], subject.slice(0, 80), { sessionKind: 'audioOverview', activeTools: activeTools ?? undefined });
+        endSession(sessionId);
+        const newSessionId = sessionId;
+        gatherContext = () => gatherAudioOverviewContext(newSessionId, subject, activeTools);
+      }
+
+      res.json({ started: true, sessionId });
+      this.broadcastAudioOverviewGenerating(sessionId);
+      gatherContext()
+        .then((contextBlock) => generateAudioOverview(subjectLabel, contextBlock))
+        .then((result) => {
+          // Regenerating a meeting-linked overview replaces it — delete the
+          // old row + file first so it doesn't leak on disk. A fresh
+          // audioOverview session never has a previous row to replace.
+          const previous = getAudioOverviewForSession(sessionId);
+          if (previous) {
+            const oldPath = deleteAudioOverview(previous.id);
+            if (oldPath) fs.rm(oldPath, { force: true }, () => {});
+          }
+          const dir = path.join(config.audioDir, 'overviews');
+          fs.mkdirSync(dir, { recursive: true });
+          const audioPath = path.join(dir, `${uuid()}.wav`);
+          fs.writeFileSync(audioPath, result.audioBuffer);
+          const overview = insertAudioOverview({
+            sessionId,
+            subjectText: subjectLabel,
+            scriptText: result.scriptText,
+            audioPath,
+          });
+          this.broadcastAudioOverviewReady(overview);
+        })
+        .catch((err: any) => {
+          console.error('[audio-overview] generation failed:', err.message);
+          this.broadcastAudioOverviewFailed(err.message, sessionId);
+        });
+    });
+
     app.get('/api/sessions/:id/chapters', (req, res) => {
       res.json({ chapters: getChapters(req.params.id) || null });
     });
@@ -1286,6 +1436,15 @@ export class InterfaceServer {
         await deleteUploadedAudio(sessionId);
       } catch (err: any) {
         console.error('[delete] failed to remove uploaded audio:', err.message);
+      }
+      // deleteSession() below removes the DB row; the file it points at has
+      // to be removed separately (same reason the session's own .wav is
+      // handled here rather than inside that DB-only transaction).
+      const existingOverview = getAudioOverviewForSession(sessionId);
+      if (existingOverview) {
+        fs.rm(existingOverview.audioPath, { force: true }, (err) => {
+          if (err) console.error('[delete] failed to remove audio overview file:', err.message);
+        });
       }
 
       deleteSession(sessionId);
@@ -1768,6 +1927,7 @@ export class InterfaceServer {
     this.voiceIdleCheckTimer = setInterval(() => this.checkIdleVoiceSessions(), 30_000);
     this.msGraphSyncTimer = setInterval(() => this.runMsGraphSync(), config.msGraphPollMinutes * 60_000);
     this.calendarImportTimer = setInterval(() => this.runCalendarImport(), config.calendarImportPollMinutes * 60_000);
+    this.orchestratorSyncTimer = setInterval(() => this.runOrchestratorSync(), config.orchestratorPollMinutes * 60_000);
   }
 
   stop(): void {
@@ -1775,6 +1935,7 @@ export class InterfaceServer {
     if (this.voiceIdleCheckTimer) clearInterval(this.voiceIdleCheckTimer);
     if (this.msGraphSyncTimer) clearInterval(this.msGraphSyncTimer);
     if (this.calendarImportTimer) clearInterval(this.calendarImportTimer);
+    if (this.orchestratorSyncTimer) clearInterval(this.orchestratorSyncTimer);
     for (const [client] of this.voiceSessions) this.stopVoiceSession(client);
     this.wss.close();
     this.httpServer.close();
@@ -1832,6 +1993,31 @@ export class InterfaceServer {
       })
       .finally(() => {
         this.calendarImportInProgress = false;
+      });
+  }
+
+  /**
+   * Fire-and-forget, called both by the poll timer and the manual "Sync
+   * now" route (POST /api/plate/sync) — same shape as runCalendarImport/
+   * runMsGraphSync above. syncTasks() already isolates per-source failures
+   * (Promise.allSettled), so this outer catch only ever fires on something
+   * syncTasks() itself couldn't recover from (it shouldn't, in practice).
+   */
+  private runOrchestratorSync(): void {
+    if (this.orchestratorSyncInProgress) return;
+    this.orchestratorSyncInProgress = true;
+    syncTasks()
+      .then((result) => {
+        this.orchestratorLastRunAt = new Date().toISOString();
+        this.orchestratorLastError = result.failed.length ? `Sources failed: ${result.failed.join(', ')}` : null;
+        this.broadcast({ type: 'plate-updated' });
+      })
+      .catch((err: any) => {
+        this.orchestratorLastError = err.message;
+        console.error('[orchestrator] sync failed:', err.message);
+      })
+      .finally(() => {
+        this.orchestratorSyncInProgress = false;
       });
   }
 
@@ -2026,6 +2212,19 @@ export class InterfaceServer {
 
   broadcastChaptersDetectionFailed(sessionId: string, error: string): void {
     this.broadcast({ type: 'chapters-detection-failed', sessionId, error });
+  }
+
+  /** Every audio overview is session-backed now (subject-driven ones spin up a fresh sessionKind:'audioOverview' session first) — sessionId is always that session's id, whether it's a brand-new subject-driven session or an existing meeting being re-recapped. */
+  broadcastAudioOverviewGenerating(sessionId: string): void {
+    this.broadcast({ type: 'audio-overview-generating', sessionId });
+  }
+
+  broadcastAudioOverviewReady(overview: AudioOverview): void {
+    this.broadcast({ type: 'audio-overview-ready', overview });
+  }
+
+  broadcastAudioOverviewFailed(error: string, sessionId: string): void {
+    this.broadcast({ type: 'audio-overview-failed', error, sessionId });
   }
 
   broadcastSentiment(sessionId: string, speaker: string, startMs: number, endMs: number, score: number, magnitude: number): void {

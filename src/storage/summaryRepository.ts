@@ -212,6 +212,24 @@ export function getOpenActionItemsByOwner(ownerNameContains: string): ActionItem
   return rows.map(mapActionItemRow);
 }
 
+export interface ActionItemWithSession extends ActionItem {
+  sessionName: string | null;
+}
+
+/** Every open action item across every session, not scoped to one owner or session — the "My Plate" orchestrator's action-item source (src/orchestrator/taskSync.ts). Unlike getOpenActionItemsByOwner, this has no LIMIT/owner filter since it's meant to be the exhaustive cross-session view, not a bounded lookup for a single prep workflow. */
+export function getAllOpenActionItems(): ActionItemWithSession[] {
+  const rows = db
+    .prepare(
+      `SELECT a.*, s.name AS session_name
+       FROM action_items a
+       JOIN sessions s ON s.id = a.session_id
+       WHERE a.status = 'open'
+       ORDER BY a.id DESC`
+    )
+    .all() as any[];
+  return rows.map((r) => ({ ...mapActionItemRow(r), sessionName: r.session_name }));
+}
+
 export interface SessionTopics {
   sessionId: string;
   name: string | null;

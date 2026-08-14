@@ -36,6 +36,10 @@
     #sidebarHeader h1 .title-text { flex: 1; }
     #settingsBtn, #voiceChatBtn, #insightsBtn, #calendarBtn, #logsBtn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0.2rem 0.3rem; line-height: 1; border-radius: 6px; display: inline-flex; }
     #settingsBtn:hover, #voiceChatBtn:hover, #insightsBtn:hover, #calendarBtn:hover, #logsBtn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    #sidebarPrimaryRow { display: flex; gap: 0.5rem; }
+    #sidebarPrimaryRow .primary-btn { width: auto; flex: 1; min-width: 0; }
+    #plateBtn { background: #232327; border: 1px solid var(--border); color: var(--muted); cursor: pointer; border-radius: 6px; padding: 0.55rem; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    #plateBtn:hover { color: var(--text); background: #2a2a2f; }
     #voiceChatBtn.active { color: var(--rec); animation: pulse 1.4s infinite; }
 
     /* ---------- Voice panel (chat/practice) ---------- */
@@ -69,12 +73,12 @@
     #voicePanelStopBtn { width: 100%; }
 
     /* ---------- Modals (settings, new session, session tools) ---------- */
-    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay {
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay, #plateOverlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
     }
-    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden] { display: none; }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden], #plateOverlay[hidden] { display: none; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-    #settingsModal, #insightsModal, #extActionModal { width: 640px; }
+    #settingsModal, #insightsModal, #extActionModal, #plateModal { width: 640px; }
     #calendarModal, #logsModal { width: min(1100px, 92vw); }
     #newSessionModal, #sessionToolsPopover { width: 420px; }
     .modal-header, #settingsModalHeader {
@@ -123,6 +127,10 @@
     .insights-example-chip:hover { border-color: var(--accent-dim); background: rgba(255,255,255,0.04); }
     #insightsAskStatus { font-size: 0.78rem; color: var(--muted); margin: -0.4rem 0 0.75rem; flex-shrink: 0; }
     #insightsAskHistory { display: flex; flex-direction: column; gap: 0.6rem; }
+    .audio-overview-card { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.9rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+    .audio-overview-subject { font-size: 0.9rem; font-weight: 500; }
+    .audio-overview-card audio { width: 100%; height: 32px; }
+    #summaryAudioOverview { margin-bottom: 1.25rem; }
     #insightsTopicsChart { display: flex; align-items: flex-end; gap: 0.6rem; height: 140px; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.25rem; }
     .topic-bar-col { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; cursor: pointer; min-width: 48px; }
     .topic-bar { width: 32px; background: var(--accent-dim); border-radius: 4px 4px 0 0; }
@@ -159,6 +167,21 @@
     .log-line.level-error .log-line-level, .log-line.level-error .log-line-message { color: #f06868; }
     #logsEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
     #logsEmptyState[hidden] { display: none; }
+
+    /* ---------- My Plate ---------- */
+    #plateModal .modal-body { min-height: 320px; max-height: 70vh; overflow: auto; }
+    #plateHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
+    #plateSyncStatus { font-size: 0.78rem; color: var(--muted); }
+    #plateList { display: flex; flex-direction: column; gap: 0.5rem; }
+    .plate-task { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.6rem 0.8rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; }
+    .plate-task-source { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(255,255,255,0.08); color: var(--muted); }
+    .plate-task-body { flex: 1; min-width: 0; }
+    .plate-task-title { font-size: 0.88rem; }
+    .plate-task-title a { color: var(--text); }
+    .plate-task-meta { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
+    .plate-task-dismiss { flex-shrink: 0; }
+    #plateEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
+    #plateEmptyState[hidden] { display: none; }
     #calendarEmptyState .icon { width: 28px; height: 28px; opacity: 0.6; }
     #calendarEmptyState p { margin: 0; font-size: 0.85rem; max-width: 360px; }
     #calendarGrid { display: grid; grid-template-columns: 56px repeat(7, minmax(110px, 1fr)); }
@@ -425,7 +448,7 @@
     .tab-btn:hover { color: var(--text); }
     .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
 
-    #summaryWrap, #actionItemsWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
+    #summaryWrap, #actionItemsWrap, #overviewWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
     #codebaseIndexBox, #communicationsIndexBox, #msGraphSyncBox, #outlookDesktopSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
     #codebaseIndexBox button, #communicationsIndexBox button, #msGraphSyncBox button, #outlookDesktopSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
@@ -434,12 +457,14 @@
     #meetingOnlyFields { display: flex; flex-direction: column; gap: 0.5rem; }
     #meetingOnlyFields[hidden] { display: none; }
     #calendarShortcuts { display: flex; flex-direction: column; gap: 0.3rem; }
-    #userNotesInput {
+    #userNotesInput, #audioOverviewSubjectInput {
       padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
       background: #1f1f23; color: var(--text); width: 100%; min-height: 60px;
       font-family: inherit; font-size: 0.85rem; resize: vertical;
     }
-    #userNotesInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #userNotesInput:focus, #audioOverviewSubjectInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #audioOverviewFields { display: flex; flex-direction: column; }
+    #audioOverviewFields[hidden] { display: none; }
     .calendar-shortcut {
       display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left;
       padding: 0.45rem 0.55rem; border-radius: 6px; border: 1px solid var(--border);
@@ -745,6 +770,7 @@
       <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
       <symbol id="icon-insights" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></symbol>
       <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></symbol>
+      <symbol id="icon-plate" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 2v3"/><path d="M15 2v3"/><path d="M8 10l2 2 4-4"/><path d="M8 16h8"/></symbol>
     </defs>
   </svg>
 
@@ -759,7 +785,10 @@
         <button id="logsBtn" title="Logs"><svg class="icon"><use href="#icon-terminal"></use></svg></button>
         <button id="settingsBtn" title="Settings"><svg class="icon"><use href="#icon-settings"></use></svg></button>
       </h1>
-      <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
+      <div id="sidebarPrimaryRow">
+        <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
+        <button id="plateBtn" title="My Plate"><svg class="icon"><use href="#icon-plate"></use></svg></button>
+      </div>
       <button id="stopBtn" class="primary-btn" hidden><svg class="icon icon-filled"><use href="#icon-square-fill"></use></svg> Stop recording</button>
     </div>
     <div id="sessionListHeader">Sessions</div>
@@ -767,6 +796,7 @@
       <button class="kind-tab-btn active" data-kind="meeting">Meetings</button>
       <button class="kind-tab-btn" data-kind="practice">Practice</button>
       <button class="kind-tab-btn" data-kind="chat">Chat</button>
+      <button class="kind-tab-btn" data-kind="audioOverview">Audio Overview</button>
     </div>
     <div id="sessionList"></div>
   </div>
@@ -797,6 +827,7 @@
             <button id="summarizeBtn" class="kebab-item" disabled>Generate summary</button>
             <button id="coachBtn" class="kebab-item" disabled>Generate coaching feedback</button>
             <button id="chaptersBtn" class="kebab-item" disabled>Detect chapters</button>
+            <button id="audioOverviewBtn" class="kebab-item" disabled>Generate audio overview</button>
             <button id="clearBtn" class="kebab-item">Clear view</button>
             <button id="deleteBtn" class="kebab-item danger" disabled>Delete session</button>
           </div>
@@ -811,6 +842,7 @@
       <button class="tab-btn" data-tab="prepBrief">Prep Brief</button>
       <button class="tab-btn" data-tab="coaching">Coaching</button>
       <button class="tab-btn" data-tab="trend">Trend</button>
+      <button class="tab-btn" data-tab="overview" hidden>Overview</button>
     </div>
     <div id="transcriptWrap">
       <div id="transcriptMain">
@@ -828,10 +860,14 @@
       </div>
     </div>
     <div id="summaryWrap">
+      <div id="summaryAudioOverview" hidden></div>
       <div id="summaryContent"></div>
     </div>
     <div id="actionItemsWrap">
       <div id="actionItemsContent"></div>
+    </div>
+    <div id="overviewWrap">
+      <div id="overviewContent"></div>
     </div>
     <div id="qaWrap">
       <div id="qaAskRow">
@@ -919,7 +955,11 @@
               <option value="one_on_one">One-on-One</option>
               <option value="design_dev">Design / Dev Discussion</option>
               <option value="chat">Chat with AI</option>
+              <option value="audioOverview">Audio Overview</option>
             </select>
+            <div id="audioOverviewFields" hidden>
+              <textarea id="audioOverviewSubjectInput" placeholder="What would you like an audio overview about? Speako gathers material from this session's tools + past meetings and generates a two-host discussion."></textarea>
+            </div>
             <div id="meetingOnlyFields">
               <div id="workflowPreview">
                 <div class="workflow-preview-label">What this prepares</div>
@@ -1022,6 +1062,7 @@
             <div class="settings-field"><label>Model</label><input type="text" data-key="geminiModel" /></div>
             <div class="settings-field"><label>Live model (voice chat/practice)</label><input type="text" data-key="geminiLiveModel" /></div>
             <div class="settings-field"><label>Fast model (live classification, cheaper tier)</label><input type="text" data-key="geminiFastModel" /></div>
+            <div class="settings-field"><label>TTS model (Audio Overview)</label><input type="text" data-key="geminiTtsModel" /></div>
           </div>
         </fieldset>
         <fieldset>
@@ -1236,6 +1277,26 @@
     </div>
   </div>
 
+  <div id="plateOverlay" hidden>
+    <div id="plateModal" class="modal">
+      <div class="modal-header">
+        <h2>My Plate</h2>
+        <div id="plateHeaderActions">
+          <span id="plateSyncStatus"></span>
+          <button id="plateSyncBtn" class="tool-btn" type="button">Sync now</button>
+          <button id="plateModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+        </div>
+      </div>
+      <div class="modal-body" id="plateModalBody">
+        <div id="plateEmptyState" hidden>
+          <svg class="icon"><use href="#icon-plate"></use></svg>
+          <p>Nothing on your plate right now — Jira issues assigned to you, Bitbucket PRs awaiting your review, and open action items will show up here.</p>
+        </div>
+        <div id="plateList"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="extActionOverlay" hidden>
     <div id="extActionModal" class="modal">
       <div class="modal-header">
@@ -1269,6 +1330,8 @@
     const summarizeBtn = document.getElementById('summarizeBtn');
     const coachBtn = document.getElementById('coachBtn');
     const chaptersBtn = document.getElementById('chaptersBtn');
+    const audioOverviewBtn = document.getElementById('audioOverviewBtn');
+    const summaryAudioOverview = document.getElementById('summaryAudioOverview');
     const chaptersList = document.getElementById('chaptersList');
     const clearBtn = document.getElementById('clearBtn');
     const deleteBtn = document.getElementById('deleteBtn');
@@ -1279,6 +1342,8 @@
     const transcriptWrap = document.getElementById('transcriptWrap');
     const summaryWrap = document.getElementById('summaryWrap');
     const actionItemsWrap = document.getElementById('actionItemsWrap');
+    const overviewWrap = document.getElementById('overviewWrap');
+    const overviewContent = document.getElementById('overviewContent');
     const summaryContent = document.getElementById('summaryContent');
     const actionItemsContent = document.getElementById('actionItemsContent');
     const triggersContent = document.getElementById('triggersContent');
@@ -1292,6 +1357,8 @@
     const workPrepBox = document.getElementById('workPrepBox');
     const meetingTypeSelect = document.getElementById('meetingTypeSelect');
     const meetingOnlyFields = document.getElementById('meetingOnlyFields');
+    const audioOverviewFields = document.getElementById('audioOverviewFields');
+    const audioOverviewSubjectInput = document.getElementById('audioOverviewSubjectInput');
     const userNotesInput = document.getElementById('userNotesInput');
     const calendarShortcutsBox = document.getElementById('calendarShortcutsBox');
     const calendarShortcuts = document.getElementById('calendarShortcuts');
@@ -1388,6 +1455,13 @@
     const logsFilter = document.getElementById('logsFilter');
     const logsAutoscroll = document.getElementById('logsAutoscroll');
     const logsClearBtn = document.getElementById('logsClearBtn');
+    const plateBtn = document.getElementById('plateBtn');
+    const plateOverlay = document.getElementById('plateOverlay');
+    const plateModalClose = document.getElementById('plateModalClose');
+    const plateSyncBtn = document.getElementById('plateSyncBtn');
+    const plateSyncStatus = document.getElementById('plateSyncStatus');
+    const plateList = document.getElementById('plateList');
+    const plateEmptyState = document.getElementById('plateEmptyState');
     const extActionOverlay = document.getElementById('extActionOverlay');
     const extActionModalClose = document.getElementById('extActionModalClose');
     const extActionTitle = document.getElementById('extActionTitle');
@@ -1511,14 +1585,17 @@
     }
 
     async function updateWorkflowPreview() {
-      // "Chat with AI" isn't a real MeetingType with a prep workflow — the
-      // calendar/notes/schedule fields below the dropdown are meaningless
-      // for it (there's nothing to prepare, and a chat starts immediately
-      // rather than being scheduled), so hide that whole section.
+      // "Chat with AI" and "Audio Overview" aren't real MeetingTypes with a
+      // prep workflow — the calendar/notes/schedule fields below the
+      // dropdown are meaningless for either (nothing to prepare, and both
+      // start immediately rather than being scheduled), so hide that whole
+      // section for both.
       const isChat = meetingTypeSelect.value === 'chat';
-      meetingOnlyFields.hidden = isChat;
-      saveOnlyBtn.textContent = isChat ? 'Start chat' : 'Save';
-      if (isChat) return;
+      const isAudioOverview = meetingTypeSelect.value === 'audioOverview';
+      meetingOnlyFields.hidden = isChat || isAudioOverview;
+      audioOverviewFields.hidden = !isAudioOverview;
+      saveOnlyBtn.textContent = isChat ? 'Start chat' : isAudioOverview ? 'Generate audio overview' : 'Save';
+      if (isChat || isAudioOverview) return;
 
       const steps = await loadWorkflowSteps();
       const forType = steps[meetingTypeSelect.value] || [];
@@ -1804,6 +1881,7 @@
     }
 
     function sessionMetaLabel(s) {
+      if (s.sessionKind === 'audioOverview') return s.hasAudioOverview ? 'ready' : 'generating…';
       if (!s.endedAt) {
         if (s.id === liveSessionId) return 'recording…';
         if (s.sessionType === 'work') return s.prepStatus === 'pending' ? 'preparing…' : 'ready — not yet started';
@@ -1854,7 +1932,7 @@
         // anything (e.g. an auto-started/auto-stopped calendar import that
         // never got real audio) — "Start recording" is the accurate label
         // for that case, not "Resume", even though endedAt is already set.
-        const notYetStarted = (!s.endedAt || s.segmentCount === 0) && s.id !== liveSessionId && s.sessionType === 'work';
+        const notYetStarted = (!s.endedAt || s.segmentCount === 0) && s.id !== liveSessionId && s.sessionType === 'work' && s.sessionKind === 'meeting';
         // A stopped session that has real content can always be manually
         // resumed if needed — e.g. one cut short by mistake before the real
         // meeting wrapped up. Reuses the exact same start/resume path as
@@ -1941,6 +2019,7 @@
           summarizeBtn.disabled = !session || !session.endedAt;
           coachBtn.disabled = !session || !session.endedAt;
           chaptersBtn.disabled = !session || !session.endedAt;
+          audioOverviewBtn.disabled = !session || !session.endedAt;
           deleteBtn.disabled = !session || !session.endedAt;
 
           fetch(`/api/sessions/${id}/sentiment`)
@@ -1954,6 +2033,10 @@
           renderSummary(summary);
           renderActionItems(actionItems);
         });
+
+      fetch(`/api/sessions/${id}/audio-overview`)
+        .then((res) => res.json())
+        .then(({ overview }) => renderSessionAudioOverview(overview));
 
       fetch(`/api/sessions/${id}/triggers`)
         .then((res) => res.json())
@@ -1978,6 +2061,14 @@
 
     function setMainHeader(session) {
       if (!session) return;
+      // An audioOverview session has nothing to show on the other tabs
+      // (no transcript, summary, action items, etc. ever get generated for
+      // it) — hide every tab but the new "Overview" one and jump straight
+      // to it, mirroring how this session kind has no recording controls.
+      const isAudioOverview = session.sessionKind === 'audioOverview';
+      for (const btn of tabBtns) btn.hidden = isAudioOverview ? btn.dataset.tab !== 'overview' : btn.dataset.tab === 'overview';
+      if (isAudioOverview) switchTab('overview');
+
       mainTitle.textContent = displayName(session);
       // A session row exists (and has no endedAt) from the moment it's
       // created/prepped, well before recording actually starts — e.g. a
@@ -2009,7 +2100,7 @@
     // every card in the list.
     function updateRecordingControls(session) {
       const live = session.id === liveSessionId;
-      const notYetStarted = (!session.endedAt || session.segmentCount === 0) && !live && session.sessionType === 'work';
+      const notYetStarted = (!session.endedAt || session.segmentCount === 0) && !live && session.sessionType === 'work' && session.sessionKind === 'meeting';
       const canResume = !!session.endedAt && session.segmentCount > 0 && !live && session.sessionType === 'work' && session.sessionKind === 'meeting';
       mainStartBtn.hidden = !(notYetStarted || canResume);
       mainStartBtn.textContent = '';
@@ -2136,6 +2227,8 @@
       if (tab === 'coaching' && activeSessionId) loadCoachingFeedback(activeSessionId);
       trendWrap.style.display = tab === 'trend' ? 'block' : 'none';
       if (tab === 'trend' && activeSessionId) loadRelationshipTrend(activeSessionId);
+      overviewWrap.style.display = tab === 'overview' ? 'block' : 'none';
+      if (tab === 'overview' && activeSessionId) loadAudioOverviewTab(activeSessionId);
     }
     for (const btn of tabBtns) btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 
@@ -2343,12 +2436,47 @@
       startVoice('chat', undefined, { name, languageCode, activeTools });
     }
 
+    // Creates a sessionKind:'audioOverview' session (like startChatFromModal
+    // creates a 'chat' one) and kicks off generation — POST /api/audio-
+    // overviews creates+ends the session server-side and gathers context via
+    // gatherAudioOverviewContext, fanning out to whatever tools are checked
+    // here (src/prep/workflows/types.ts's machinery, same as prep workflows).
+    async function startAudioOverviewFromModal() {
+      const subject = audioOverviewSubjectInput.value.trim();
+      if (!subject) return;
+      const activeTools = checkedTools(newSessionToolsChecklist);
+      saveOnlyBtn.disabled = true;
+      try {
+        const res = await fetch('/api/audio-overviews', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject, activeTools }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`Could not start generating: ${data.error || res.statusText}`);
+          return;
+        }
+        const { sessionId } = await res.json();
+        audioOverviewSubjectInput.value = '';
+        closeNewSessionModal();
+        await refreshSessions();
+        openSession(sessionId);
+      } catch (err) {
+        alert(`Could not start generating: ${err.message}`);
+      } finally {
+        saveOnlyBtn.disabled = false;
+      }
+    }
+
     // Single "Save" button — branches on the meeting-type dropdown, since
-    // "Chat with AI" there isn't a real MeetingType, just a UI-level choice
-    // between "create a (not-yet-prepped) meeting session" and "start a
-    // live chat right now."
+    // "Chat with AI" and "Audio Overview" there aren't real MeetingTypes,
+    // just UI-level choices between "create a (not-yet-prepped) meeting
+    // session," "start a live chat right now," and "generate an audio
+    // overview right now."
     saveOnlyBtn.addEventListener('click', () => {
       if (meetingTypeSelect.value === 'chat') startChatFromModal();
+      else if (meetingTypeSelect.value === 'audioOverview') startAudioOverviewFromModal();
       else createSessionFromModal();
     });
 
@@ -2560,6 +2688,80 @@
       if (tab === 'ask') loadInsightsAskHistory();
       if (tab === 'topics') loadInsightsTopics();
     }
+
+    function renderSessionAudioOverview(overview) {
+      if (!overview) {
+        summaryAudioOverview.hidden = true;
+        summaryAudioOverview.innerHTML = '';
+        return;
+      }
+      summaryAudioOverview.hidden = false;
+      summaryAudioOverview.innerHTML = `
+        <div class="audio-overview-card">
+          <div class="audio-overview-subject">Audio Overview</div>
+          <audio controls src="/api/audio-overviews/${overview.id}/audio"></audio>
+        </div>
+      `;
+    }
+
+    // The "Overview" tab is only shown for sessionKind:'audioOverview'
+    // sessions (see setMainHeader's tab-bar gating) — renders the generated
+    // script alongside the same <audio controls> player markup used
+    // elsewhere (renderSessionAudioOverview).
+    function renderOverviewContent(overview) {
+      if (!overview) {
+        overviewContent.innerHTML = '<div id="emptyState" style="display:block">Still generating — this can take a bit longer than a text answer…</div>';
+        return;
+      }
+      overviewContent.innerHTML = `
+        <div class="audio-overview-card">
+          <div class="audio-overview-subject">${escapeHtml(overview.subjectText)}</div>
+          <audio controls src="/api/audio-overviews/${overview.id}/audio"></audio>
+        </div>
+        <div class="summary-section">
+          <h3>Script</h3>
+          <p style="white-space: pre-wrap;">${escapeHtml(overview.scriptText)}</p>
+        </div>
+      `;
+    }
+
+    async function loadAudioOverviewTab(sessionId) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/audio-overview`);
+        const { overview } = await res.json();
+        renderOverviewContent(overview);
+      } catch {
+        renderOverviewContent(null);
+      }
+    }
+
+    async function triggerAudioOverview(sessionId) {
+      try {
+        const res = await fetch('/api/audio-overviews', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (sessionId === activeSessionId) {
+            mainMeta.textContent = `Audio overview failed: ${data.error || res.statusText}`;
+            audioOverviewBtn.disabled = false;
+          }
+        }
+      } catch (err) {
+        if (sessionId === activeSessionId) {
+          mainMeta.textContent = `Audio overview failed: ${err.message}`;
+          audioOverviewBtn.disabled = false;
+        }
+      }
+    }
+
+    audioOverviewBtn.addEventListener('click', () => {
+      if (!activeSessionId) return;
+      audioOverviewBtn.disabled = true;
+      triggerAudioOverview(activeSessionId);
+    });
 
     insightsBtn.addEventListener('click', openInsightsModal);
     insightsModalClose.addEventListener('click', closeInsightsModal);
@@ -2983,6 +3185,87 @@
       if (e.target === extActionOverlay) closeExtActionDialog();
     });
     extActionSubmitBtn.addEventListener('click', submitExtActionDialog);
+
+    // ---------- My Plate ----------
+
+    const PLATE_SOURCE_LABELS = { jira: 'Jira', bitbucket_pr: 'Bitbucket', action_item: 'Action item' };
+
+    function plateTaskHtml(task) {
+      const label = PLATE_SOURCE_LABELS[task.source] || task.source;
+      const meta = [];
+      if (task.dueDate) meta.push(`Due ${new Date(task.dueDate).toLocaleDateString()}`);
+      if (task.description) meta.push(escapeHtml(task.description));
+      const isInternalLink = task.url && task.url.startsWith('session://');
+      const titleHtml = task.url && !isInternalLink
+        ? `<a href="${escapeHtml(task.url)}" target="_blank" rel="noopener">${escapeHtml(task.title)}</a>`
+        : escapeHtml(task.title);
+      return `
+        <div class="plate-task" data-task-id="${task.id}" ${isInternalLink ? `data-session-id="${escapeHtml(task.url.replace('session://', ''))}"` : ''}>
+          <span class="plate-task-source">${escapeHtml(label)}</span>
+          <div class="plate-task-body">
+            <div class="plate-task-title" ${isInternalLink ? 'style="cursor:pointer;text-decoration:underline;"' : ''}>${titleHtml}</div>
+            ${meta.length ? `<div class="plate-task-meta">${meta.join(' · ')}</div>` : ''}
+          </div>
+          <button class="plate-task-dismiss icon-btn" title="Dismiss"><svg class="icon"><use href="#icon-x"></use></svg></button>
+        </div>
+      `;
+    }
+
+    function renderPlateList(tasks) {
+      plateEmptyState.hidden = tasks.length > 0;
+      plateList.innerHTML = tasks.map(plateTaskHtml).join('');
+    }
+
+    async function loadPlate() {
+      try {
+        const tasks = await fetch('/api/plate').then((r) => r.json());
+        renderPlateList(tasks);
+      } catch {
+        renderPlateList([]);
+      }
+    }
+
+    plateList.addEventListener('click', (e) => {
+      const dismissBtn = e.target.closest('.plate-task-dismiss');
+      if (dismissBtn) {
+        const card = dismissBtn.closest('.plate-task');
+        fetch(`/api/plate/${card.dataset.taskId}/dismiss`, { method: 'POST' }).then(loadPlate);
+        return;
+      }
+      const titleEl = e.target.closest('.plate-task-title');
+      const card = titleEl?.closest('.plate-task');
+      if (titleEl && card?.dataset.sessionId) {
+        closePlateModal();
+        openSession(card.dataset.sessionId);
+      }
+    });
+
+    async function openPlateModal() {
+      plateOverlay.hidden = false;
+      await loadPlate();
+    }
+
+    function closePlateModal() {
+      plateOverlay.hidden = true;
+    }
+
+    async function syncPlateNow() {
+      plateSyncBtn.disabled = true;
+      plateSyncStatus.textContent = 'Syncing…';
+      try {
+        await fetch('/api/plate/sync', { method: 'POST' });
+      } finally {
+        // Re-enabled/refreshed by the 'plate-updated' broadcast once the
+        // fire-and-forget sync actually finishes — see the WS handler below.
+      }
+    }
+
+    plateBtn.addEventListener('click', openPlateModal);
+    plateModalClose.addEventListener('click', closePlateModal);
+    plateOverlay.addEventListener('click', (e) => {
+      if (e.target === plateOverlay) closePlateModal();
+    });
+    plateSyncBtn.addEventListener('click', syncPlateNow);
 
     // ---------- New-session modal ----------
 
@@ -4318,6 +4601,7 @@
 
     function resetMainPanel() {
       activeSessionId = null;
+      for (const btn of tabBtns) btn.hidden = btn.dataset.tab === 'overview';
       clearTranscriptDom();
       mainTitle.textContent = 'No session selected';
       mainMeta.classList.remove('recording', 'paused');
@@ -4331,10 +4615,13 @@
       summarizeBtn.disabled = true;
       coachBtn.disabled = true;
       chaptersBtn.disabled = true;
+      audioOverviewBtn.disabled = true;
       deleteBtn.disabled = true;
       emptyState.style.display = 'block';
       emptyState.textContent = 'Nothing here yet.';
       renderSummary(null);
+      renderSessionAudioOverview(null);
+      renderOverviewContent(null);
       renderActionItems([]);
       renderTriggers([]);
       renderSuggestions([]);
@@ -4636,6 +4923,28 @@
             chaptersBtn.disabled = false;
             mainMeta.textContent = `Chapter detection failed: ${msg.error}`;
           }
+        } else if (msg.type === 'audio-overview-generating') {
+          if (msg.sessionId === activeSessionId) {
+            audioOverviewBtn.disabled = true;
+            mainMeta.textContent = 'Generating audio overview…';
+          }
+          // A subject-driven overview's session is brand new — other tabs/
+          // windows don't know about it yet until the sidebar refreshes.
+          if (!sessions.some((s) => s.id === msg.sessionId)) refreshSessions();
+        } else if (msg.type === 'audio-overview-ready') {
+          if (msg.overview.sessionId === activeSessionId) {
+            renderSessionAudioOverview(msg.overview);
+            renderOverviewContent(msg.overview);
+            audioOverviewBtn.disabled = false;
+            mainMeta.textContent = 'Audio overview ready';
+          }
+          refreshSessions();
+        } else if (msg.type === 'audio-overview-failed') {
+          if (msg.sessionId === activeSessionId) {
+            audioOverviewBtn.disabled = false;
+            mainMeta.textContent = `Audio overview failed: ${msg.error}`;
+          }
+          refreshSessions();
         } else if (msg.type === 'action-item-updated') {
           if (msg.sessionId === activeSessionId) {
             const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
@@ -4675,6 +4984,10 @@
         } else if (msg.type === 'calendar-session-created') {
           refreshSessions();
           if (!calendarOverlay.hidden) loadCalendarWeek();
+        } else if (msg.type === 'plate-updated') {
+          plateSyncBtn.disabled = false;
+          plateSyncStatus.textContent = `Last synced ${new Date().toLocaleTimeString()}`;
+          if (!plateOverlay.hidden) loadPlate();
         } else if (msg.type === 'codebase-index-progress') {
           if (msg.status === 'started') {
             codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
