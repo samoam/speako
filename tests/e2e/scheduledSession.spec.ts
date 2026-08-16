@@ -48,6 +48,9 @@ test('scheduled session: setting a schedule shows it in the sidebar, and it can 
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
 
+  // Sessions are a full main-frame view now (like the Dashboard board), not
+  // the sidebar's own list — open it via the sidebar's Sessions icon first.
+  await page.click('#sessionsBtn');
   const card = page.locator('.session-card', { hasText: sessionName });
   await expect(card.locator('.session-schedule')).toContainText('Scheduled for');
 
@@ -71,6 +74,7 @@ test('scheduled session: auto-starts recording at the scheduled time without any
 
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
 
+  await page.click('#sessionsBtn');
   const card = page.locator('.session-card', { hasText: sessionName });
   await expect(card.locator('.session-schedule')).toContainText('Scheduled for');
 
@@ -97,6 +101,7 @@ test('scheduled session: a stale (already-past) scheduledEndAt does not auto-sto
   createSession(sessionId, ['en-US'], sessionName, { sessionType: 'work', scheduledEndAt: staleEnd });
 
   await page.goto('/');
+  await page.click('#sessionsBtn');
   const card = page.locator('.session-card', { hasText: sessionName });
   await card.locator('.session-start-recording').click();
   await expect(card.locator('.session-dot')).toHaveClass(/recording/, { timeout: 15_000 });

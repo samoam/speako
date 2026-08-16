@@ -9,7 +9,10 @@ test('past sessions: seeded transcript renders, rename persists, delete removes 
   insertFinalSegment({ sessionId, speaker: 'You', startMs: 2000, endMs: 4000, text: 'Sounds good, I am ready.', isFinal: true });
   endSession(sessionId);
 
+  // Sessions are a full main-frame view now (like the Dashboard board), not
+  // the sidebar's own list — open it via the sidebar's Sessions icon first.
   await page.goto('/');
+  await page.click('#sessionsBtn');
   await expect(page.locator('.session-card', { hasText: sessionName })).toBeVisible();
   await page.click(`.session-card:has-text("${sessionName}")`);
 
@@ -22,17 +25,21 @@ test('past sessions: seeded transcript renders, rename persists, delete removes 
   await mainTitle.click();
   await mainTitle.fill(renamedTo);
   await mainTitle.blur();
+  await page.click('#sessionsBtn');
   await expect(page.locator('.session-card', { hasText: renamedTo })).toBeVisible();
 
   await page.reload();
+  await page.click('#sessionsBtn');
   await expect(page.locator('.session-card', { hasText: renamedTo })).toBeVisible();
   await page.click(`.session-card:has-text("${renamedTo}")`);
   await expect(page.locator('#mainTitle')).toHaveText(renamedTo);
 
+  await page.click('#sessionsBtn');
   page.once('dialog', (dialog) => dialog.accept());
   await page.click(`.session-card:has-text("${renamedTo}") .session-delete`);
   await expect(page.locator('.session-card', { hasText: renamedTo })).toBeHidden();
 
   await page.reload();
+  await page.click('#sessionsBtn');
   await expect(page.locator('.session-card', { hasText: renamedTo })).toHaveCount(0);
 });

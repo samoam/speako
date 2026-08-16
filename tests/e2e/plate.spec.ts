@@ -26,7 +26,10 @@ function mockPlate(page: Page, initialTasks: any[]): Promise<void> {
   });
 }
 
-test('plate modal: renders mocked tasks, dismiss removes one, clicking an action-item opens its session', async ({ page }) => {
+// The task queue is the sidebar's permanent content now (#sidebarQueueList),
+// not a modal you open — it's already visible/populated the moment the page
+// loads, since the Dashboard board is the app's default main-frame view too.
+test('sidebar queue: renders mocked tasks, dismiss removes one, clicking an action-item opens its session', async ({ page }) => {
   const sessionId = `e2e-plate-${Date.now()}`;
   const sessionName = `e2e-plate-session-${Date.now()}`;
   createSession(sessionId, ['en-US'], sessionName, {});
@@ -38,32 +41,29 @@ test('plate modal: renders mocked tasks, dismiss removes one, clicking an action
   ]);
 
   await page.goto('/');
-  await page.click('#plateBtn');
-  await expect(page.locator('#plateOverlay')).toBeVisible();
-  await expect(page.locator('#plateEmptyState')).toBeHidden();
+  await expect(page.locator('#sidebarQueueEmptyState')).toBeHidden();
 
-  const jiraCard = page.locator('.plate-task', { hasText: 'ETICK-1' });
+  const jiraCard = page.locator('#sidebarQueueList .plate-task', { hasText: 'ETICK-1' });
   await expect(jiraCard).toBeVisible();
   await expect(jiraCard.locator('.plate-task-source')).toHaveText('Jira');
   await expect(jiraCard.locator('a')).toHaveAttribute('href', 'https://jira.example/browse/ETICK-1');
 
-  const bitbucketCard = page.locator('.plate-task', { hasText: 'Add caching' });
+  const bitbucketCard = page.locator('#sidebarQueueList .plate-task', { hasText: 'Add caching' });
   await expect(bitbucketCard).toBeVisible();
   await expect(bitbucketCard.locator('.plate-task-source')).toHaveText('Bitbucket');
 
   // Highest priority_score (Jira, 20) sorted before the lower ones — the
   // mock already returns them pre-sorted, same as the real repository's
   // ORDER BY priority_score DESC, so this just confirms rendering preserves it.
-  const titles = await page.locator('.plate-task-title').allTextContents();
+  const titles = await page.locator('#sidebarQueueList .plate-task-title').allTextContents();
   assertDescendingByFirstAppearance(titles, ['ETICK-1', 'Add caching', 'Follow up with design team']);
 
   await jiraCard.locator('.plate-task-dismiss').click();
   await expect(jiraCard).toBeHidden();
   await expect(bitbucketCard).toBeVisible();
 
-  const actionItemCard = page.locator('.plate-task', { hasText: 'Follow up with design team' });
+  const actionItemCard = page.locator('#sidebarQueueList .plate-task', { hasText: 'Follow up with design team' });
   await actionItemCard.locator('.plate-task-title').click();
-  await expect(page.locator('#plateOverlay')).toBeHidden();
   await expect(page.locator('#mainTitle')).toHaveText(sessionName);
 });
 
@@ -74,18 +74,17 @@ function assertDescendingByFirstAppearance(actual: string[], expectedOrder: stri
   }
 }
 
-test('plate modal: empty state shows when there are no open tasks', async ({ page }) => {
+test('sidebar queue: empty state shows when there are no open tasks', async ({ page }) => {
   await mockPlate(page, []);
   await page.goto('/');
-  await page.click('#plateBtn');
-  await expect(page.locator('#plateEmptyState')).toBeVisible();
+  await expect(page.locator('#sidebarQueueEmptyState')).toBeVisible();
 });
 
-test('plate modal: "Sync now" runs the real orchestrator sync against configured Jira', async ({ page }) => {
+test('Dashboard board: "Sync now" runs the real orchestrator sync against configured Jira', async ({ page }) => {
   test.skip(!config.jiraUrl || !config.jiraPersonalToken, 'Jira not configured — skipping real orchestrator sync.');
 
+  // The Dashboard board is the app's default main-frame view — no toggle to click first.
   await page.goto('/');
-  await page.click('#plateBtn');
   await page.click('#plateSyncBtn');
   await expect(page.locator('#plateSyncBtn')).toBeDisabled();
 

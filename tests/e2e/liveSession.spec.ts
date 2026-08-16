@@ -45,5 +45,8 @@ test('live session: start recording, real audio pipeline runs, stop, appears in 
   await expect(page.locator('#stopBtn')).toBeHidden();
   await expect(page.locator('#mainMeta')).not.toHaveClass(/recording/, { timeout: 15_000 });
 
+  // Sessions are a full main-frame view now (like the Dashboard board), not
+  // the sidebar's own list — open it via the sidebar's Sessions icon first.
+  await page.click('#sessionsBtn');
   await expect(page.locator('.session-card', { hasText: sessionName })).toBeVisible();
 });

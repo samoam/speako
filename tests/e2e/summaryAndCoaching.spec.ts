@@ -25,6 +25,7 @@ test('summary and coaching: real generation renders in their tabs', async ({ pag
   const { sessionName } = seedSession('summary');
 
   await page.goto('/');
+  await page.click('#sessionsBtn');
   await page.click(`.session-card:has-text("${sessionName}")`);
   await expect(page.locator('#mainTitle')).toHaveText(sessionName);
 
@@ -66,6 +67,7 @@ test('chapters: real detection renders a clickable chapter list', async ({ page 
   const { sessionName } = seedSession('chapters');
 
   await page.goto('/');
+  await page.click('#sessionsBtn');
   await page.click(`.session-card:has-text("${sessionName}")`);
   await expect(page.locator('#mainTitle')).toHaveText(sessionName);
 
