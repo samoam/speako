@@ -55,5 +55,15 @@ test('new session modal: "Chat with AI" in the type dropdown hides meeting-only 
 
   await page.click('#saveOnlyBtn');
   await expect(page.locator('#newSessionOverlay')).toBeHidden();
-  await expect(page.locator('#voicePanel')).toBeVisible();
+
+  // A chat session opens in #main once the server confirms 'voice-ready' —
+  // #main is the app's default-hidden view now (the Dashboard board is the
+  // default), so this is the regression #main's reveal here would actually
+  // catch. #liveChatLog itself isn't a reliable visibility target: it's an
+  // empty flex container until the model's first reply bubble lands, so it
+  // has no rendered box size to assert on — and with a fake, silent mic
+  // stream the real Gemini Live connection can also end the session again
+  // within seconds, so a bubble may never arrive at all.
+  await expect(page.locator('#main')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#mainTitle')).not.toBeEmpty();
 });

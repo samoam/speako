@@ -75,7 +75,7 @@ test('deleteChunksForMessage: removes only that message\'s chunks', () => {
   assert.ok(remaining.includes('b-chunk'));
 });
 
-// Mirrors msGraphSync.ts's native ingestion path — see docs/EXTERNAL_INGESTION_PROMPT.md
+// Mirrors outlookMailSync.ts's native ingestion path — see docs/EXTERNAL_INGESTION_PROMPT.md
 // for the equivalent raw-SQL contract the external daily-agent path uses instead.
 test('upsertExternalMessage: inserting a new id leaves it unindexed', () => {
   upsertExternalMessage({ id: 'graph-1', source: 'email', title: 'Hi', participants: ['a@x.com'], occurredAt: '2026-08-10T00:00:00Z', bodyText: 'body' });

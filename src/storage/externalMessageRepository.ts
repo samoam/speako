@@ -27,7 +27,7 @@ const upsertMessageStmt = db.prepare(`
  * docs/EXTERNAL_INGESTION_PROMPT.md specifies for the external daily-agent
  * task (resetting indexed_at to NULL on update so an edited message gets
  * re-chunked, never on INSERT DO NOTHING which would leave stale chunks).
- * Used by msGraphSync.ts's native Outlook/Teams ingestion; the external-agent
+ * Used by outlookMailSync.ts's Outlook mail ingestion and teamsConnectorSync.ts's Teams ingestion; the external-agent
  * path writes to this same table directly via raw SQL instead of this function.
  */
 export function upsertExternalMessage(message: ExternalMessage): void {
@@ -39,6 +39,20 @@ export function upsertExternalMessage(message: ExternalMessage): void {
     occurredAt: message.occurredAt,
     bodyText: message.bodyText,
   });
+}
+
+/** For the reply-draft view's conversation context — task.externalRef is the same id as external_messages.id for teams_message/email_message sourced tasks. */
+export function getExternalMessageById(id: string): ExternalMessage | undefined {
+  const row = db.prepare('SELECT * FROM external_messages WHERE id = ?').get(id) as any;
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    source: row.source,
+    title: row.title,
+    participants: row.participants ? JSON.parse(row.participants) : [],
+    occurredAt: row.occurred_at,
+    bodyText: row.body_text,
+  };
 }
 
 export function getUnindexedMessages(): ExternalMessage[] {

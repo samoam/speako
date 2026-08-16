@@ -15,6 +15,14 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${E2E_PORT}`,
     trace: 'retain-on-failure',
+    // Voice chat (newSession.spec.ts) calls getUserMedia in the real browser
+    // — headless Chromium denies that by default with no dialog to dismiss,
+    // it just rejects. A fake device + granted permission lets that pipeline
+    // actually run instead of silently no-op-ing.
+    permissions: ['microphone'],
+    launchOptions: {
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
