@@ -72,11 +72,10 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
       : null;
   }
 
-  // Improvements Phase §2: check THIS meeting's own state (not just past
-  // sessions via RAG above) so a suggestion isn't a duplicate of one already
-  // open, or one that was already resolved a few minutes ago in the same
-  // conversation — the stateless per-window trigger detection in Phase 3 has
-  // no way to know that on its own.
+  // Check THIS meeting's own state (not just past sessions via RAG above)
+  // so a suggestion isn't a duplicate of one already open, or one that was
+  // already resolved a few minutes ago in the same conversation — the
+  // stateless per-window trigger detection has no way to know that on its own.
   const state = getMeetingStateSnapshot(trigger.sessionId);
   const openItemsBlock = state.openItems.length
     ? state.openItems.map((i) => `- [${i.category}] ${i.description}`).join('\n')

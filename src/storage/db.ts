@@ -75,10 +75,16 @@ db.exec(`
   -- diff is captured once at 'ready' time and reused for the later approve
   -- step, so approval still works even after the worktree itself is cleaned
   -- up. status: 'running' | 'ready' | 'applied' | 'pushed' | 'discarded' | 'failed'.
+  -- action_item_id/session_id are nullable (not just optional in the type)
+  -- because a Jira-Dashboard-card-originated request has neither — see
+  -- task_id below. Exactly one of action_item_id/task_id is set per row,
+  -- enforced in application code, not a DB constraint, matching this
+  -- codebase's existing lightweight-constraint style elsewhere.
   CREATE TABLE IF NOT EXISTS code_change_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    action_item_id INTEGER NOT NULL REFERENCES action_items(id),
-    session_id TEXT NOT NULL REFERENCES sessions(id),
+    action_item_id INTEGER REFERENCES action_items(id),
+    task_id INTEGER REFERENCES tasks(id),
+    session_id TEXT REFERENCES sessions(id),
     repo_name TEXT NOT NULL,
     repo_path TEXT NOT NULL,
     cli_session_id TEXT NOT NULL,
@@ -90,7 +96,35 @@ db.exec(`
     resolved_at TEXT
   );
 
+  -- One row per PR-review run ("Review PR" on a Bitbucket Dashboard card) —
+  -- see src/summarization/prReviewContext.ts + the /api/plate/:id/review
+  -- route. Simpler lifecycle than code_change_requests above: no applied/
+  -- pushed stages, and no cli_session_id/worktree_path to persist across a
+  -- restart, since the whole run is one awaited claude -p call server-side
+  -- (see claudeCodeCli.ts's runClaudeCodeReview), not a detached background
+  -- agent. status: 'running' | 'ready' | 'failed'.
+  CREATE TABLE IF NOT EXISTS pr_review_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    repo_name TEXT NOT NULL,
+    branch_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    context TEXT,
+    review TEXT,
+    error TEXT,
+    log TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pr_review_requests_task ON pr_review_requests(task_id);
+
   CREATE INDEX IF NOT EXISTS idx_code_change_requests_action_item ON code_change_requests(action_item_id);
+  -- idx_code_change_requests_task is created further below, after the
+  -- guarded rebuild migration — not here, since this statement would run
+  -- unconditionally even against a pre-existing DB whose code_change_requests
+  -- table doesn't have task_id yet (CREATE TABLE IF NOT EXISTS above is a
+  -- no-op for it, but this CREATE INDEX isn't conditional on that).
 
   CREATE TABLE IF NOT EXISTS sentiment_scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,7 +374,260 @@ db.exec(`
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_ref ON tasks(source, external_ref);
 
+  -- One row per calendar day (server's local date, YYYY-MM-DD) — the morning
+  -- digest (src/summarization/morningBriefing.ts), generated at most once per
+  -- day by server.ts's checkMorningBriefing() so re-ticking the same 20s
+  -- scheduleTimer loop it hooks into doesn't regenerate it repeatedly.
+  CREATE TABLE IF NOT EXISTS daily_briefings (
+    date TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One row per Teams message the AI triage pass (src/communications/
+  -- teamsMessageTriage.ts) has already classified — stores classification
+  -- results only (directed_at_me, summary, an optional draft reply), never
+  -- priority scores, since urgency/importance are recomputed live from raw
+  -- facts (message recency, directed_at_me) on every taskSync.ts pass, same
+  -- as every other tasks source.
+  CREATE TABLE IF NOT EXISTS teams_message_triage (
+    message_id TEXT PRIMARY KEY REFERENCES external_messages(id),
+    directed_at_me INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    draft_reply TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Same idea as teams_message_triage above, but for inbox email — no
+  -- "directed at me" question needed here (the whole inbox is already the
+  -- user's own), so this asks whether the message needs a reply instead.
+  CREATE TABLE IF NOT EXISTS email_message_triage (
+    message_id TEXT PRIMARY KEY REFERENCES external_messages(id),
+    needs_reply INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    draft_reply TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Generic human-approval gate for every external write Speako makes
+  -- (Teams/email replies, Jira comments/transitions, Confluence pages,
+  -- Bitbucket PR comments, PR opens, code changes, Jenkins fixes/rebuilds).
+  -- Deliberately ADDITIVE, not a migration of code_change_requests/
+  -- pr_review_requests/tasks.draft_reply into one table: those keep their own
+  -- status columns as the *execution record* for their kind, while this table
+  -- is the *human gate* sitting in front of them — a per-kind adapter maps
+  -- between the two (see src/drafts/). Each write-surface migrates onto this
+  -- table on its own schedule; un-migrated surfaces keep working untouched.
+  -- status: 'generating'|'ready'|'refining'|'executing'|'completed'|'failed'|'discarded'.
+  CREATE TABLE IF NOT EXISTS drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'generating',
+    stage INTEGER NOT NULL DEFAULT 0,
+    content TEXT,
+    result_ref TEXT,
+    error TEXT,
+    redo_of_draft_id INTEGER REFERENCES drafts(id),
+    superseded_by_draft_id INTEGER REFERENCES drafts(id),
+    execution_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_drafts_subject ON drafts(subject_kind, subject_id, kind, id DESC);
+
+  -- The refinement conversation for a draft — one row per turn, append-only.
+  -- role: 'user'|'assistant'. kind: 'instruction'|'draft'|'answer'|'manual_edit'|'note'.
+  -- content is capped (see draftRepository.ts's MAX_REVISION_CONTENT_BYTES) so
+  -- a large payload (e.g. a code diff) isn't re-snapshotted on every refine turn.
+  CREATE TABLE IF NOT EXISTS draft_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id INTEGER NOT NULL REFERENCES drafts(id),
+    turn INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT,
+    content TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_draft_revisions_draft ON draft_revisions(draft_id, turn);
+
+  -- One row per ticket-driven development cycle (Jira -> branch -> plan ->
+  -- implement -> pre-PR check -> PR -> QA Ready), the spine the dev-cycle
+  -- engine (src/dev/) hangs everything else off of. Only one active cycle per
+  -- ticket at a time (see the unique index below) — a Return loop reuses the
+  -- same row/branch rather than creating a new one.
+  CREATE TABLE IF NOT EXISTS dev_cycles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_key TEXT NOT NULL,
+    task_id INTEGER REFERENCES tasks(id),
+    repo_name TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    branch_type TEXT NOT NULL,
+    branch_name TEXT,
+    base_branch TEXT NOT NULL DEFAULT 'main',
+    worktree_path TEXT,
+    lifecycle_state TEXT NOT NULL,
+    round INTEGER NOT NULL DEFAULT 1,
+    pr_project_key TEXT,
+    pr_repo_slug TEXT,
+    pr_id INTEGER,
+    pr_url TEXT,
+    jenkins_job_path TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_dev_cycles_ticket_active ON dev_cycles(ticket_key) WHERE status = 'active';
+
+  -- Plan-before-code: one row per plan attempt for a dev cycle. Refinement
+  -- supersedes with a new row (status 'superseded') rather than mutating in
+  -- place, so the history of what was proposed/rejected is never lost.
+  -- status: 'running'|'ready'|'approved'|'rejected'|'superseded'|'failed'.
+  CREATE TABLE IF NOT EXISTS dev_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_cycle_id INTEGER NOT NULL REFERENCES dev_cycles(id),
+    round INTEGER NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'running',
+    plan TEXT,
+    seed_context TEXT,
+    feedback TEXT,
+    log TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_dev_plans_cycle ON dev_plans(dev_cycle_id);
+
+  -- Jenkins builds Speako has observed, one row per (job_path, build_number)
+  -- so re-polling an already-seen build is an idempotent upsert. dev_cycle_id
+  -- is nullable — a build for a branch under review (not owned by a dev
+  -- cycle) is still tracked here for reporting, just without that FK.
+  CREATE TABLE IF NOT EXISTS jenkins_builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_cycle_id INTEGER REFERENCES dev_cycles(id),
+    job_path TEXT NOT NULL,
+    branch_name TEXT,
+    build_number INTEGER NOT NULL,
+    result TEXT,
+    building INTEGER NOT NULL DEFAULT 0,
+    url TEXT,
+    started_at TEXT,
+    classification TEXT,
+    classification_json TEXT,
+    log_excerpt TEXT,
+    notified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_builds_job_number ON jenkins_builds(job_path, build_number);
+
 `);
+
+const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+if (!taskColumns.some((c) => c.name === 'draft_reply')) {
+  // Generic enough for other sources later, but only teams_message rows
+  // populate it today (see syncTeamsMessages() in taskSync.ts).
+  db.exec('ALTER TABLE tasks ADD COLUMN draft_reply TEXT');
+}
+if (!taskColumns.some((c) => c.name === 'board_status')) {
+  // The Dashboard's kanban column for this task ('todo'|'in_progress'|'done')
+  // — orthogonal to `status` (open/dismissed, which removes a task from view
+  // entirely). Never touched by taskRepository.ts's upsert ON CONFLICT, same
+  // as `status` isn't — otherwise a re-sync would snap a dragged card back
+  // to "To Do".
+  db.exec("ALTER TABLE tasks ADD COLUMN board_status TEXT NOT NULL DEFAULT 'todo'");
+}
+if (!taskColumns.some((c) => c.name === 'code_review')) {
+  // AI-generated Bitbucket PR review notes (src/summarization/codeReviewDrafts.ts)
+  // — kept separate from draft_reply, which means "a drafted chat/email
+  // reply"; overloading it for code-review text would blur two different
+  // concepts for future readers.
+  db.exec('ALTER TABLE tasks ADD COLUMN code_review TEXT');
+}
+
+const prReviewRequestColumns = db.prepare('PRAGMA table_info(pr_review_requests)').all() as { name: string }[];
+if (!prReviewRequestColumns.some((c) => c.name === 'log')) {
+  // Live progress lines (src/storage/prReviewRequestRepository.ts's
+  // appendPrReviewLog) — added after this table's initial CREATE TABLE
+  // already shipped in a real DB this session, hence the guarded ALTER
+  // rather than just adding the column to the CREATE TABLE above.
+  db.exec('ALTER TABLE pr_review_requests ADD COLUMN log TEXT');
+}
+
+// code_change_requests originally only supported the meeting-action-item
+// origin (action_item_id/session_id both NOT NULL). Extending "Implement
+// with Claude Code" to Jira Dashboard cards (which have neither an action
+// item nor a session) needs those relaxed to nullable, plus a new nullable
+// task_id — SQLite can't ALTER a column's NOT NULL/FK directly, so this is
+// the standard rename-rebuild-copy-drop idiom, guarded to run once via the
+// notnull flag on the existing column.
+const codeChangeRequestColumns = db.prepare('PRAGMA table_info(code_change_requests)').all() as { name: string; notnull: number }[];
+const actionItemIdColumn = codeChangeRequestColumns.find((c) => c.name === 'action_item_id');
+if (actionItemIdColumn && actionItemIdColumn.notnull) {
+  db.exec(`
+    ALTER TABLE code_change_requests RENAME TO code_change_requests_old;
+
+    CREATE TABLE code_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action_item_id INTEGER REFERENCES action_items(id),
+      task_id INTEGER REFERENCES tasks(id),
+      session_id TEXT REFERENCES sessions(id),
+      repo_name TEXT NOT NULL,
+      repo_path TEXT NOT NULL,
+      cli_session_id TEXT NOT NULL,
+      worktree_path TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      diff TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+
+    INSERT INTO code_change_requests (id, action_item_id, task_id, session_id, repo_name, repo_path, cli_session_id, worktree_path, status, diff, error, created_at, resolved_at)
+    SELECT id, action_item_id, NULL, session_id, repo_name, repo_path, cli_session_id, worktree_path, status, diff, error, created_at, resolved_at
+    FROM code_change_requests_old;
+
+    DROP TABLE code_change_requests_old;
+
+    CREATE INDEX IF NOT EXISTS idx_code_change_requests_action_item ON code_change_requests(action_item_id);
+  `);
+}
+// Safe unconditionally at this point — the column exists either way (a
+// fresh DB got it straight from the main CREATE TABLE above; a pre-existing
+// one just got it from the rebuild migration).
+db.exec('CREATE INDEX IF NOT EXISTS idx_code_change_requests_task ON code_change_requests(task_id)');
+
+// Extends code_change_requests to also serve dev-cycle-originated runs (a
+// ticket's plan-before-code implementation, or a Jenkins-fix dispatch).
+// repo_path for such a row is set to the dev cycle's OWN long-lived branch
+// worktree (dev_cycles.worktree_path) rather than the plain configured repo
+// path — confirmed live that `claude --bg` may or may not create a further
+// nested worktree of its own depending on whether its cwd is already a
+// linked worktree (inconsistent across runs, not something to rely on
+// either way); pollCodeChangeRequest()/getWorktreeDiff() already resolve the
+// *agent's actual* cwd via `getTaskInfo()` regardless, and applyCodeChangeToRepo/
+// pushRepoChanges already target whatever `repo_path` a row was created
+// with — so routing a dev-cycle row's repo_path to the cycle's worktree is
+// the only change needed; no new CLI plumbing. The one real trap this
+// creates: if the agent did NOT nest, its reported cwd IS the cycle's own
+// worktree, so discard must never blindly `git worktree remove` it (see
+// server.ts's dev-cycle-aware discard handling).
+const codeChangeRequestColumns2 = db.prepare('PRAGMA table_info(code_change_requests)').all() as { name: string }[];
+if (!codeChangeRequestColumns2.some((c) => c.name === 'dev_cycle_id')) {
+  db.exec('ALTER TABLE code_change_requests ADD COLUMN dev_cycle_id INTEGER REFERENCES dev_cycles(id)');
+}
+if (!codeChangeRequestColumns2.some((c) => c.name === 'origin')) {
+  db.exec("ALTER TABLE code_change_requests ADD COLUMN origin TEXT NOT NULL DEFAULT 'action_item'");
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_code_change_requests_dev_cycle ON code_change_requests(dev_cycle_id)');
 
 // Voice-emotion (Imentiv AI) support was removed — drop the table for anyone
 // who had it created by a previous version rather than leaving an orphaned

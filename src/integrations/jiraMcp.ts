@@ -19,9 +19,50 @@ function extractResultText(result: any): string {
 }
 
 /** Matches Jira issue keys like "ITIC-9652" or "ETICK-8613" directly named in text. */
-function extractIssueKeys(text: string): string[] {
+export function extractIssueKeys(text: string): string[] {
   const matches = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/g) ?? [];
   return [...new Set(matches)];
+}
+
+export interface JiraIssueDetail {
+  key: string;
+  summary: string;
+  description: string;
+  status: string;
+}
+
+/**
+ * Full-description variant of getJiraIssue() below — that one deliberately
+ * keeps only summary+status (a short JiraMatch snippet, good enough for
+ * fact-checking a claim). The PR-review flow needs the actual description
+ * body (acceptance criteria, context for *why* the change exists), so this
+ * requests a wider field set and returns an untruncated shape instead.
+ */
+export async function getJiraIssueDetail(issueKey: string): Promise<JiraIssueDetail | null> {
+  if (!isJiraConfigured()) {
+    throw new Error('Jira is not configured — see NOTES.md.');
+  }
+  const result = await getClient().callTool('jira_get_issue', {
+    issue_key: issueKey,
+    fields: 'summary,description,status,issuetype',
+  });
+
+  const text = extractResultText(result);
+  if (!text || result?.isError) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  return {
+    key: parsed.key ?? issueKey,
+    summary: parsed.fields?.summary ?? parsed.summary ?? '',
+    description: parsed.fields?.description ?? parsed.description ?? '',
+    status: parsed.fields?.status?.name ?? parsed.status?.name ?? parsed.status ?? '',
+  };
 }
 
 /**

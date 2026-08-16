@@ -46,28 +46,6 @@ function extractResult(result: any): any {
   }
 }
 
-/** Ingests a one-off external reference (a linked spec, docs page, etc) for design/dev prep. */
-export async function ingestUrl(url: string): Promise<void> {
-  if (!isRagConfigured()) {
-    throw new Error('rag-cloud (MyRAG) is not configured — see NOTES.md.');
-  }
-  const result = extractResult(await getClient().callTool('ingest_url', { url }));
-  if (result && result.ok === false) {
-    throw new Error(`ingest_url failed: ${result.error}`);
-  }
-}
-
-/** Ingests a public git repo's source files for design/dev prep. */
-export async function ingestRepo(repoUrl: string, ref = 'main'): Promise<void> {
-  if (!isRagConfigured()) {
-    throw new Error('rag-cloud (MyRAG) is not configured — see NOTES.md.');
-  }
-  const result = extractResult(await getClient().callTool('ingest_repo', { repo_url: repoUrl, ref }));
-  if (result && result.ok === false) {
-    throw new Error(`ingest_repo failed: ${result.error}`);
-  }
-}
-
 export async function search(query: string, limit = 5): Promise<RagMatch[]> {
   if (!isRagConfigured()) {
     throw new Error('rag-cloud (MyRAG) is not configured — see NOTES.md.');

@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -92,9 +92,201 @@ export async function getTaskInfo(cliSessionId: string): Promise<ClaudeCodeAgent
   return found ? { id: found.id, cwd: found.cwd, state: found.state, name: found.name } : null;
 }
 
-async function git(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 });
+export async function git(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 });
   return stdout;
+}
+
+// A real fetch + worktree checkout against a large repo (confirmed live: one
+// with 15k+ tracked files) takes meaningfully longer than the 30s GIT_TIMEOUT_MS
+// used for the small, targeted git calls elsewhere in this file (diff/commit/
+// push all operate on an already-checked-out worktree, not a fresh full copy).
+const WORKTREE_CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Unlike startClaudeCodeTask's --worktree (which always creates a fresh
+ * worktree off the repo's current HEAD, with no way to target an existing
+ * branch), a PR review needs to actually check out the PR's real source
+ * branch — so this creates the worktree explicitly rather than fighting
+ * --worktree's behavior.
+ */
+export async function createWorktreeForBranch(repoPath: string, branch: string): Promise<string> {
+  await git(['fetch', 'origin', branch], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+  const worktreePath = path.join(os.tmpdir(), `speako-pr-review-${Date.now()}`);
+  await git(['worktree', 'add', worktreePath, `origin/${branch}`], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+  return worktreePath;
+}
+
+/**
+ * Cleanup for createWorktreeForBranch's worktree — same --force --force
+ * shape as discardCodeChangeTask (a locked working tree needs it passed
+ * twice), but no `claude stop` step: runClaudeCodeReview below is a
+ * synchronous one-shot call, not a detached background agent to stop first.
+ *
+ * Retries with a short delay — confirmed live on Windows that calling this
+ * immediately after the review subprocess exits can transiently fail (the
+ * OS/antivirus can briefly still hold a handle on the worktree directory
+ * right after the child process using it as its cwd exits), which otherwise
+ * leaves an orphaned worktree directory behind since the caller only logs
+ * a cleanup failure rather than retrying itself.
+ */
+export async function removeWorktree(worktreePath: string, repoPath: string): Promise<void> {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await git(['worktree', 'remove', '--force', '--force', worktreePath], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+      return;
+    } catch (err) {
+      if (attempt === attempts) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+}
+
+const REVIEW_TIMEOUT_MS = 15 * 60 * 1000; // real codebase exploration can take a while, unlike a trivial smoke-test prompt
+const REVIEW_DISALLOWED_TOOLS = [...DISALLOWED_TOOLS, 'Write', 'Edit'];
+
+export interface ClaudeCodeReviewResult {
+  resultText: string;
+  /** Parsed from the CLI's own `structured_output` field when a jsonSchema was supplied — confirmed live that `--json-schema` returns both a JSON string (.result) and this already-parsed object, so callers don't need to JSON.parse resultText themselves. Null if no schema was given, or if the agent's output didn't validate. */
+  structuredOutput: any | null;
+  isError: boolean;
+  costUsd: number;
+}
+
+/** Turns a tool-use event into a short, human-readable progress line — confirmed live which tools/fields a review agent actually uses (Bash/Read/Grep/Glob; Write/Edit are disallowed so shouldn't appear). */
+function describeToolUse(name: string, input: any): string {
+  switch (name) {
+    case 'Bash':
+      return `Running: ${String(input?.command ?? '').slice(0, 150)}`;
+    case 'Read':
+      return `Reading ${input?.file_path ?? 'a file'}`;
+    case 'Grep':
+      return `Searching for "${input?.pattern ?? ''}"${input?.path ? ` in ${input.path}` : ''}`;
+    case 'Glob':
+      return `Finding files matching "${input?.pattern ?? ''}"`;
+    default:
+      return `Using ${name}`;
+  }
+}
+
+/**
+ * Streams the review agent's progress live via `--output-format stream-json
+ * --include-partial-messages` — confirmed live this emits one JSON object
+ * per line as the agent works (tool-use calls with full input once
+ * complete, tool results, text deltas, a final `result` line with the same
+ * shape the old non-streaming `--output-format json` returned). This
+ * replaced an earlier one-shot `-p --output-format json` version once a
+ * live progress log was added to the review UI — that version only ever
+ * returned a single blob at the very end, leaving the UI with nothing to
+ * show while a multi-minute review ran. `--permission-mode plan` plus
+ * explicit Write/Edit disallowedTools keeps this strictly read-only — a
+ * review agent must never modify the code it's reviewing. Uses spawn (not
+ * execFile) specifically to read stdout incrementally as a stream rather
+ * than waiting for the whole process to exit.
+ *
+ * The prompt is piped via stdin rather than passed as a positional argv
+ * string — confirmed live that a large, real-world prompt (a full Jira
+ * ticket + Confluence page bodies embedded, tens of thousands of characters)
+ * broke argv-based invocation: the CLI echoed the prompt text back instead
+ * of returning parsed JSON, alongside a "no stdin data received" warning,
+ * which is exactly what `-p`'s own --help text hints at ("useful for
+ * pipes"). A short smoke-test prompt had worked fine as a positional arg,
+ * masking this until a real prompt was tried.
+ *
+ * options.jsonSchema (confirmed live) constrains the final answer to a
+ * given JSON Schema — the CLI returns it in `structured_output`, already
+ * parsed, alongside the same JSON as a string in `.result`. Used for the PR
+ * review's structured findings (severity/file/line) instead of free-text.
+ */
+export function runClaudeCodeReview(
+  prompt: string,
+  worktreePath: string,
+  options?: { jsonSchema?: object; onProgress?: (message: string) => void }
+): Promise<ClaudeCodeReviewResult> {
+  const onProgress = options?.onProgress;
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'claude',
+      [
+        '-p',
+        '--output-format', 'stream-json',
+        '--include-partial-messages',
+        '--verbose', // required by the CLI when combining --print with --output-format=stream-json (confirmed live — otherwise it exits immediately with an error)
+        '--permission-mode', 'plan',
+        '--disallowedTools', ...REVIEW_DISALLOWED_TOOLS,
+        ...(options?.jsonSchema ? ['--json-schema', JSON.stringify(options.jsonSchema)] : []),
+      ],
+      { cwd: worktreePath }
+    );
+
+    let buffer = '';
+    let stderrOutput = '';
+    let finalResult: ClaudeCodeReviewResult | null = null;
+    let settled = false;
+
+    const timeoutHandle = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error('Claude Code review timed out.'));
+    }, REVIEW_TIMEOUT_MS);
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      let newlineIndex: number;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!line.trim()) continue;
+
+        let event: any;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue; // a partial/corrupt line shouldn't crash the whole review — just skip it
+        }
+
+        if (event.type === 'assistant' && onProgress) {
+          for (const block of event.message?.content ?? []) {
+            if (block.type === 'tool_use') onProgress(describeToolUse(block.name, block.input));
+          }
+        } else if (event.type === 'result') {
+          finalResult = {
+            resultText: event.result ?? '',
+            structuredOutput: event.structured_output ?? null,
+            isError: !!event.is_error,
+            costUsd: event.total_cost_usd ?? 0,
+          };
+        }
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrOutput += chunk.toString('utf8');
+    });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
+
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      if (finalResult) {
+        resolve(finalResult);
+      } else {
+        reject(new Error(`Claude Code exited with code ${code} before returning a result.${stderrOutput ? ` ${stderrOutput.slice(0, 500)}` : ''}`));
+      }
+    });
+
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+  });
 }
 
 /**

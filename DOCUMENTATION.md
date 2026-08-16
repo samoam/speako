@@ -120,12 +120,12 @@ Set once at session creation (New Session modal's "Tools for this session" check
   | `generic` (fallback) | Jira + Confluence + personal RAG, plus Bitbucket only if the topic looks code-related, plus email/Teams |
 - **Synthesis**: one Gemini call turns the gathered sources into a structured brief; runs fully async (never blocks starting the recording) and seeds the session's meeting-state rolling summary directly, so live suggestions and trigger classification pick it up for free.
 - **"Just save" / "Run prep later"**: prep is never forced at creation — the New Session modal creates the session immediately (`skipPrep`); a "Run prep now"/"Retry prep" button in the Prep Brief tab triggers it later using the tools/meeting-type/calendar-event already stored on the row.
-- **Calendar-driven prep**: `GET /api/calendar/upcoming` shows this week's not-yet-linked events with one-click "Prep this meeting" shortcuts (Google Calendar if configured, else the Outlook desktop COM fallback).
+- **Calendar-driven prep**: `GET /api/calendar/upcoming` shows this week's not-yet-linked events with one-click "Prep this meeting" shortcuts (Google Calendar if configured, else Outlook via the Microsoft 365 connector).
 - **Anticipated Q&A**: pre-computed likely questions/answers for the upcoming meeting, surfaced live during it.
 
 ### 2.6 Calendar integration
 
-- **Two independent providers**, tried in order — Google Calendar first (if configured), else Outlook desktop COM automation (`GetDefaultFolder(9)`, via a PowerShell script) as a fallback for on-premises/hybrid mailboxes Graph can't reach. Never merged/deduped between the two.
+- **Two independent providers**, tried in order — Google Calendar first (if configured), else Outlook via the Microsoft 365 Claude connector (`src/integrations/microsoft365Calendar.ts`) as a fallback. Never merged/deduped between the two.
 - **Automatic session creation**: a background poller (`CALENDAR_IMPORT_ENABLED`) imports this week's upcoming meetings as real sessions with a pre-run prep brief, `scheduledStartAt` set to auto-start recording at the meeting's start time, and `scheduledEndAt` to auto-stop it at the meeting's end. Deliberately skips: already-started/past events, solo blocks (no attendees), canceled meetings (checked via Outlook's `MeetingStatus`/Google's `event.status`, not by matching a locale-dependent "Canceled: " subject prefix). Dedup is by `calendar_event_id`, so reruns and manual creation from the same event never double up.
 - **Calendar view**: a real day/week grid (`GET /api/calendar/week`) showing every event (including past/solo/canceled ones, visually distinguished), click-through to the linked session where one exists.
 - **Meeting metadata carried onto the session**: location, organizer, attendee display names, and description are pulled from the calendar event and shown in the Prep Brief tab, independent of the prep brief's own success/failure.
@@ -173,7 +173,7 @@ Both modes persist to the same `audio_overviews` table (`session_id`, `subject_t
 | **mem0** | MCP over HTTP transport — long-term personal-fact memory, written to (capped at 3 facts/summary) after a meeting and read from during one-on-one prep |
 | **MyRAG** | MCP over HTTP transport — one-off external reference material (linked specs, competitor docs), distinct from Speako's own local transcript/codebase RAG |
 | **Local codebase** | Same chunk→embed→store→cosine-search pattern as transcript RAG, pointed at locally checked-out repos (`CODEBASE_LOCAL_PATHS`) — code never leaves the machine except text sent to Gemini for embedding |
-| **Email / Teams** | Microsoft Graph (device-code OAuth, `Chat.Read`/`Mail.Read` — user-consentable scopes, no tenant-admin approval needed) as the primary path; Outlook desktop COM automation (PowerShell, manual-trigger only) as a fallback for mailboxes Graph can't reach (on-prem/hybrid Exchange, B2B guest accounts) |
+| **Email / Teams** | Microsoft 365 Claude connector — headless `claude -p` dispatch (`src/integrations/claudeConnectorCli.ts`) to the `claude` CLI's Microsoft 365 MCP connector, authenticated once via `claude mcp login` outside Speako. Read-only for both; sending/replying stays a manual draft-and-copy step for both, since the connector has no send capability for either |
 | **Web search** | Gemini's built-in Google Search grounding tool — no separate search API/key |
 
 ### 2.13 Session management & settings
@@ -198,7 +198,7 @@ A single Node.js process (`src/index.ts`) that:
 4. Serves a small **Express** app + **WebSocket** server (`ws`) that a single static HTML page (vanilla JS, no framework/build step) connects to — the browser has no direct access to the audio stream or any credentials; all capture/processing happens server-side.
 5. Calls **Gemini** (`@google/genai`) for every reasoning task: classification, suggestions, summarization, fact-checking, embeddings, meeting-state updates, TTS (Audio Overview), Google-Search-grounded web fallback.
 6. Calls **MCP (Model Context Protocol)** servers, spawned as local subprocesses or over HTTP, for Jira/Confluence/mem0/MyRAG.
-7. Calls Bitbucket Server's REST API and Microsoft Graph directly; shells out to PowerShell for Outlook desktop COM automation (mail + calendar fallback) and for `claude` CLI dispatch (Implement with Claude Code).
+7. Calls Bitbucket Server's REST API directly; dispatches headless `claude` CLI processes both for the Microsoft 365 connector (Outlook mail/calendar/Teams reads) and for Claude Code (Implement with Claude Code, PR self-review, etc.).
 
 No build step is required for day-to-day development — `npm run dev` runs `ts-node` directly. `npm run build` compiles to `dist/` for `npm start`.
 
@@ -236,8 +236,9 @@ src/
   voice/                   Gemini Live session (Chat/Practice) + its system instructions
   tools/                   ToolKey/activeTools + activeFeatures gating definitions
   integrations/            one file per external system: Jira/Confluence (MCP), Bitbucket
-                           (REST), mem0/MyRAG (MCP-HTTP), Google Calendar, Microsoft Graph,
-                           Outlook desktop (COM via PowerShell), Claude Code CLI dispatch
+                           (REST), mem0/MyRAG (MCP-HTTP), Google Calendar, Microsoft 365
+                           connector (Outlook mail/calendar/Teams, via headless claude CLI
+                           dispatch), Claude Code CLI dispatch
   mcp/                     shared generic MCP client (stdio or HTTP transport)
   gemini/                  Gemini client construction, usage logging, context caching
   storage/                 SQLite schema (db.ts) + one repository module per table
@@ -332,8 +333,8 @@ One shared WebSocket (`InterfaceServer`'s `broadcast()`) carries every live-upda
 
 Three distinct patterns, chosen per what each external system actually offers:
 - **MCP servers** (Jira/Confluence via `mcp-atlassian`, spawned locally per call via `uvx`; mem0/MyRAG over HTTP transport) — used wherever a maintained MCP server exists and covers what's needed.
-- **Direct REST** (Bitbucket Server, Microsoft Graph) — used where no MCP package exists (Bitbucket) or where Graph's own REST API is the natural fit.
-- **Shelling out to an external tool/process** (SoX for audio capture, PowerShell for Outlook desktop COM automation — mail, calendar, since "New Outlook" has no COM support at all — and for the `claude` CLI's background dispatch) — used deliberately instead of native Node bindings, to avoid node-gyp/native-compilation dependencies that could break across Node/Electron version bumps.
+- **Direct REST** (Bitbucket Server) — used where no MCP package exists and no other approach is a better fit.
+- **Shelling out to an external tool/process** (SoX for audio capture; the `claude` CLI for background dispatch — both Claude Code implementation/review work, and headless calls to the Microsoft 365 connector for Outlook mail/calendar/Teams reads, `src/integrations/claudeConnectorCli.ts`) — used deliberately instead of native Node bindings, to avoid node-gyp/native-compilation dependencies that could break across Node/Electron version bumps.
 
 ---
 
@@ -346,7 +347,7 @@ Three distinct patterns, chosen per what each external system actually offers:
 - No true "mentioned me in a comment" search across all of Bitbucket — only comments on PRs you're already involved in are scanned.
 - Calendar auto-import only runs while Speako is actually open at the time (a poller, not an OS-level scheduler).
 - Single-session-at-a-time recording — not designed for concurrent recordings.
-- Outlook desktop COM automation only works with classic desktop Outlook, not the newer "New Outlook" client, and its email sync stays manual-trigger-only (never polled) since Outlook's security prompt could stall an unattended run — the calendar side of the same mechanism is polled anyway, a deliberate, explicitly-accepted exception.
+- Email and Teams replies stay a manual draft-and-copy step — the Microsoft 365 connector has no send/reply capability for either (write actions require the interactive claude.ai chat UI's own confirmation step, which a headless sync can't satisfy).
 
 See [NOTES.md](./NOTES.md) for the full build log behind every one of these decisions, plus every empirically-confirmed API quirk (model deprecations, client-library bugs, locale-dependent serialization gotchas, and more) encountered while building this.
 
@@ -366,8 +367,8 @@ See [NOTES.md](./NOTES.md) for the full build log behind every one of these deci
 | Web search fallback | Gemini's built-in Google Search grounding tool |
 | Jira / Confluence / mem0 / MyRAG | Model Context Protocol (`@modelcontextprotocol/sdk`), stdio (`mcp-atlassian` via `uvx`) or HTTP transport |
 | Bitbucket | Direct REST API (Bitbucket Server/Data Center, Basic auth) |
-| Email / Teams | Microsoft Graph (`googleapis`-style OAuth via `@azure/msal-node`, device-code flow) + Outlook desktop COM (PowerShell) fallback |
-| Calendar | Google Calendar API (`googleapis`) + Outlook desktop COM (PowerShell) fallback |
+| Email / Teams | Microsoft 365 Claude connector — headless `claude` CLI dispatch (no direct API client) |
+| Calendar | Google Calendar API (`googleapis`) + Microsoft 365 Claude connector fallback |
 | Code dispatch | `claude` CLI, spawned in an isolated git worktree |
 | Database | SQLite via `better-sqlite3` (WAL mode) |
 | Web server | Express + `ws` (WebSocket) |

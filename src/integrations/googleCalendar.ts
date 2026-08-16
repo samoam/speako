@@ -13,7 +13,7 @@ export interface CalendarEvent {
   isRecurring: boolean;
   /** Optional for the same reason as endTime above — a canceled meeting that's still on the calendar (Outlook keeps them visible, marked "Canceled: "). */
   isCanceled?: boolean;
-  /** Display names (not necessarily resolvable email addresses — see outlookDesktopCalendar.ts) of everyone invited, organizer included. Optional: absent when the source has nothing to report. */
+  /** Display names/addresses of everyone invited, organizer included. Optional: absent when the source has nothing to report. */
   attendees?: string[];
   location?: string;
   organizer?: string;
@@ -28,7 +28,7 @@ export function isCalendarConfigured(): boolean {
   );
 }
 
-export function getOAuth2Client() {
+function getOAuth2Client() {
   const raw = JSON.parse(fs.readFileSync(config.googleCalendarCredentialsPath, 'utf-8'));
   const creds = raw.installed || raw.web;
   const client = new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);

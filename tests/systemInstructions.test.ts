@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildChatInstruction, buildPracticeInstruction } from '../src/voice/systemInstructions';
+import { buildChatInstruction, buildPracticeInstruction, buildResumeInstruction } from '../src/voice/systemInstructions';
 import { PrepBrief } from '../src/storage/prepBriefRepository';
 
 function makeBrief(overrides?: Partial<PrepBrief>): PrepBrief {
@@ -53,4 +53,11 @@ test('buildPracticeInstruction: weaves in likely questions and questions to ask 
   const instruction = buildPracticeInstruction(brief, 'design_dev', 'Design review');
   assert.ok(instruction.includes('Why did you choose this approach?'));
   assert.ok(instruction.includes('What about the rollback plan?'));
+});
+
+test('buildResumeInstruction: includes the prior transcript and instructs the model not to re-greet', () => {
+  const instruction = buildResumeInstruction('[00:00] You: Let\'s talk about the migration.\n[00:05] Assistant: Sure, what do you want to know?');
+  assert.ok(instruction.includes("Let's talk about the migration."));
+  assert.ok(instruction.toLowerCase().includes('continuing'));
+  assert.ok(instruction.toLowerCase().includes('not greet'));
 });

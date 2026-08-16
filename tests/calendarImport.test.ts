@@ -1,7 +1,6 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import * as outlookDesktop from '../src/integrations/outlookDesktop';
-import * as outlookDesktopCalendar from '../src/integrations/outlookDesktopCalendar';
+import * as microsoft365Calendar from '../src/integrations/microsoft365Calendar';
 import * as prepService from '../src/prep/PrepService';
 import { createSession, getSessionIdByCalendarEventId } from '../src/storage/segmentRepository';
 import { db } from '../src/storage/db';
@@ -31,16 +30,6 @@ test('getCurrentWeekRange: Sunday counts as the last day of its week, not the fi
   assert.equal(startIso, wednesdayRange.startIso);
 });
 
-test('importUpcomingEventsThisWeek: returns empty result when Outlook desktop is not configured', async () => {
-  const spy = mock.method(outlookDesktop, 'isOutlookDesktopConfigured', () => false);
-  try {
-    const result = await importUpcomingEventsThisWeek();
-    assert.deepEqual(result, { createdSessionIds: [], skipped: 0 });
-  } finally {
-    spy.mock.restore();
-  }
-});
-
 test('importUpcomingEventsThisWeek: creates a session for a future event, skips a past one, a solo block, a canceled meeting, and one that already has a session', async () => {
   const monday = getCurrentWeekRangeMonday();
   const pastEvent = { id: 'evt-past', title: 'Already happened', description: '', startTime: isoAt(monday, 0, 0), attendeeCount: 2, isRecurring: false };
@@ -61,8 +50,7 @@ test('importUpcomingEventsThisWeek: creates a session for a future event, skips 
   };
   const alreadyImportedEvent = { id: 'evt-already-imported', title: 'Standup', description: '', startTime: futureIso(), attendeeCount: 3, isRecurring: true };
 
-  const configuredSpy = mock.method(outlookDesktop, 'isOutlookDesktopConfigured', () => true);
-  const eventsSpy = mock.method(outlookDesktopCalendar, 'listOutlookEventsInRange', async () => [pastEvent, soloEvent, canceledEvent, futureEvent, alreadyImportedEvent]);
+  const eventsSpy = mock.method(microsoft365Calendar, 'listMicrosoft365EventsInRange', async () => [pastEvent, soloEvent, canceledEvent, futureEvent, alreadyImportedEvent]);
   const prepSpy = mock.method(prepService, 'runPrep', async () => {});
 
   try {
@@ -95,7 +83,6 @@ test('importUpcomingEventsThisWeek: creates a session for a future event, skips 
     assert.equal(getSessionIdByCalendarEventId(soloEvent.id), undefined);
     assert.equal(getSessionIdByCalendarEventId(canceledEvent.id), undefined);
   } finally {
-    configuredSpy.mock.restore();
     eventsSpy.mock.restore();
     prepSpy.mock.restore();
   }

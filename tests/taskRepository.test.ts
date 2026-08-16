@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertTask, getOpenTasks, dismissTask, pruneTasksForSource } from '../src/storage/taskRepository';
+import { upsertTask, getOpenTasks, getTaskById, dismissTask, pruneTasksForSource, updateTaskBoardStatus, getTasksCreatedSince } from '../src/storage/taskRepository';
 
 function baseTask(overrides: Partial<Parameters<typeof upsertTask>[0]> = {}) {
   return {
@@ -74,3 +74,51 @@ test('taskRepository: pruneTasksForSource with an empty keep list removes every 
   pruneTasksForSource('action_item', []);
   assert.equal(getOpenTasks().filter((t) => t.source === 'action_item').length, 0);
 });
+
+test('taskRepository: a new task defaults to board_status "todo"', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-600' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-600');
+  assert.equal(task!.boardStatus, 'todo');
+});
+
+test('taskRepository: updateTaskBoardStatus moves a task to a new column', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-700' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-700')!;
+  updateTaskBoardStatus(task.id, 'in_progress');
+  const updated = getOpenTasks().find((t) => t.id === task.id);
+  assert.equal(updated!.boardStatus, 'in_progress');
+});
+
+test('taskRepository: re-upserting a moved task does not snap board_status back to "todo"', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-800', title: 'Original' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-800')!;
+  updateTaskBoardStatus(task.id, 'done');
+  upsertTask(baseTask({ externalRef: 'ETICK-800', title: 'Re-synced title' }));
+  const updated = getOpenTasks().find((t) => t.externalRef === 'ETICK-800');
+  assert.equal(updated!.boardStatus, 'done');
+  assert.equal(updated!.title, 'Re-synced title');
+});
+
+test('taskRepository: getTaskById returns the matching task, undefined for an unknown id', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-900' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-900')!;
+  assert.equal(getTaskById(task.id)?.externalRef, 'ETICK-900');
+  assert.equal(getTaskById(-1), undefined);
+});
+
+test('taskRepository: getTasksCreatedSince only returns open tasks first seen at or after the cutoff', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1000' }));
+  const cutoff = new Date(Date.now() + 60_000).toISOString(); // safely after the row just inserted
+  assert.ok(!getTasksCreatedSince(cutoff).some((t) => t.externalRef === 'ETICK-1000'));
+  const pastCutoff = new Date(Date.now() - 60_000).toISOString();
+  assert.ok(getTasksCreatedSince(pastCutoff).some((t) => t.externalRef === 'ETICK-1000'));
+});
+
+test('taskRepository: getTasksCreatedSince excludes dismissed tasks', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1001' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1001')!;
+  dismissTask(task.id);
+  const pastCutoff = new Date(Date.now() - 60_000).toISOString();
+  assert.ok(!getTasksCreatedSince(pastCutoff).some((t) => t.externalRef === 'ETICK-1001'));
+});
+

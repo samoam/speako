@@ -61,13 +61,12 @@ export function seedMeetingState(sessionId: string, prepBriefText: string): void
 
 /**
  * Incrementally updates a session's rolling summary + open-items registry
- * (Improvements Phase §2) from whatever transcript has accumulated since the
- * last update. Called on a segment-count cadence (see config.
- * meetingStateUpdateEverySegments) rather than per-segment, to keep this
- * extra LLM call from becoming a latency bottleneck in the live pipeline —
- * same rationale as Phase 3's trigger cooldown/rate-limit. Never throws;
- * logs and gives up on failure so a state-update hiccup can't affect live
- * transcription/triggers.
+ * from whatever transcript has accumulated since the last update. Called on
+ * a segment-count cadence (see config.meetingStateUpdateEverySegments)
+ * rather than per-segment, to keep this extra LLM call from becoming a
+ * latency bottleneck in the live pipeline — same rationale as trigger
+ * detection's cooldown/rate-limit. Never throws; logs and gives up on
+ * failure so a state-update hiccup can't affect live transcription/triggers.
  */
 export async function updateMeetingState(sessionId: string): Promise<void> {
   if (!config.meetingStateEnabled || !config.geminiApiKey) return;

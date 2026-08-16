@@ -56,3 +56,25 @@ export function buildPracticeInstruction(prepBrief: PrepBrief, meetingType: stri
 
   return lines.join('\n');
 }
+
+/**
+ * Persona for resuming an already-started chat/practice session under a
+ * fresh Gemini Live connection (Live sessions have no cross-connection
+ * memory of their own) — a short "you're continuing this conversation"
+ * preamble plus the prior transcript, so the model picks up with real
+ * awareness of what was already said rather than starting cold. Used for
+ * both chat and practice resume: practice has no stored link back to the
+ * meeting it was originally based on, so re-deriving the original
+ * meeting-specific prep-brief persona isn't possible on resume — the prior
+ * transcript itself carries enough context to continue naturally.
+ */
+export function buildResumeInstruction(priorTranscriptText: string): string {
+  return [
+    'You are continuing an existing conversation that was paused and has now resumed — do not greet the user again or act like this is a new conversation.',
+    'Here is the transcript of what was already said before the pause:',
+    '',
+    priorTranscriptText,
+    '',
+    'Pick up naturally from where it left off.',
+  ].join('\n');
+}

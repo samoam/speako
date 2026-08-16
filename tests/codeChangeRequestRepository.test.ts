@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSession } from '../src/storage/segmentRepository';
 import { db } from '../src/storage/db';
+import { upsertTask, getOpenTasks } from '../src/storage/taskRepository';
 import {
   createCodeChangeRequest,
   getCodeChangeRequest,
   getLatestCodeChangeRequestForActionItem,
+  getLatestCodeChangeRequestForTask,
   getRunningCodeChangeRequests,
   markCodeChangeReady,
   markCodeChangeFailed,
@@ -106,6 +108,20 @@ test('markCodeChangeDiscarded: sets status and resolvedAt', () => {
   const updated = getCodeChangeRequest(request.id)!;
   assert.equal(updated.status, 'discarded');
   assert.ok(updated.resolvedAt);
+});
+
+test('createCodeChangeRequest: supports a Jira-Dashboard-card origin (taskId, no actionItemId/sessionId)', () => {
+  upsertTask({ source: 'jira', externalRef: 'ETICK-999', title: 'Fix the widget', urgencyScore: 3, importanceScore: 3 });
+  const taskId = getOpenTasks().find((t) => t.externalRef === 'ETICK-999')!.id;
+
+  const request = createCodeChangeRequest({ taskId, repoName: 'officercc', repoPath: 'C:\\fake\\path', cliSessionId: 'jira-abc' });
+  assert.equal(request.status, 'running');
+  assert.equal(request.taskId, taskId);
+  assert.equal(request.actionItemId, null);
+  assert.equal(request.sessionId, null);
+
+  const latest = getLatestCodeChangeRequestForTask(taskId);
+  assert.equal(latest?.id, request.id);
 });
 
 test('getRunningCodeChangeRequests: only returns requests still in "running" status', () => {

@@ -1,8 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import { config } from '../config';
 import { CalendarEvent } from '../integrations/googleCalendar';
-import { isOutlookDesktopConfigured } from '../integrations/outlookDesktop';
-import { listOutlookEventsInRange } from '../integrations/outlookDesktopCalendar';
+import { listMicrosoft365EventsInRange } from '../integrations/microsoft365Calendar';
 import { classifyMeetingType } from '../prep/meetingTypes';
 import { createSession, getSessionIdByCalendarEventId, CalendarMeetingInfo } from '../storage/segmentRepository';
 import { runPrep } from '../prep/PrepService';
@@ -35,9 +34,8 @@ export function getCurrentWeekRange(now: Date = new Date()): { startIso: string;
 
 /** Every meeting in the current week, for the grid view — past and future alike, so already-elapsed days aren't just blank. */
 export async function getCurrentWeekEvents(): Promise<CalendarEvent[]> {
-  if (!isOutlookDesktopConfigured()) return [];
   const { startIso, endIso } = getCurrentWeekRange();
-  return listOutlookEventsInRange(startIso, endIso);
+  return listMicrosoft365EventsInRange(startIso, endIso);
 }
 
 export interface CalendarImportResult {
@@ -71,8 +69,6 @@ export interface CalendarImportResult {
 export async function importUpcomingEventsThisWeek(
   onSessionCreated?: (sessionId: string, event: CalendarEvent) => void
 ): Promise<CalendarImportResult> {
-  if (!isOutlookDesktopConfigured()) return { createdSessionIds: [], skipped: 0 };
-
   const events = await getCurrentWeekEvents();
   const now = Date.now();
   const createdSessionIds: string[] = [];

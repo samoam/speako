@@ -56,11 +56,24 @@ export class McpServerClient {
       }
       const client = new Client({ name: 'speako', version: '1.0.0' });
       await client.connect(transport);
+      // Confirmed live: without this, an unexpected death of the underlying
+      // connection (e.g. the spawned `uvx mcp-atlassian` subprocess crashing)
+      // left `this.client` pointing at a connection that would never respond
+      // again — every subsequent callTool() call hung until
+      // CALL_TOOL_TIMEOUT_MS, with no recovery short of restarting the whole
+      // Speako process. Clearing the cache here means the next call
+      // reconnects fresh instead.
+      client.onclose = () => this.clearCachedClient();
       this.client = client;
       return client;
     })();
 
     return this.connecting;
+  }
+
+  private clearCachedClient(): void {
+    this.client = null;
+    this.connecting = null;
   }
 
   async listTools(): Promise<McpTool[]> {
@@ -82,8 +95,7 @@ export class McpServerClient {
   close(): void {
     const pid = this.stdioTransport?.pid ?? null;
     this.client?.close?.();
-    this.client = null;
-    this.connecting = null;
+    this.clearCachedClient();
     this.stdioTransport = null;
 
     // On Windows, child.kill() (used internally by the SDK's transport.close())

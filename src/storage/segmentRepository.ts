@@ -1,5 +1,13 @@
 import { db } from './db';
 import { TranscriptSegment } from '../types';
+import { deleteSummaryAndActionItems } from './summaryRepository';
+import { deleteSentimentScoresForSession } from './sentimentRepository';
+import { deleteChunksForSession } from './corpusRepository';
+import { deleteSuggestionsForSession } from './suggestionRepository';
+import { deleteFactChecksForSession } from './factCheckRepository';
+import { deleteTriggersForSession } from './triggerRepository';
+import { deleteLiveQueriesForSession } from './liveQueryRepository';
+import { deleteMeetingStateForSession } from './meetingStateRepository';
 
 /**
  * A lightweight, storage-owned shape — deliberately not importing
@@ -265,15 +273,14 @@ export function closeOrphanedSessions(): { sessionsClosed: number; segmentsRecov
 export const deleteSession = db.transaction((sessionId: string) => {
   db.prepare('DELETE FROM interim_segments WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM transcript_segments WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM action_items WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM summaries WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM sentiment_scores WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM corpus_chunks WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM suggestions WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM fact_checks WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM triggers WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM live_queries WHERE session_id = ?').run(sessionId);
-  db.prepare('DELETE FROM meeting_state WHERE session_id = ?').run(sessionId);
+  deleteSummaryAndActionItems(sessionId);
+  deleteSentimentScoresForSession(sessionId);
+  deleteChunksForSession(sessionId);
+  deleteSuggestionsForSession(sessionId);
+  deleteFactChecksForSession(sessionId);
+  deleteTriggersForSession(sessionId);
+  deleteLiveQueriesForSession(sessionId);
+  deleteMeetingStateForSession(sessionId);
   db.prepare('DELETE FROM prep_briefs WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM coaching_feedback WHERE session_id = ?').run(sessionId);
   db.prepare('DELETE FROM meeting_chapters WHERE session_id = ?').run(sessionId);

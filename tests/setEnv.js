@@ -26,6 +26,9 @@ for (const key of [
   'RAG_MCP_URL',
   'RAG_MCP_API_KEY',
   'GOOGLE_CALENDAR_CREDENTIALS_PATH',
+  'JENKINS_URL',
+  'JENKINS_USER',
+  'JENKINS_API_TOKEN',
 ]) {
   process.env[key] = '';
 }

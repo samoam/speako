@@ -9,7 +9,7 @@ import { looksCodeRelated } from '../router';
 const SENTIMENT_WINDOW_SIZE = 5;
 
 /**
- * Runs the Phase 3 §4 trigger-detection pipeline for one session: a Gemini-based
+ * Runs the trigger-detection pipeline for one session: a Gemini-based
  * fast filter for factual-claim/decision-point/vagueness, a rolling-average
  * comparison for tone-shift (reuses the sentiment pipeline's scores), and a
  * timer-based check for unanswered questions. Applies confidence thresholds,

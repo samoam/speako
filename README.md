@@ -250,9 +250,9 @@ Beyond commit/file search, Speako can also check **your own pull request activit
 
 Since most work meetings are software-engineering-focused, Design/Dev Discussion prep can also search source code already checked out on this machine — no cloning, no remote service, no credentials. Set `CODEBASE_LOCAL_PATHS` in `.env` to comma-separated `name=path` pairs (e.g. `officercc=C:\Users\me\dev\officercc`), then click **Index codebase** in the sidebar. This chunks and Gemini-embeds each configured repo's source files into a local SQLite table (`code_chunks`), the same pattern already used for past-meeting RAG. Re-indexing replaces a repo's chunks cleanly. The only network calls made are the Gemini embedding calls — source code itself never leaves this machine. Design/dev prep then surfaces matching snippets under `local_codebase`, alongside (not instead of) `myrag_external_refs`, which stays reserved for one-off external references like linked specs.
 
-#### Outlook desktop calendar (fallback for meeting auto-detection)
+#### Outlook calendar (Microsoft 365 connector, fallback for meeting auto-detection)
 
-If Google Calendar isn't configured, Speako falls back to reading upcoming meetings directly from classic desktop Outlook's Calendar folder via the same COM automation used for the email fallback above — no separate setup, and no merging with Google Calendar if both happen to be present (Google wins if configured; this is Outlook-only otherwise). Feeds the same meeting-type auto-detection and "prep this meeting" shortcuts Google Calendar powers. Expect a several-second delay on each call (Outlook COM startup + calendar scan) — this is a real, mostly-fixed cost of the approach, not a bug; see NOTES.md for a Restrict()-based fix that got this down from over a minute to ~9 seconds.
+If Google Calendar isn't configured, Speako falls back to reading upcoming meetings from Outlook via the same Microsoft 365 Claude connector described below — no separate setup, and no merging with Google Calendar if both happen to be present (Google wins if configured; this is Outlook-only otherwise). Feeds the same meeting-type auto-detection and "prep this meeting" shortcuts Google Calendar powers.
 
 #### Calendar view + automatic session creation
 
@@ -260,31 +260,21 @@ Beyond the "prep this meeting" fallback above, Speako can turn your current-week
 
 A background job polls every `CALENDAR_IMPORT_POLL_MINUTES` (default 15, toggle in Settings > Calendar import) and creates a session — with pre-meeting prep already running — for every not-yet-started meeting in the current week that has at least one other attendee and doesn't already have one. Meetings that have already ended, that have no one else attending (personal blocks, focus time, reminders), or that have been canceled (shown dimmed and struck through in the grid) are never auto-imported. A **Sync calendar now** button in Settings and the calendar view triggers an out-of-cadence run.
 
-This reuses the Outlook desktop COM export above, so the same "Object Model Guard" security-prompt caveat applies — but unlike the manual-only email/calendar-lookup paths, this one **is** polled unattended by design (see NOTES.md for the tradeoff this makes and why).
+This reads via the same Microsoft 365 Claude connector as the Outlook mail/Teams sync below, and — unlike some earlier manual-only integrations documented in NOTES.md — is polled unattended by design.
 
 Each imported session auto-starts recording at the meeting's actual start time (no click needed) and auto-stops at its actual end time, both taken directly from the calendar event. To start a session manually instead — for a session that's "ready — not yet started," or any session you created yourself — click the green **Start recording** button on its card in the sidebar.
 
 A session created from a calendar event (auto-imported, or picked manually from the New Session modal's calendar shortcuts) also carries the meeting's actual location, organizer, and attendee list — shown in that session's **Prep Brief** tab above the AI-synthesized brief.
 
-#### Outlook + Teams (Microsoft Graph)
+#### Outlook + Teams (Microsoft 365 connector)
 
-Speako can fetch your recent Outlook emails and Teams 1:1/group chat messages directly, so `email`/`teams` fact-check/Q&A sources have real data without a separate ingestion agent (see `docs/EXTERNAL_INGESTION_PROMPT.md` for that alternative if you don't have Azure AD app-registration access):
+Speako can fetch your recent Outlook emails and Teams 1:1/group/meeting chat messages, so `email`/`teams` fact-check/Q&A sources have real data without a separate ingestion agent (see `docs/EXTERNAL_INGESTION_PROMPT.md` for that alternative). Both ride the `claude` CLI's Microsoft 365 connector (`src/integrations/claudeConnectorCli.ts`) — the same connector already used for calendar reads above.
 
-1. Register an app at [entra.microsoft.com](https://entra.microsoft.com) (App registrations > New registration) — no redirect URI needed.
-2. Under Authentication, enable **Allow public client flows**.
-3. Under API permissions, add the delegated permissions `Mail.Read` and `Chat.Read` (both are user-consentable — no tenant admin approval needed).
-4. Copy the app's **Application (client) ID** into `MS_GRAPH_CLIENT_ID` in `.env` (or Settings). If you registered a **single-tenant** app ("Accounts in this organizational directory only" — the default), also copy the **Directory (tenant) ID** from the same Overview page into `MS_GRAPH_TENANT_ID`; the default `common` only works for multi-tenant registrations and fails device-code sign-in with `AADSTS50059` otherwise (confirmed during setup — the tenant ID implied by your email domain can also differ from where the app is actually registered, so use the Overview page's value, not a guess).
-5. Run `npm run msgraph-auth` once and follow the device-code prompt to sign in.
+Setup is a one-time `claude mcp login` for the Microsoft 365 connector, done outside Speako entirely (not a Speako-specific config step) — no client ID, tenant ID, or token file to manage in `.env`.
 
-Once signed in, Speako polls Outlook/Teams automatically every `MS_GRAPH_POLL_MINUTES` (default 15) and writes raw messages into the same `external_messages` table the manual ingestion path uses — click **Index communications** in Settings afterward (or wait for your next manual click) to chunk/embed what's arrived. A **Sync now** button in Settings triggers an out-of-cadence sync. Teams *channel* messages aren't covered (that permission typically needs tenant-admin consent); only 1:1/group chats are synced.
+Once connected, Speako polls Outlook mail every `EMAIL_SYNC_POLL_MINUTES` (default 15) and Teams every `TEAMS_SYNC_POLL_MINUTES` (default 15), writing raw messages into the same `external_messages` table the manual ingestion path uses — click **Index communications** in Settings afterward (or wait for your next manual click) to chunk/embed what's arrived. A **Sync now** button next to each in Settings triggers an out-of-cadence sync.
 
-**Known account-level failure modes** (not fixable from Speako's side — see NOTES.md): if *both* email (`MailboxNotEnabledForRESTAPI`) and Teams (`401 Unauthorized` on `/me/chats`, even with `Chat.Read` correctly granted) fail at once, check whether you signed in as a **B2B guest** rather than a native member of that tenant — call `GET https://graph.microsoft.com/v1.0/me` with the token and look at `userPrincipalName`; a `#EXT#` in it means guest, and guest identities have no real mailbox or Teams presence in the tenant they're a guest in. The fix is signing in (`npm run msgraph-auth`) with the account's actual home-tenant credentials instead. If only one source fails while the other works, that's a narrower issue: a genuinely hybrid/on-prem-hosted mailbox (Mail API only supports Exchange Online) or a missing Teams license, respectively.
-
-#### Outlook desktop fallback (for mailboxes Graph can't reach)
-
-If Graph's Mail API can't reach your mailbox at all (hybrid/on-premises Exchange, or the guest-account issue above) but you have **classic desktop Outlook** installed and connected to it, Speako can read mail via Outlook's own COM automation object model instead — it rides the desktop client's existing connection, so it doesn't care whether the mailbox is cloud or on-prem. Requires classic Outlook specifically; **"New Outlook"** (the newer PWA-style client) has no COM automation support at all.
-
-No setup beyond having Outlook installed — click **Sync via Outlook desktop** in Settings. The first time in a session, Outlook's "Object Model Guard" will likely show a security prompt ("A program is trying to access e-mail information...") — approve it. This is manual-only, not polled automatically, precisely because of that prompt: an unattended background sync could silently stall waiting for an approval nobody sees. Fetches the Inbox only, going back `OUTLOOK_DESKTOP_LOOKBACK_HOURS` (default 48), and writes into the same `external_messages` table as the other two ingestion paths.
+Replying to email or Teams messages stays a manual, draft-and-copy step (Settings > Dashboard task cards) — the connector can read both but has no send/reply capability for either, by design (write actions require the interactive claude.ai chat UI's own confirmation step, which a headless sync can't satisfy).
 
 ## Troubleshooting
 

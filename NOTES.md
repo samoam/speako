@@ -591,6 +591,14 @@ the value if disconnects are more/less frequent than expected.
 
 ## Native Microsoft Graph ingestion (Outlook + Teams)
 
+> **Superseded.** This whole approach (direct Graph API + MSAL device-code
+> auth, plus the Outlook-desktop-COM and Teams-Playwright fallbacks below)
+> was later replaced by the Microsoft 365 Claude connector — headless
+> `claude` CLI dispatch via `src/integrations/claudeConnectorCli.ts`, used by
+> `outlookMailSync.ts`, `microsoft365Calendar.ts`, and `teamsConnectorSync.ts`.
+> None of the code described in this section or the two that follow it still
+> exists; kept here only as a historical record of what was tried and why.
+
 - **Replaces the need for the external daily-agent** described in
   `docs/EXTERNAL_INGESTION_PROMPT.md` for anyone who can register their own
   Azure AD app — `src/integrations/msGraphSync.ts` fetches directly and
