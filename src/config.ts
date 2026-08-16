@@ -146,6 +146,21 @@ export const config = {
       .filter(Boolean) as ToolKey[];
   },
 
+  /**
+   * Which tools the reply-draft smart-context gatherer (src/drafts/kinds/
+   * replyContextGathering.ts) is allowed to query before drafting a Teams/
+   * email reply — same shape as voiceToolKeys above, since a reply draft has
+   * no session to hang a per-session activeTools list off of (it's keyed to
+   * a Task, not a session). Comma-separated ToolKeys.
+   */
+  get replyDraftToolKeys(): ToolKey[] {
+    const raw = str('replyDraftToolKeys', 'REPLY_DRAFT_TOOL_KEYS', 'jira,confluence,mem0,ragCloud,bitbucket,localCodebase,email,teams,webSearch');
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean) as ToolKey[];
+  },
+
   /** Versioned domain-vocabulary list biasing streaming recognition. See config/phrase-hints.json. */
   phraseHintsPath: process.env.PHRASE_HINTS_PATH || path.join(process.cwd(), 'config', 'phrase-hints.json'),
 
@@ -154,7 +169,7 @@ export const config = {
     return bool('sentimentEnabled', 'SENTIMENT_ENABLED', true);
   },
 
-  /** Live trigger detection (Phase 3) — same automatic-during-recording rationale as sentiment. */
+  /** Live trigger detection — same automatic-during-recording rationale as sentiment. */
   get triggerDetectionEnabled(): boolean {
     return bool('triggerDetectionEnabled', 'TRIGGER_DETECTION_ENABLED', true);
   },
@@ -206,7 +221,7 @@ export const config = {
     return parseBitbucketServerRepos(str('bitbucketServerRepos', 'BITBUCKET_SERVER_REPOS', ''));
   },
 
-  /** Jira (Phase 4 fact-check/Q&A source), queried via the existing `mcp-atlassian` MCP server (spawned locally) rather than direct REST. Feature is skipped if url/token are unset. */
+  /** Jira (fact-check/Q&A source), queried via the existing `mcp-atlassian` MCP server (spawned locally) rather than direct REST. Feature is skipped if url/token are unset. */
   get jiraUrl(): string {
     return str('jiraUrl', 'JIRA_URL', '');
   },
@@ -214,7 +229,7 @@ export const config = {
     return str('jiraPersonalToken', 'JIRA_PERSONAL_TOKEN', '');
   },
 
-  /** Confluence (Phase 4 fact-check/Q&A source), also via `mcp-atlassian`. Feature is skipped if url/username/token are unset. */
+  /** Confluence (fact-check/Q&A source), also via `mcp-atlassian`. Feature is skipped if url/username/token are unset. */
   get confluenceUrl(): string {
     return str('confluenceUrl', 'CONFLUENCE_URL', '');
   },
@@ -252,13 +267,13 @@ export const config = {
   },
 
   /**
-   * Improvements Phase §2: persistent meeting-state layer (rolling summary +
-   * open-items registry), updated incrementally every N finalized segments
-   * rather than per-segment (keeps the extra LLM call from becoming a live
-   * latency bottleneck — same cadence-over-per-event rationale as trigger
-   * detection's cooldown/rate-limit in Phase 3). Runs automatically during
-   * recording, like sentiment/triggers/RAG, since suggestion/fact-check
-   * quality depends on it being current.
+   * Persistent meeting-state layer (rolling summary + open-items registry),
+   * updated incrementally every N finalized segments rather than
+   * per-segment (keeps the extra LLM call from becoming a live latency
+   * bottleneck — same cadence-over-per-event rationale as trigger
+   * detection's cooldown/rate-limit). Runs automatically during recording,
+   * like sentiment/triggers/RAG, since suggestion/fact-check quality
+   * depends on it being current.
    */
   get meetingStateEnabled(): boolean {
     return bool('meetingStateEnabled', 'MEETING_STATE_ENABLED', true);
@@ -305,15 +320,6 @@ export const config = {
   },
 
   /**
-   * Pre-meeting prep (type/subtype-driven context gathering before
-   * recording starts). Master toggle for the whole feature; calendar
-   * detection is a separate, independently-optional sub-feature below.
-   */
-  get prepEnabled(): boolean {
-    return bool('prepEnabled', 'PREP_ENABLED', true);
-  },
-
-  /**
    * Google Calendar (OAuth "installed app" flow — run `npm run gcal-auth`
    * once to produce the token file). Purely additive: without it, work
    * sessions still work via manual meeting-type selection, just without
@@ -344,63 +350,32 @@ export const config = {
   },
 
   /**
-   * Microsoft Graph (Outlook + Teams chats) — native ingestion, replacing the
-   * need for the external daily-agent task described in
-   * docs/EXTERNAL_INGESTION_PROMPT.md (still supported as a fallback for
-   * anyone without Azure AD app-registration access). Auth is a public-client
-   * device-code flow (one-time `npm run msgraph-auth`, see scripts/msgraph-auth.ts)
-   * — no client secret, since a secret can't be safely held by a local desktop
-   * app anyway. Feature is skipped if clientId is unset or the token cache
-   * file doesn't exist yet (auth script hasn't been run).
+   * Outlook mail ingestion — via the `claude` CLI's Microsoft 365 connector
+   * (src/integrations/claudeConnectorCli.ts), authenticated by `claude mcp
+   * login` outside Speako's own process entirely, so there's no client
+   * ID/tenant/token-cache config surface here the way the old direct-Graph
+   * integration needed. Background poll cadence mirrors the scheduled-
+   * session/voice-idle timers' setInterval pattern in server.ts.
    */
-  get msGraphClientId(): string {
-    return str('msGraphClientId', 'MS_GRAPH_CLIENT_ID', '');
-  },
-  /** 'common' allows both work/school and personal accounts to sign in; narrow to a specific tenant GUID if your org requires it. */
-  get msGraphTenantId(): string {
-    return str('msGraphTenantId', 'MS_GRAPH_TENANT_ID', 'common');
-  },
-  get msGraphTokenPath(): string {
-    return str('msGraphTokenPath', 'MS_GRAPH_TOKEN_PATH', path.join(process.cwd(), 'data', 'msgraph-token.json'));
-  },
-  /** Background poll cadence — mirrors the scheduled-session/voice-idle timers' setInterval pattern in server.ts. */
-  get msGraphPollMinutes(): number {
-    return num('msGraphPollMinutes', 'MS_GRAPH_POLL_MINUTES', 15);
+  get emailSyncPollMinutes(): number {
+    return num('emailSyncPollMinutes', 'EMAIL_SYNC_POLL_MINUTES', 15);
   },
   /**
    * How far back each sync run looks, regardless of when the last run
    * happened — deliberate overlap (not "since last sync") so a missed run
-   * (app closed, token expired) can't silently create a gap; re-upserting an
-   * already-seen message is harmless (see externalMessageRepository's
-   * upsertExternalMessage, same ON CONFLICT semantics the external-agent doc
-   * already specifies).
+   * can't silently create a gap; re-upserting an already-seen message is
+   * harmless (see externalMessageRepository's upsertExternalMessage, same ON
+   * CONFLICT semantics the external-agent doc already specifies).
    */
-  get msGraphLookbackHours(): number {
-    return num('msGraphLookbackHours', 'MS_GRAPH_LOOKBACK_HOURS', 48);
-  },
-
-  /**
-   * Classic-Outlook-desktop COM automation fallback (src/integrations/outlookDesktop.ts)
-   * for mailboxes Microsoft Graph's cloud-only Mail API can't reach (hybrid/
-   * on-premises Exchange, or accounts that turn out to be B2B guests rather
-   * than native tenant members — both confirmed real blockers during setup,
-   * see NOTES.md). Windows + classic Outlook only ("New Outlook" has no COM
-   * automation support) — manually triggered only (Settings' "Sync via
-   * Outlook desktop" button), not polled, since Outlook's Object Model Guard
-   * can show an interactive security prompt on first use in a session.
-   */
-  get outlookDesktopLookbackHours(): number {
-    return num('outlookDesktopLookbackHours', 'OUTLOOK_DESKTOP_LOOKBACK_HOURS', 48);
+  get emailSyncLookbackHours(): number {
+    return num('emailSyncLookbackHours', 'EMAIL_SYNC_LOOKBACK_HOURS', 48);
   },
 
   /**
    * Auto-creates a Speako session (with prep already running) for every
    * not-yet-started meeting in the current week's Outlook calendar — see
-   * src/calendar/calendarImport.ts. Unlike outlookDesktopLookbackHours'
-   * mail sync above, this IS polled unattended, so the same Object Model
-   * Guard security-prompt risk noted there applies on first use in a
-   * session; the export script's existing 60s timeout keeps a stuck prompt
-   * from hanging the poll loop forever (see NOTES.md).
+   * src/calendar/calendarImport.ts. Unlike email sync above, this is a
+   * calendar-events read via the same Microsoft 365 connector.
    */
   get calendarImportEnabled(): boolean {
     return bool('calendarImportEnabled', 'CALENDAR_IMPORT_ENABLED', true);
@@ -409,9 +384,77 @@ export const config = {
     return num('calendarImportPollMinutes', 'CALENDAR_IMPORT_POLL_MINUTES', 15);
   },
 
+  /**
+   * Teams chat ingestion — via the same Microsoft 365 Claude connector as
+   * email/calendar (src/integrations/teamsConnectorSync.ts), replacing the
+   * old headless-Chromium DOM scrape (teamsPlaywright.ts, deleted). Same
+   * poll-cadence/lookback-window shape as emailSyncPollMinutes/
+   * emailSyncLookbackHours above.
+   */
+  get teamsSyncPollMinutes(): number {
+    return num('teamsSyncPollMinutes', 'TEAMS_SYNC_POLL_MINUTES', 15);
+  },
+  get teamsSyncLookbackHours(): number {
+    return num('teamsSyncLookbackHours', 'TEAMS_SYNC_LOOKBACK_HOURS', 48);
+  },
+
   /** How often the "My Plate" orchestrator re-syncs Jira/Bitbucket/action-items into the unified tasks board — see src/orchestrator/taskSync.ts. */
   get orchestratorPollMinutes(): number {
     return num('orchestratorPollMinutes', 'ORCHESTRATOR_POLL_MINUTES', 15);
+  },
+
+  /**
+   * The window the automatic Jira/Bitbucket/Teams/Email sync timers are
+   * allowed to fire in (see src/util/businessHours.ts) — a deliberate,
+   * explicitly user-requested restriction, not something these pollers
+   * needed before. Manual "Sync now" routes are unaffected; they call the
+   * same run*Sync() methods directly rather than through the gated timer.
+   */
+  get businessHoursStartHour(): number {
+    return num('businessHoursStartHour', 'BUSINESS_HOURS_START_HOUR', 8);
+  },
+  get businessHoursEndHour(): number {
+    return num('businessHoursEndHour', 'BUSINESS_HOURS_END_HOUR', 18);
+  },
+
+  /**
+   * Jenkins (dev-cycle build/test monitoring, src/integrations/jenkinsClient.ts)
+   * — a thin REST client, not MCP (see that file's header comment for why),
+   * using the same Basic-auth-over-REST shape as bitbucketServerUrl/Username/
+   * Token above. Feature is skipped if url/user/token are unset.
+   */
+  get jenkinsUrl(): string {
+    return str('jenkinsUrl', 'JENKINS_URL', '');
+  },
+  get jenkinsUser(): string {
+    return str('jenkinsUser', 'JENKINS_USER', '');
+  },
+  get jenkinsApiToken(): string {
+    return str('jenkinsApiToken', 'JENKINS_API_TOKEN', '');
+  },
+  /**
+   * Maps a codebase name (matching codebaseLocalPaths' name) to the Jenkins
+   * folder path holding that repo's multibranch pipeline job, e.g.
+   * "officercc=Team/officercc-multibranch". Comma-separated "name=folderPath"
+   * pairs, same parse shape as parseCodebaseLocalPaths above.
+   */
+  get jenkinsJobFolders(): { name: string; folderPath: string }[] {
+    return parseCodebaseLocalPaths(str('jenkinsJobFolders', 'JENKINS_JOB_FOLDERS', '')).map((p) => ({ name: p.name, folderPath: p.path }));
+  },
+  get jenkinsPollMinutes(): number {
+    return num('jenkinsPollMinutes', 'JENKINS_POLL_MINUTES', 10);
+  },
+
+  /** Trunk branch every ticket branch is cut from and merged back into (src/dev/ — trunk-based, short-lived branches). */
+  get devTrunkBranch(): string {
+    return str('devTrunkBranch', 'DEV_TRUNK_BRANCH', 'main');
+  },
+  /** Pre-PR self-review checklist thresholds (src/dev/prePrChecks.ts) — above either, the PR-size check warns and suggests a split. */
+  get prePrMaxChangedFiles(): number {
+    return num('prePrMaxChangedFiles', 'PRE_PR_MAX_CHANGED_FILES', 20);
+  },
+  get prePrMaxChangedLines(): number {
+    return num('prePrMaxChangedLines', 'PRE_PR_MAX_CHANGED_LINES', 400);
   },
 };
 

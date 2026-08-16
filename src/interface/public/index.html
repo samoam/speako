@@ -38,47 +38,79 @@
     #settingsBtn:hover, #voiceChatBtn:hover, #insightsBtn:hover, #calendarBtn:hover, #logsBtn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
     #sidebarPrimaryRow { display: flex; gap: 0.5rem; }
     #sidebarPrimaryRow .primary-btn { width: auto; flex: 1; min-width: 0; }
-    #plateBtn { background: #232327; border: 1px solid var(--border); color: var(--muted); cursor: pointer; border-radius: 6px; padding: 0.55rem; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    #plateBtn:hover { color: var(--text); background: #2a2a2f; }
+    #sessionsBtn { position: relative; background: #232327; border: 1px solid var(--border); color: var(--muted); cursor: pointer; border-radius: 6px; padding: 0.55rem; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    #sessionsBtn:hover { color: var(--text); background: #2a2a2f; }
+    #sessionsBtn.active { color: var(--text); background: #2a2a2f; border-color: var(--accent, #7aa2ff); }
     #voiceChatBtn.active { color: var(--rec); animation: pulse 1.4s infinite; }
 
-    /* ---------- Voice panel (chat/practice) ---------- */
-    #voicePanel {
-      position: fixed; bottom: 1.25rem; right: 1.25rem; width: 320px; background: var(--panel);
-      border: 1px solid var(--border); border-radius: 10px; padding: 1rem; z-index: 200;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    /* ---------- Sidebar task queue (compact, always-visible) ---------- */
+    #sidebarQueueHeader { display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    #sidebarQueueHeader #reviewQueueBtn { font-size: 0.72rem; padding: 0.2rem 0.5rem; text-transform: none; letter-spacing: normal; }
+    #sidebarQueueEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem; color: var(--muted); padding: 2rem 1rem; text-align: center; flex: 1; }
+    #sidebarQueueEmptyState[hidden] { display: none; }
+    #sidebarQueueList { flex: 1; overflow-y: auto; padding: 0.3rem 0.7rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    /* Narrow-column layout for .plate-task cards inside the sidebar — the
+       wide Dashboard board lays source badge/priority chip/dismiss and the
+       title+meta+action-buttons body out in one row; ~300px has no room for
+       that, so the body wraps onto its own full-width line underneath
+       instead (badge/priority/dismiss stay a compact header row above it). */
+    #sidebarQueueList .plate-task { flex-wrap: wrap; }
+    #sidebarQueueList .plate-task-body { flex-basis: 100%; }
+    #sidebarQueueList .cc-cell { flex-wrap: wrap; }
+
+    /* ---------- Chat text row (live chat/practice "type instead of talking") ---------- */
+    #chatTextRow { display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem; border-top: 1px solid var(--border); }
+    #chatTextRow[hidden] { display: none; }
+    #chatTextInput {
+      flex: 1; min-width: 0; padding: 0.55rem 0.7rem; border-radius: 6px; border: 1px solid var(--border);
+      background: #1f1f23; color: var(--text);
     }
-    #voicePanel[hidden] { display: none; }
-    #voicePanelTitle { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
-    #voicePanelTitle .voice-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); animation: pulse 1.4s infinite; }
-    #voicePanelStatus { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; min-height: 1.2em; }
-    #voicePanelLog { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
-    #voicePanelLog:empty { display: none; }
-    .voice-log-entry { font-size: 0.8rem; line-height: 1.35; padding: 0.45rem 0.65rem; border-radius: 10px; max-width: 88%; word-wrap: break-word; }
-    .voice-log-entry.you { align-self: flex-end; background: var(--accent-dim); border-bottom-right-radius: 3px; }
-    .voice-log-entry.assistant { align-self: flex-start; background: #232327; border: 1px solid var(--border); border-bottom-left-radius: 3px; }
-    #voicePanelTextRow { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
-    #voicePanelTextInput {
-      flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
-      background: #1f1f23; color: var(--text); font-size: 0.82rem;
+    #chatTextInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    #chatTextSendBtn {
+      padding: 0.55rem 1.1rem; border-radius: 6px; border: 1px solid var(--accent-dim); background: var(--accent-dim);
+      color: var(--text); cursor: pointer; font-weight: 500; white-space: nowrap;
     }
-    #voicePanelTextInput:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-    #voicePanelTextInput:disabled { opacity: 0.5; }
-    #voicePanelSendBtn {
-      padding: 0.45rem 0.8rem; border-radius: 6px; border: 1px solid var(--accent-dim); background: var(--accent-dim);
-      color: var(--text); cursor: pointer; font-size: 0.82rem; font-weight: 500;
-    }
-    #voicePanelSendBtn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
-    #voicePanelSendBtn:disabled { opacity: 0.4; cursor: default; }
-    #voicePanelStopBtn { width: 100%; }
+    #chatTextSendBtn:hover { background: var(--accent); border-color: var(--accent); }
+    #chatMuteBtn.muted { color: var(--rec); background: rgba(240,104,104,0.12); }
 
     /* ---------- Modals (settings, new session, session tools) ---------- */
-    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay, #plateOverlay {
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay, #reviewQueueOverlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
     }
-    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden], #plateOverlay[hidden] { display: none; }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden], #reviewQueueOverlay[hidden] { display: none; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-    #settingsModal, #insightsModal, #extActionModal, #plateModal { width: 640px; }
+    #settingsModal, #insightsModal, #extActionModal { width: 640px; }
+
+    /* ---------- Draft view (a full main-frame panel, like Dashboard/Sessions/PR Review — actions are a tool, not a modal) ---------- */
+    #draftView { flex: 1; flex-direction: column; height: 100vh; min-width: 0; display: none; }
+    #draftModal { flex: 1; display: flex; flex-direction: column; min-height: 0; border: none; border-radius: 0; max-width: none; max-height: none; background: var(--panel); }
+    #draftModal .modal-body { flex: 1; }
+
+    /* ---------- Draft Panel (generic draft -> refine -> approve -> redo gate, src/drafts/) ---------- */
+    #draftStatus { padding: 0.6rem 1.25rem 0; font-size: 0.82rem; color: var(--muted); }
+    #draftStatus.draft-status-failed { color: #e08a8a; }
+    #draftContentBody textarea { width: 100%; min-height: 100px; resize: vertical; font: inherit; font-size: 0.88rem; line-height: 1.5; background: #17171a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.7rem; }
+    .draft-context { margin-bottom: 0.9rem; padding: 0.7rem 0.8rem; border-radius: 6px; background: #1a1a1d; border: 1px solid var(--border); }
+    .draft-context-header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+    .draft-context-meta { font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+    .draft-context-body { margin: 0.4rem 0 0; font-size: 0.85rem; line-height: 1.5; color: var(--muted); white-space: pre-wrap; }
+    #draftHistory { margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.6rem; }
+    #draftHistory summary { cursor: pointer; font-size: 0.78rem; color: var(--muted); user-select: none; }
+    #draftHistoryList { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.6rem; }
+    .draft-revision { font-size: 0.82rem; padding: 0.45rem 0.6rem; border-radius: 6px; background: #1f1f23; border: 1px solid var(--border); }
+    .draft-revision-role-user { border-left: 3px solid var(--accent-dim); }
+    .draft-revision-role-assistant { border-left: 3px solid var(--muted); }
+    .draft-revision-kind-question { border-left-color: var(--accent); background: rgba(122,162,255,0.08); }
+    .draft-revision-kind { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 0.15rem; }
+    #draftChatRow { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+    #draftInstruction { flex: 1; font: inherit; font-size: 0.85rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid var(--border); background: #1f1f23; color: var(--text); }
+    #draftInstruction:disabled { opacity: 0.6; }
+    #draftError { padding: 0 1.25rem; color: #e08a8a; font-size: 0.82rem; }
+    #draftError[hidden] { display: none; }
+    #draftRedoNote { margin: 0 1.25rem 0.5rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: rgba(122,162,255,0.1); border: 1px solid var(--accent-dim); font-size: 0.8rem; color: var(--text); }
+    #draftRedoNote[hidden] { display: none; }
+    .draft-gate-label { font-size: 0.78rem; color: var(--muted); margin-right: auto; align-self: center; }
+    #draftModal .modal-footer { flex-wrap: wrap; }
     #calendarModal, #logsModal { width: min(1100px, 92vw); }
     #newSessionModal, #sessionToolsPopover { width: 420px; }
     .modal-header, #settingsModalHeader {
@@ -168,20 +200,92 @@
     #logsEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
     #logsEmptyState[hidden] { display: none; }
 
-    /* ---------- My Plate ---------- */
-    #plateModal .modal-body { min-height: 320px; max-height: 70vh; overflow: auto; }
-    #plateHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
+    /* ---------- Dashboard (formerly "My Plate") ---------- */
+    #dashboardView { flex: 1; flex-direction: column; height: 100vh; min-width: 0; display: none; }
+    #dashboardHeader { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+    #dashboardHeader h2 { margin: 0; }
+    #dashboardHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
     #plateSyncStatus { font-size: 0.78rem; color: var(--muted); }
-    #plateList { display: flex; flex-direction: column; gap: 0.5rem; }
-    .plate-task { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.6rem 0.8rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; }
+    #dashboardTabs { display: flex; gap: 0.3rem; padding: 0.6rem 1.25rem; border-bottom: 1px solid var(--border); }
+    .dash-tab-btn { position: relative; background: none; border: 1px solid transparent; color: var(--muted); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .dash-tab-btn:hover { color: var(--text); }
+    .dash-tab-btn.active { color: var(--text); background: #232327; border-color: var(--border); }
+    .dash-tab-badge { position: absolute; top: -2px; right: -2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--rec); color: #fff; font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; line-height: 1; }
+    #dashboardBoard { flex: 1; display: flex; gap: 1rem; padding: 1rem 1.25rem; overflow: auto; align-items: flex-start; }
+    .dash-column { flex: 1; min-width: 260px; background: #1a1a1d; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; max-height: 100%; }
+    .dash-column-flat { max-width: 640px; margin: 0 auto; }
+    .dash-column h3 { margin: 0; padding: 0.7rem 0.8rem 0.4rem; font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .dash-column-list { flex: 1; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.3rem 0.6rem 0.7rem; overflow-y: auto; min-height: 60px; }
+    .plate-task { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.6rem 0.8rem; background: #232327; border: 1px solid var(--border); border-radius: 8px; cursor: grab; }
     .plate-task-source { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(255,255,255,0.08); color: var(--muted); }
     .plate-task-body { flex: 1; min-width: 0; }
     .plate-task-title { font-size: 0.88rem; }
     .plate-task-title a { color: var(--text); }
     .plate-task-meta { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
+    .plate-task-priority { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; align-self: flex-start; }
+    .plate-task-priority-high { background: rgba(220,80,80,0.18); color: #e08a8a; }
+    .plate-task-priority-med { background: rgba(220,180,60,0.18); color: #d8c07a; }
+    .plate-task-priority-low { background: rgba(255,255,255,0.08); color: var(--muted); }
+    .plate-task-draft-toggle { margin-top: 0.35rem; background: none; border: none; color: var(--accent, #7aa2ff); font-size: 0.76rem; cursor: pointer; padding: 0; }
+    .plate-task-draft { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.35rem; }
+    .plate-task-draft textarea { width: 100%; resize: vertical; font-size: 0.8rem; background: #17171a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem; }
+    .plate-task-draft-actions { display: flex; gap: 0.4rem; }
     .plate-task-dismiss { flex-shrink: 0; }
-    #plateEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
-    #plateEmptyState[hidden] { display: none; }
+    .plate-review-btn, .plate-prep-btn { margin-top: 0.35rem; }
+    #dashboardEmptyState { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; color: var(--muted); padding: 2.5rem 1rem; text-align: center; flex: 1; }
+    #dashboardEmptyState[hidden] { display: none; }
+    #morningBriefingBanner { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0 1rem 0.6rem; padding: 0.55rem 0.7rem; background: #1a1a1d; border: 1px solid var(--border); border-radius: 8px; font-size: 0.8rem; }
+    #morningBriefingBanner[hidden] { display: none; }
+    #morningBriefingText { flex: 1; }
+    #reviewQueueModal { max-width: 560px; }
+    .review-queue-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+    .review-queue-row:last-child { border-bottom: none; }
+    /* ---------- Sessions view (a full main-frame panel, like Dashboard/PR Review — sessions are a tool, not the sidebar's organizing list) ---------- */
+    #sessionsView { flex: 1; flex-direction: column; height: 100vh; min-width: 0; display: none; }
+    #sessionsViewHeader { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+    #sessionsViewHeader h2 { margin: 0; }
+    #sessionsView #sessionKindTabs { padding: 0.6rem 1.25rem; border-bottom: 1px solid var(--border); }
+    /* A responsive grid now that sessions have the full main-frame width to work with, instead of the old single-column sidebar list. */
+    #sessionsView #sessionList { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; align-content: start; }
+    #sessionsView .session-card { border: 1px solid var(--border); background: #1a1a1d; }
+
+    /* ---------- PR Review window ---------- */
+    #prReviewView { flex: 1; flex-direction: column; height: 100vh; min-width: 0; display: none; overflow-y: auto; }
+    #prReviewHeader { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    #prReviewHeader h2 { margin: 0 0 0.2rem; }
+    #prReviewMeta { font-size: 0.82rem; color: var(--muted); }
+    #prReviewBody { padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; max-width: 900px; }
+    .pr-review-section h3 { margin: 0 0 0.5rem; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+    .pr-review-context-item { padding: 0.6rem 0.8rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; }
+    #prReviewStatus { font-size: 0.9rem; }
+    #prReviewLog { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #17171a; border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; max-height: 220px; overflow-y: auto; }
+    .pr-review-log-line { color: var(--muted); }
+    .pr-review-log-line:last-child { color: var(--text); }
+    #prReviewSummaryRow { display: flex; align-items: flex-start; gap: 0.6rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    #prReviewSummary { flex: 1; font-size: 0.9rem; line-height: 1.5; }
+    #prReviewRecommendation { flex-shrink: 0; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 0.2rem 0.55rem; border-radius: 4px; }
+    #prReviewRecommendation.rec-approve { background: rgba(90,200,120,0.18); color: #7fd99a; }
+    #prReviewRecommendation.rec-request_changes { background: rgba(220,80,80,0.18); color: #e08a8a; }
+    #prReviewRecommendation.rec-comment { background: rgba(255,255,255,0.08); color: var(--muted); }
+    #prReviewFindings { display: flex; flex-direction: column; gap: 0.5rem; }
+    .pr-finding { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.6rem 0.8rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; }
+    .pr-finding-severity { flex-shrink: 0; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; padding: 0.15rem 0.45rem; border-radius: 4px; min-width: 4.5em; text-align: center; }
+    .pr-finding-severity-blocker { background: rgba(220,80,80,0.22); color: #f0a3a3; }
+    .pr-finding-severity-major { background: rgba(230,150,60,0.2); color: #f0bd7f; }
+    .pr-finding-severity-minor { background: rgba(220,180,60,0.18); color: #d8c07a; }
+    .pr-finding-severity-nit { background: rgba(255,255,255,0.08); color: var(--muted); }
+    .pr-finding-body { flex: 0 1 240px; min-width: 140px; display: flex; flex-direction: column; gap: 0.25rem; }
+    .pr-finding-severity { display: inline-block; }
+    .pr-finding-location { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; color: var(--muted); overflow-wrap: break-word; }
+    .pr-finding-comment { flex: 1; min-width: 0; font-size: 0.86rem; line-height: 1.45; }
+    #prReviewCopyBtn { align-self: flex-start; margin-top: 1rem; }
+    #prReviewCommentDrafts { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+    .pr-comment-draft { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; }
+    .pr-comment-draft-status { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--muted); min-width: 5.5em; }
+    .pr-comment-draft-preview { flex: 1; min-width: 0; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pr-check-warn { color: #d8c07a; }
+    .pr-check-fail { color: #e08a8a; }
+    .pr-check-muted { color: var(--muted); }
     #calendarEmptyState .icon { width: 28px; height: 28px; opacity: 0.6; }
     #calendarEmptyState p { margin: 0; font-size: 0.85rem; max-width: 360px; }
     #calendarGrid { display: grid; grid-template-columns: 56px repeat(7, minmax(110px, 1fr)); }
@@ -320,10 +424,6 @@
     #stopBtn { border-color: var(--rec); }
     #newSessionCreateActions { display: flex; gap: 0.5rem; }
 
-    #sessionListHeader {
-      padding: 0.75rem 1rem 0.4rem; font-size: 0.72rem; text-transform: uppercase;
-      letter-spacing: 0.05em; color: var(--muted);
-    }
     #sessionKindTabs { display: flex; gap: 0.2rem; padding: 0 0.75rem 0.5rem; }
     .kind-tab-btn {
       padding: 0.3rem 0.65rem; border: none; background: none; color: var(--muted); cursor: pointer;
@@ -359,12 +459,12 @@
     .session-delete .icon { width: 0.95em; height: 0.95em; }
     .session-card:hover .session-delete { opacity: 1; }
     .session-delete:hover { color: var(--rec); background: #2a1f21; }
-    .session-start-recording {
+    .session-start-recording, .session-resume-chat {
       margin: 0.4rem 0 0 0.65rem; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid var(--ok);
       background: #1a2620; color: var(--ok); cursor: pointer; font-size: 0.76rem;
       display: inline-flex; align-items: center; gap: 0.3rem;
     }
-    .session-start-recording .icon { width: 0.85em; height: 0.85em; }
+    .session-start-recording .icon, .session-resume-chat .icon { width: 0.85em; height: 0.85em; }
     .session-resume-recording { border-color: var(--muted); background: #26241a; color: var(--muted); }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
     .empty-list { color: var(--muted); font-size: 0.85rem; padding: 0.5rem 0.6rem; }
@@ -450,9 +550,9 @@
 
     #summaryWrap, #actionItemsWrap, #overviewWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
-    #codebaseIndexBox, #communicationsIndexBox, #msGraphSyncBox, #outlookDesktopSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
-    #codebaseIndexBox button, #communicationsIndexBox button, #msGraphSyncBox button, #outlookDesktopSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
-    #codebaseIndexStatus, #communicationsIndexStatus, #msGraphSyncStatus, #outlookDesktopSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #codebaseIndexBox, #communicationsIndexBox, #emailSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+    #codebaseIndexBox button, #communicationsIndexBox button, #emailSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
+    #codebaseIndexStatus, #communicationsIndexStatus, #emailSyncStatus, #teamsSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     #workPrepBox { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.3rem; }
     #meetingOnlyFields { display: flex; flex-direction: column; gap: 0.5rem; }
     #meetingOnlyFields[hidden] { display: none; }
@@ -540,6 +640,15 @@
       padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.85rem;
     }
     #transcriptionErrorBanner[hidden] { display: none; }
+    /* Live chat/practice — fast bubble-accumulation view shown instead of the
+       segment-based transcript while the voice session is actually live (see
+       liveVoiceSessionId); once it ends, the real persisted transcript takes
+       over via the normal renderFullTranscript() path. */
+    #liveChatLog { display: flex; flex-direction: column; gap: 0.5rem; }
+    #liveChatLog[hidden] { display: none; }
+    .voice-log-entry { font-size: 0.88rem; line-height: 1.4; padding: 0.5rem 0.75rem; border-radius: 10px; max-width: 75%; word-wrap: break-word; }
+    .voice-log-entry.you { align-self: flex-end; background: var(--accent-dim); border-bottom-right-radius: 3px; }
+    .voice-log-entry.assistant { align-self: flex-start; background: #232327; border: 1px solid var(--border); border-bottom-left-radius: 3px; }
     #chaptersList { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
     #chaptersList[hidden] { display: none; }
     .chapter-chip { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); cursor: pointer; text-align: left; font: inherit; }
@@ -753,6 +862,7 @@
   <svg style="display:none">
     <defs>
       <symbol id="icon-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v4"/><path d="M8 22h8"/></symbol>
+      <symbol id="icon-mic-off" viewBox="0 0 24 24"><path d="M9 5a3 3 0 0 1 6 0v6c0 .3-.02.58-.06.86"/><path d="M15 12.5V11"/><path d="M9 9v2a3 3 0 0 0 4.24 2.74"/><path d="M19 11a7 7 0 0 1-9.8 6.4"/><path d="M5 5l14 14"/><path d="M12 18v4"/><path d="M8 22h8"/></symbol>
       <!-- Speako's mark: a conversation (chat bubble) with its voice actually being heard (the waveform inside) — meetings, captured and understood. -->
       <symbol id="icon-logo" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8v4"/><path d="M12 6v8"/><path d="M16 8v4"/></symbol>
       <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M10.3 2.4a1.9 1.9 0 0 1 3.4 0l.4.9a1.9 1.9 0 0 0 2.2 1l.9-.3a1.9 1.9 0 0 1 2.4 2.4l-.3.9a1.9 1.9 0 0 0 1 2.2l.9.4a1.9 1.9 0 0 1 0 3.4l-.9.4a1.9 1.9 0 0 0-1 2.2l.3.9a1.9 1.9 0 0 1-2.4 2.4l-.9-.3a1.9 1.9 0 0 0-2.2 1l-.4.9a1.9 1.9 0 0 1-3.4 0l-.4-.9a1.9 1.9 0 0 0-2.2-1l-.9.3a1.9 1.9 0 0 1-2.4-2.4l.3-.9a1.9 1.9 0 0 0-1-2.2l-.9-.4a1.9 1.9 0 0 1 0-3.4l.9-.4a1.9 1.9 0 0 0 1-2.2l-.3-.9a1.9 1.9 0 0 1 2.4-2.4l.9.3a1.9 1.9 0 0 0 2.2-1l.4-.9Z"/><circle cx="12" cy="12" r="3"/></symbol>
@@ -771,6 +881,7 @@
       <symbol id="icon-insights" viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/></symbol>
       <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></symbol>
       <symbol id="icon-plate" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 2v3"/><path d="M15 2v3"/><path d="M8 10l2 2 4-4"/><path d="M8 16h8"/></symbol>
+      <symbol id="icon-sessions" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/><circle cx="19" cy="18" r="2"/></symbol>
     </defs>
   </svg>
 
@@ -787,18 +898,23 @@
       </h1>
       <div id="sidebarPrimaryRow">
         <button id="newSessionOpenBtn" class="primary-btn">+ New session</button>
-        <button id="plateBtn" title="My Plate"><svg class="icon"><use href="#icon-plate"></use></svg></button>
+        <button id="sessionsBtn" title="Sessions"><svg class="icon"><use href="#icon-sessions"></use></svg></button>
       </div>
       <button id="stopBtn" class="primary-btn" hidden><svg class="icon icon-filled"><use href="#icon-square-fill"></use></svg> Stop recording</button>
     </div>
-    <div id="sessionListHeader">Sessions</div>
-    <div id="sessionKindTabs">
-      <button class="kind-tab-btn active" data-kind="meeting">Meetings</button>
-      <button class="kind-tab-btn" data-kind="practice">Practice</button>
-      <button class="kind-tab-btn" data-kind="chat">Chat</button>
-      <button class="kind-tab-btn" data-kind="audioOverview">Audio Overview</button>
+    <div id="sidebarQueueHeader">
+      <span>Today's queue</span>
+      <button id="reviewQueueBtn" class="tool-btn" type="button">Review queue</button>
     </div>
-    <div id="sessionList"></div>
+    <div id="morningBriefingBanner" hidden>
+      <span id="morningBriefingText"></span>
+      <button id="morningBriefingDismiss" class="icon-btn" title="Dismiss"><svg class="icon"><use href="#icon-x"></use></svg></button>
+    </div>
+    <div id="sidebarQueueEmptyState" hidden>
+      <svg class="icon"><use href="#icon-plate"></use></svg>
+      <p>Nothing here yet.</p>
+    </div>
+    <div id="sidebarQueueList"></div>
   </div>
 
   <div id="main">
@@ -809,6 +925,7 @@
       </div>
       <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
       <div id="mainHeaderActions">
+        <button id="backToBoardBtn" class="icon-btn" title="Back to board"><svg class="icon"><use href="#icon-plate"></use></svg></button>
         <div id="recordingControls">
           <button id="mainStartBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording</button>
           <button id="mainPauseBtn" class="tool-btn" hidden><svg class="icon icon-filled"><use href="#icon-pause-fill"></use></svg> Pause</button>
@@ -850,6 +967,7 @@
         <div id="chaptersList" hidden></div>
         <div id="emptyState">Nothing here yet.</div>
         <div id="transcript"></div>
+        <div id="liveChatLog" hidden></div>
       </div>
       <div id="panelResizer"></div>
       <div id="suggestionsPanel">
@@ -858,6 +976,11 @@
         <div id="triggersPanelHeader">Triggers</div>
         <div id="triggersContent"></div>
       </div>
+    </div>
+    <div id="chatTextRow" hidden>
+      <button id="chatMuteBtn" class="icon-btn" title="Mute (text-only)"><svg class="icon"><use href="#icon-mic"></use></svg></button>
+      <input id="chatTextInput" placeholder="Type instead of talking…" />
+      <button id="chatTextSendBtn">Send</button>
     </div>
     <div id="summaryWrap">
       <div id="summaryAudioOverview" hidden></div>
@@ -1019,17 +1142,6 @@
     </div>
   </div>
 
-  <div id="voicePanel" hidden>
-    <div id="voicePanelTitle"><span class="voice-dot"></span><span id="voicePanelTitleText">Voice chat</span></div>
-    <div id="voicePanelStatus">Connecting…</div>
-    <div id="voicePanelLog"></div>
-    <div id="voicePanelTextRow">
-      <input id="voicePanelTextInput" placeholder="Type instead of talking…" disabled />
-      <button id="voicePanelSendBtn" disabled>Send</button>
-    </div>
-    <button id="voicePanelStopBtn" class="tool-btn">Stop</button>
-  </div>
-
   <div id="sessionToolsOverlay" hidden>
     <div id="sessionToolsPopover" class="modal">
       <div class="modal-header">
@@ -1090,6 +1202,24 @@
           </div>
         </fieldset>
         <fieldset>
+          <legend>Jenkins</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>URL</label><input type="text" data-key="jenkinsUrl" /></div>
+            <div class="settings-field"><label>Username</label><input type="text" data-key="jenkinsUser" /></div>
+            <div class="settings-field"><label>API token</label><input type="password" data-key="jenkinsApiToken" /></div>
+            <div class="settings-field"><label>Job folders (codebase=folder/job/path, comma-separated)</label><input type="text" data-key="jenkinsJobFolders" /></div>
+            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="jenkinsPollMinutes" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Dev cycle</legend>
+          <div class="settings-grid">
+            <div class="settings-field"><label>Trunk branch</label><input type="text" data-key="devTrunkBranch" /></div>
+            <div class="settings-field"><label>Pre-PR max changed files</label><input type="number" data-key="prePrMaxChangedFiles" /></div>
+            <div class="settings-field"><label>Pre-PR max changed lines</label><input type="number" data-key="prePrMaxChangedLines" /></div>
+          </div>
+        </fieldset>
+        <fieldset>
           <legend>mem0-cloud</legend>
           <div class="settings-grid">
             <div class="settings-field"><label>URL</label><input type="text" data-key="mem0McpUrl" /></div>
@@ -1125,45 +1255,40 @@
           <div class="tools-checklist" id="voiceToolsChecklist"></div>
         </fieldset>
         <fieldset>
-          <legend>Microsoft Graph (Outlook / Teams)</legend>
-          <p class="tools-hint">One-time setup: register an Azure AD app, set the client ID below, then run <code>npm run msgraph-auth</code> to sign in (see NOTES.md). Once signed in, Speako fetches recent emails and Teams chat messages automatically in the background.</p>
+          <legend>Outlook email (Microsoft 365 connector)</legend>
+          <p class="tools-hint">Reads recent Outlook mail via the Microsoft 365 connector already configured for the <code>claude</code> CLI (<code>claude mcp login</code>, done once outside Speako). No client ID or token setup needed here — Speako fetches recent emails automatically in the background.</p>
           <div class="settings-grid">
-            <div class="settings-field"><label>Client ID</label><input type="text" data-key="msGraphClientId" /></div>
-            <div class="settings-field"><label>Tenant ID</label><input type="text" data-key="msGraphTenantId" /></div>
-            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="msGraphPollMinutes" /></div>
-            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="msGraphLookbackHours" /></div>
+            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="emailSyncPollMinutes" /></div>
+            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="emailSyncLookbackHours" /></div>
           </div>
-          <div class="settings-field" id="msGraphSyncBox">
-            <button id="syncMsGraphBtn" class="tool-btn" type="button">Sync now</button>
-            <span id="msGraphSyncStatus"></span>
+          <div class="settings-field" id="emailSyncBox">
+            <button id="syncEmailBtn" class="tool-btn" type="button">Sync now</button>
+            <span id="emailSyncStatus"></span>
           </div>
         </fieldset>
         <fieldset>
-          <legend>Outlook desktop (fallback)</legend>
-          <p class="tools-hint">For mailboxes Microsoft Graph can't reach (hybrid/on-premises Exchange, or accounts that turn out to be B2B guests) — reads mail via classic desktop Outlook's own connection instead. Requires classic Outlook (not "New Outlook") on Windows. Manual only, not polled: Outlook may show a one-time security prompt to approve when you click Sync.</p>
+          <legend>Teams (Microsoft 365 connector)</legend>
+          <p class="tools-hint">Reads recent Teams chat messages via the same Microsoft 365 connector as email above — no separate setup needed. Checked automatically in the background (see status below) as well as on demand — new messages get triaged and prioritized onto the Dashboard's Teams tab, with a drafted reply for anything directed at you. Replying still happens by hand (copy the drafted text into Teams yourself) — the connector can read Teams chats but can't send to them.</p>
           <div class="settings-grid">
-            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="outlookDesktopLookbackHours" /></div>
+            <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="teamsSyncPollMinutes" /></div>
+            <div class="settings-field"><label>Lookback window (hours)</label><input type="number" data-key="teamsSyncLookbackHours" /></div>
           </div>
-          <div class="settings-field" id="outlookDesktopSyncBox">
-            <button id="syncOutlookDesktopBtn" class="tool-btn" type="button">Sync via Outlook desktop</button>
-            <span id="outlookDesktopSyncStatus"></span>
+          <div class="settings-field" id="teamsSyncBox">
+            <button id="syncTeamsBtn" class="tool-btn" type="button">Sync now</button>
+            <span id="teamsSyncStatus"></span>
           </div>
         </fieldset>
         <fieldset>
           <legend>Calendar import</legend>
-          <p class="tools-hint">Auto-creates a Speako session (with prep already running) for every upcoming meeting in your current Outlook calendar week — see the calendar view (icon in the header). Unlike the Outlook desktop sync above, this one <em>is</em> polled unattended; Outlook may still show a one-time security prompt the first time it runs in a session.</p>
+          <p class="tools-hint">Auto-creates a Speako session (with prep already running) for every upcoming meeting in your current Outlook calendar week — see the calendar view (icon in the header), which has its own "Sync now" button. Reads via the same Microsoft 365 connector as email sync above.</p>
           <div class="settings-grid">
             <div class="settings-field checkbox-field"><input type="checkbox" id="setting-calendarImportEnabled" data-key="calendarImportEnabled" /><label for="setting-calendarImportEnabled">Auto-create sessions from calendar</label></div>
             <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="calendarImportPollMinutes" /></div>
           </div>
-          <div class="settings-field" id="calendarImportSyncBox">
-            <button id="syncCalendarImportBtn" class="tool-btn" type="button">Sync calendar now</button>
-            <span id="calendarImportSyncStatus"></span>
-          </div>
         </fieldset>
         <fieldset>
           <legend>Communications indexing</legend>
-          <p class="tools-hint">Chunks + embeds whatever's arrived in external_messages since the last run — from the Microsoft Graph sync above, or a separate daily ingestion task (see docs/EXTERNAL_INGESTION_PROMPT.md) for sources without native support.</p>
+          <p class="tools-hint">Chunks + embeds whatever's arrived in external_messages since the last run — from the email/Teams connector syncs above, or a separate daily ingestion task (see docs/EXTERNAL_INGESTION_PROMPT.md) for sources without native support.</p>
           <div class="settings-field" id="communicationsIndexBox">
             <button id="indexCommunicationsBtn" class="tool-btn" type="button">Index communications</button>
             <span id="communicationsIndexStatus"></span>
@@ -1172,7 +1297,6 @@
         <fieldset>
           <legend>Feature toggles</legend>
           <div class="settings-grid">
-            <div class="settings-field checkbox-field"><input type="checkbox" id="setting-prepEnabled" data-key="prepEnabled" /><label for="setting-prepEnabled">Pre-meeting prep</label></div>
             <div class="settings-field checkbox-field"><input type="checkbox" id="setting-sentimentEnabled" data-key="sentimentEnabled" /><label for="setting-sentimentEnabled">Sentiment analysis</label></div>
             <div class="settings-field checkbox-field"><input type="checkbox" id="setting-triggerDetectionEnabled" data-key="triggerDetectionEnabled" /><label for="setting-triggerDetectionEnabled">Trigger detection</label></div>
             <div class="settings-field checkbox-field"><input type="checkbox" id="setting-ragEnabled" data-key="ragEnabled" /><label for="setting-ragEnabled">Past-meeting RAG</label></div>
@@ -1277,22 +1401,89 @@
     </div>
   </div>
 
-  <div id="plateOverlay" hidden>
-    <div id="plateModal" class="modal">
+  <div id="reviewQueueOverlay" hidden>
+    <div id="reviewQueueModal" class="modal">
       <div class="modal-header">
-        <h2>My Plate</h2>
-        <div id="plateHeaderActions">
-          <span id="plateSyncStatus"></span>
-          <button id="plateSyncBtn" class="tool-btn" type="button">Sync now</button>
-          <button id="plateModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+        <h2>Review queue</h2>
+        <button id="reviewQueueModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+      </div>
+      <div class="modal-body">
+        <p class="tools-hint">Everything Speako has drafted that's still waiting on your review — approve, edit, or discard each before it carries over.</p>
+        <div id="reviewQueueList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sessionsView">
+    <div id="sessionsViewHeader">
+      <h2>Sessions</h2>
+      <button id="sessionsBackToBoardBtn" class="tool-btn" type="button">Back to board</button>
+    </div>
+    <div id="sessionKindTabs">
+      <button class="kind-tab-btn active" data-kind="meeting">Meetings</button>
+      <button class="kind-tab-btn" data-kind="practice">Practice</button>
+      <button class="kind-tab-btn" data-kind="chat">Chat</button>
+      <button class="kind-tab-btn" data-kind="audioOverview">Audio Overview</button>
+    </div>
+    <div id="sessionList"></div>
+  </div>
+
+  <div id="dashboardView">
+    <div id="dashboardHeader">
+      <h2>Dashboard</h2>
+      <div id="dashboardHeaderActions">
+        <span id="plateSyncStatus"></span>
+        <button id="plateSyncBtn" class="tool-btn" type="button">Sync now</button>
+      </div>
+    </div>
+    <div id="dashboardTabs">
+      <button class="dash-tab-btn" data-tab="today">Today</button>
+      <button class="dash-tab-btn active" data-tab="meetings">Meetings</button>
+      <button class="dash-tab-btn" data-tab="email_message">Emails</button>
+      <button class="dash-tab-btn" data-tab="teams_message">Teams</button>
+      <button class="dash-tab-btn" data-tab="jira">Jira</button>
+      <button class="dash-tab-btn" data-tab="bitbucket_pr">Bitbucket</button>
+    </div>
+    <div id="dashboardEmptyState" hidden>
+      <svg class="icon"><use href="#icon-plate"></use></svg>
+      <p>Nothing here yet.</p>
+    </div>
+    <div id="dashboardBoard"></div>
+  </div>
+
+  <div id="prReviewView">
+    <div id="prReviewHeader">
+      <div>
+        <h2 id="prReviewTitle">PR Review</h2>
+        <div id="prReviewMeta"></div>
+      </div>
+      <button id="prReviewBackBtn" class="tool-btn" type="button">Back to Dashboard</button>
+    </div>
+    <div id="prReviewBody">
+      <div class="pr-review-section" id="prReviewContextSection" hidden>
+        <h3>Context</h3>
+        <div id="prReviewContextList"></div>
+      </div>
+      <div class="pr-review-section" id="prReviewLogSection" hidden>
+        <h3>Progress</h3>
+        <div id="prReviewLog"></div>
+      </div>
+      <div class="pr-review-section">
+        <h3>Review</h3>
+        <div id="prReviewStatus">Starting…</div>
+        <div id="prReviewResult" hidden>
+          <div id="prReviewSummaryRow">
+            <span id="prReviewRecommendation"></span>
+            <div id="prReviewSummary"></div>
+          </div>
+          <div id="prReviewFindings"></div>
+          <button id="prReviewCopyBtn" class="tool-btn" type="button">Copy</button>
         </div>
       </div>
-      <div class="modal-body" id="plateModalBody">
-        <div id="plateEmptyState" hidden>
-          <svg class="icon"><use href="#icon-plate"></use></svg>
-          <p>Nothing on your plate right now — Jira issues assigned to you, Bitbucket PRs awaiting your review, and open action items will show up here.</p>
-        </div>
-        <div id="plateList"></div>
+      <div class="pr-review-section" id="prReviewPostSection" hidden>
+        <h3>Bitbucket comments</h3>
+        <button id="prReviewStageBtn" class="tool-btn" type="button">Stage comments for Bitbucket</button>
+        <div id="prReviewCommentDrafts"></div>
       </div>
     </div>
   </div>
@@ -1309,6 +1500,34 @@
       <div class="modal-footer">
         <button id="extActionCancelBtn" class="tool-btn" type="button">Cancel</button>
         <button id="extActionSubmitBtn" class="tool-btn" type="button">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- Draft Panel: the generic draft -> refine -> approve -> execute -> redo gate (src/drafts/) — a full main-frame view, like Dashboard/Sessions/PR Review, not a modal ---------- -->
+  <div id="draftView">
+    <div id="draftModal" class="modal">
+      <div class="modal-header">
+        <h2 id="draftTitle">Draft</h2>
+        <button id="draftModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
+      </div>
+      <div id="draftStatus"></div>
+      <div id="draftRedoNote" hidden></div>
+      <div class="modal-body" id="draftContentBody"></div>
+      <details id="draftHistory" hidden>
+        <summary>Refinement history</summary>
+        <div id="draftHistoryList"></div>
+      </details>
+      <div id="draftChatRow">
+        <input id="draftInstruction" type="text" placeholder="Ask for a change, or ask a question…" />
+        <button id="draftRefineBtn" class="tool-btn" type="button">Refine</button>
+      </div>
+      <div id="draftError" hidden></div>
+      <div class="modal-footer">
+        <span class="draft-gate-label" id="draftGateLabel"></span>
+        <button id="draftDiscardBtn" class="tool-btn" type="button">Discard</button>
+        <button id="draftRedoBtn" class="tool-btn" type="button" hidden>Redo</button>
+        <button id="draftApproveBtn" class="tool-btn" type="button"></button>
       </div>
     </div>
   </div>
@@ -1389,13 +1608,11 @@
     const runPrepBtn = document.getElementById('runPrepBtn');
     const practiceBtn = document.getElementById('practiceBtn');
     const voiceChatBtn = document.getElementById('voiceChatBtn');
-    const voicePanel = document.getElementById('voicePanel');
-    const voicePanelTitleText = document.getElementById('voicePanelTitleText');
-    const voicePanelStatus = document.getElementById('voicePanelStatus');
-    const voicePanelStopBtn = document.getElementById('voicePanelStopBtn');
-    const voicePanelLog = document.getElementById('voicePanelLog');
-    const voicePanelTextInput = document.getElementById('voicePanelTextInput');
-    const voicePanelSendBtn = document.getElementById('voicePanelSendBtn');
+    const chatTextRow = document.getElementById('chatTextRow');
+    const liveChatLog = document.getElementById('liveChatLog');
+    const chatTextInput = document.getElementById('chatTextInput');
+    const chatTextSendBtn = document.getElementById('chatTextSendBtn');
+    const chatMuteBtn = document.getElementById('chatMuteBtn');
     const coachingWrap = document.getElementById('coachingWrap');
     const coachingEmptyState = document.getElementById('coachingEmptyState');
     const coachingContent = document.getElementById('coachingContent');
@@ -1412,10 +1629,10 @@
     const codebaseIndexStatus = document.getElementById('codebaseIndexStatus');
     const indexCommunicationsBtn = document.getElementById('indexCommunicationsBtn');
     const communicationsIndexStatus = document.getElementById('communicationsIndexStatus');
-    const syncMsGraphBtn = document.getElementById('syncMsGraphBtn');
-    const msGraphSyncStatus = document.getElementById('msGraphSyncStatus');
-    const syncOutlookDesktopBtn = document.getElementById('syncOutlookDesktopBtn');
-    const outlookDesktopSyncStatus = document.getElementById('outlookDesktopSyncStatus');
+    const syncEmailBtn = document.getElementById('syncEmailBtn');
+    const emailSyncStatus = document.getElementById('emailSyncStatus');
+    const syncTeamsBtn = document.getElementById('syncTeamsBtn');
+    const teamsSyncStatus = document.getElementById('teamsSyncStatus');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsModalClose = document.getElementById('settingsModalClose');
@@ -1455,13 +1672,40 @@
     const logsFilter = document.getElementById('logsFilter');
     const logsAutoscroll = document.getElementById('logsAutoscroll');
     const logsClearBtn = document.getElementById('logsClearBtn');
-    const plateBtn = document.getElementById('plateBtn');
-    const plateOverlay = document.getElementById('plateOverlay');
-    const plateModalClose = document.getElementById('plateModalClose');
+    const sessionsBtn = document.getElementById('sessionsBtn');
+    const sessionsView = document.getElementById('sessionsView');
+    const sessionsBackToBoardBtn = document.getElementById('sessionsBackToBoardBtn');
+    const backToBoardBtn = document.getElementById('backToBoardBtn');
+    const dashboardView = document.getElementById('dashboardView');
+    const mainView = document.getElementById('main');
+    const dashboardTabsEl = document.getElementById('dashboardTabs');
+    const dashboardBoard = document.getElementById('dashboardBoard');
+    const dashboardEmptyState = document.getElementById('dashboardEmptyState');
     const plateSyncBtn = document.getElementById('plateSyncBtn');
     const plateSyncStatus = document.getElementById('plateSyncStatus');
-    const plateList = document.getElementById('plateList');
-    const plateEmptyState = document.getElementById('plateEmptyState');
+    const sidebarQueueList = document.getElementById('sidebarQueueList');
+    const sidebarQueueEmptyState = document.getElementById('sidebarQueueEmptyState');
+    const morningBriefingBanner = document.getElementById('morningBriefingBanner');
+    const morningBriefingText = document.getElementById('morningBriefingText');
+    const morningBriefingDismiss = document.getElementById('morningBriefingDismiss');
+    const reviewQueueBtn = document.getElementById('reviewQueueBtn');
+    const reviewQueueOverlay = document.getElementById('reviewQueueOverlay');
+    const reviewQueueModalClose = document.getElementById('reviewQueueModalClose');
+    const reviewQueueList = document.getElementById('reviewQueueList');
+    const prReviewView = document.getElementById('prReviewView');
+    const prReviewTitle = document.getElementById('prReviewTitle');
+    const prReviewMeta = document.getElementById('prReviewMeta');
+    const prReviewBackBtn = document.getElementById('prReviewBackBtn');
+    const prReviewContextSection = document.getElementById('prReviewContextSection');
+    const prReviewContextList = document.getElementById('prReviewContextList');
+    const prReviewLogSection = document.getElementById('prReviewLogSection');
+    const prReviewLog = document.getElementById('prReviewLog');
+    const prReviewStatus = document.getElementById('prReviewStatus');
+    const prReviewResult = document.getElementById('prReviewResult');
+    const prReviewSummary = document.getElementById('prReviewSummary');
+    const prReviewRecommendation = document.getElementById('prReviewRecommendation');
+    const prReviewFindings = document.getElementById('prReviewFindings');
+    const prReviewCopyBtn = document.getElementById('prReviewCopyBtn');
     const extActionOverlay = document.getElementById('extActionOverlay');
     const extActionModalClose = document.getElementById('extActionModalClose');
     const extActionTitle = document.getElementById('extActionTitle');
@@ -1470,6 +1714,21 @@
     const extActionError = document.getElementById('extActionError');
     const extActionCancelBtn = document.getElementById('extActionCancelBtn');
     const extActionSubmitBtn = document.getElementById('extActionSubmitBtn');
+    const draftView = document.getElementById('draftView');
+    const draftModalClose = document.getElementById('draftModalClose');
+    const draftTitle = document.getElementById('draftTitle');
+    const draftStatus = document.getElementById('draftStatus');
+    const draftRedoNote = document.getElementById('draftRedoNote');
+    const draftContentBody = document.getElementById('draftContentBody');
+    const draftHistory = document.getElementById('draftHistory');
+    const draftHistoryList = document.getElementById('draftHistoryList');
+    const draftInstruction = document.getElementById('draftInstruction');
+    const draftRefineBtn = document.getElementById('draftRefineBtn');
+    const draftError = document.getElementById('draftError');
+    const draftGateLabel = document.getElementById('draftGateLabel');
+    const draftDiscardBtn = document.getElementById('draftDiscardBtn');
+    const draftRedoBtn = document.getElementById('draftRedoBtn');
+    const draftApproveBtn = document.getElementById('draftApproveBtn');
     const newSessionOpenBtn = document.getElementById('newSessionOpenBtn');
     const newSessionOverlay = document.getElementById('newSessionOverlay');
     const newSessionModalClose = document.getElementById('newSessionModalClose');
@@ -1938,6 +2197,11 @@
         // meeting wrapped up. Reuses the exact same start/resume path as
         // "Start recording".
         const canResume = !!s.endedAt && s.segmentCount > 0 && s.id !== liveSessionId && s.sessionType === 'work' && s.sessionKind === 'meeting';
+        // Chat/practice sessions have a completely separate live pipeline
+        // (a per-client Gemini Live connection over the control WebSocket,
+        // not the single global recording) — resuming one routes through
+        // startVoice(..., { resumeSessionId }) instead of /api/session/start.
+        const canResumeChat = !!s.endedAt && s.segmentCount > 0 && s.id !== liveVoiceSessionId && (s.sessionKind === 'chat' || s.sessionKind === 'practice');
         const badge = notYetStarted ? `<span class="prep-badge ${s.prepStatus}">${s.prepStatus}</span>` : '';
         const scheduled = notYetStarted && s.scheduledStartAt;
         card.innerHTML = `
@@ -1955,6 +2219,7 @@
           ` : ''}
           ${notYetStarted ? '<button class="session-start-recording"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording</button>' : ''}
           ${canResume ? '<button class="session-start-recording session-resume-recording"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume recording</button>' : ''}
+          ${canResumeChat ? '<button class="session-resume-recording session-resume-chat"><svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume chat</button>' : ''}
         `;
         card.addEventListener('click', () => openSession(s.id));
         card.querySelector('.session-delete').addEventListener('click', (e) => {
@@ -1985,8 +2250,18 @@
             openSession(s.id);
           });
         }
+        const resumeChatBtn = card.querySelector('.session-resume-chat');
+        if (resumeChatBtn) {
+          resumeChatBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startVoice(s.sessionKind, undefined, { resumeSessionId: s.id });
+          });
+        }
         sessionList.appendChild(card);
       }
+      // Keeps the Meetings tab's unread badge current whenever the sessions
+      // list changes (calendar auto-import, a new session created, etc.).
+      renderDashboardTabBadges();
     }
 
     for (const btn of sessionKindTabBtns) {
@@ -2000,6 +2275,7 @@
     // ---------- Main panel ----------
 
     function openSession(id) {
+      showDashboard(false);
       activeSessionId = id;
       renderSessionList();
       switchTab('transcript');
@@ -2078,19 +2354,31 @@
       // falls through to the same prep/not-started label the sidebar cards
       // already use via sessionMetaLabel.
       const live = session.id === liveSessionId;
+      const liveVoice = session.id === liveVoiceSessionId;
       const recording = live && !sessionPaused;
       const paused = live && sessionPaused;
-      mainMeta.classList.toggle('recording', recording);
+      mainMeta.classList.toggle('recording', recording || liveVoice);
       mainMeta.classList.toggle('paused', paused);
       mainMeta.textContent = recording
         ? 'Recording…'
         : paused
           ? 'Paused'
-          : session.endedAt
-            ? `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`
-            : sessionMetaLabel(session);
+          : liveVoice
+            ? 'Listening…'
+            : session.endedAt
+              ? `${toDate(session.startedAt)?.toLocaleString() || ''} · ${sessionMetaLabel(session)}`
+              : sessionMetaLabel(session);
       currentSessionActiveTools = session.activeTools ?? null;
       currentSessionActiveFeatures = session.activeFeatures ?? null;
+      chatTextRow.hidden = !liveVoice;
+      // While actually live, the fast bubble-accumulation chat log replaces
+      // the segment-based transcript entirely (lower latency, no round trip
+      // through DB persistence) — the real transcript takes back over the
+      // moment the session ends (stopVoice() re-opens it, re-fetching the
+      // now-final persisted segments).
+      liveChatLog.hidden = !liveVoice;
+      transcriptEl.style.display = liveVoice ? 'none' : '';
+      if (liveVoice) emptyState.style.display = 'none';
       updateRecordingControls(session);
     }
 
@@ -2100,16 +2388,18 @@
     // every card in the list.
     function updateRecordingControls(session) {
       const live = session.id === liveSessionId;
+      const liveVoice = session.id === liveVoiceSessionId;
       const notYetStarted = (!session.endedAt || session.segmentCount === 0) && !live && session.sessionType === 'work' && session.sessionKind === 'meeting';
       const canResume = !!session.endedAt && session.segmentCount > 0 && !live && session.sessionType === 'work' && session.sessionKind === 'meeting';
-      mainStartBtn.hidden = !(notYetStarted || canResume);
+      const canResumeChat = !!session.endedAt && session.segmentCount > 0 && !liveVoice && (session.sessionKind === 'chat' || session.sessionKind === 'practice');
+      mainStartBtn.hidden = !(notYetStarted || canResume || canResumeChat);
       mainStartBtn.textContent = '';
-      mainStartBtn.innerHTML = canResume
-        ? '<svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume recording'
+      mainStartBtn.innerHTML = canResume || canResumeChat
+        ? '<svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Resume ' + (canResumeChat ? 'chat' : 'recording')
         : '<svg class="icon icon-filled"><use href="#icon-circle-fill"></use></svg> Start recording';
       mainPauseBtn.hidden = !(live && !sessionPaused);
       mainResumeBtn.hidden = !(live && sessionPaused);
-      mainStopBtn.hidden = !live;
+      mainStopBtn.hidden = !(live || liveVoice);
     }
 
     mainTitle.addEventListener('focus', () => {
@@ -2144,9 +2434,16 @@
       transcriptionErrorBanner.hidden = true;
       const alignmentClass = segment.speaker === 'You' ? 'mine' : 'theirs';
       if (!segment.isFinal) {
-        if (!interimEl) {
+        // Replace (not reuse) the interim slot when the speaker changes —
+        // meeting channels rarely switch mid-utterance, but a live chat's
+        // "You"/Assistant turns alternate directly, and reusing the old
+        // element would keep its stale alignment class (only .innerHTML was
+        // being refreshed) while showing the new speaker's text.
+        if (!interimEl || interimEl.dataset.speaker !== segment.speaker) {
+          if (interimEl) interimEl.remove();
           interimEl = document.createElement('div');
           interimEl.className = `segment interim ${alignmentClass}`;
+          interimEl.dataset.speaker = segment.speaker;
           transcriptEl.appendChild(interimEl);
         }
         interimEl.innerHTML = segmentHtml(segment);
@@ -2536,77 +2833,75 @@
 
     refreshCommunicationsStatus();
 
-    function formatMsGraphStatus({ configured, lastSyncAt, lastError }) {
-      if (!configured) return 'Not configured';
+    function formatEmailSyncStatus({ lastSyncAt, lastError }) {
       if (lastError) return `Last sync failed: ${lastError}`;
       if (lastSyncAt) return `Last synced ${new Date(lastSyncAt).toLocaleString()}`;
-      return 'Configured — waiting for first sync';
+      return 'Waiting for first sync';
     }
 
-    async function refreshMsGraphStatus() {
+    async function refreshEmailSyncStatus() {
       try {
-        const status = await fetch('/api/msgraph/status').then((r) => r.json());
-        syncMsGraphBtn.disabled = status.inProgress || !status.configured;
-        if (!status.inProgress) msGraphSyncStatus.textContent = formatMsGraphStatus(status);
+        const status = await fetch('/api/email/status').then((r) => r.json());
+        syncEmailBtn.disabled = status.inProgress;
+        if (!status.inProgress) emailSyncStatus.textContent = formatEmailSyncStatus(status);
       } catch {
         // Feature unset/unreachable — leave status blank, same as other optional integrations.
       }
     }
 
-    syncMsGraphBtn.addEventListener('click', async () => {
-      syncMsGraphBtn.disabled = true;
-      msGraphSyncStatus.textContent = 'Syncing…';
+    syncEmailBtn.addEventListener('click', async () => {
+      syncEmailBtn.disabled = true;
+      emailSyncStatus.textContent = 'Syncing…';
       try {
-        const res = await fetch('/api/msgraph/sync', { method: 'POST' });
+        const res = await fetch('/api/email/sync', { method: 'POST' });
         const body = await res.json();
         if (!res.ok) {
-          msGraphSyncStatus.textContent = body.error || 'Sync failed.';
-          syncMsGraphBtn.disabled = false;
+          emailSyncStatus.textContent = body.error || 'Sync failed.';
+          syncEmailBtn.disabled = false;
           return;
         }
-        if (!body.started && body.alreadyRunning) msGraphSyncStatus.textContent = 'Already syncing…';
+        if (!body.started && body.alreadyRunning) emailSyncStatus.textContent = 'Already syncing…';
       } finally {
-        setTimeout(refreshMsGraphStatus, 1500);
+        setTimeout(refreshEmailSyncStatus, 1500);
       }
     });
 
-    refreshMsGraphStatus();
+    refreshEmailSyncStatus();
 
-    function formatOutlookDesktopStatus({ configured, lastSyncAt, lastError }) {
-      if (!configured) return 'Windows only';
+    function formatTeamsSyncStatus({ lastSyncAt, lastError }) {
       if (lastError) return `Last sync failed: ${lastError}`;
       if (lastSyncAt) return `Last synced ${new Date(lastSyncAt).toLocaleString()}`;
-      return 'Not yet synced';
+      return 'Waiting for first sync';
     }
 
-    async function refreshOutlookDesktopStatus() {
+    async function refreshTeamsSyncStatus() {
       try {
-        const status = await fetch('/api/outlook-desktop/status').then((r) => r.json());
-        syncOutlookDesktopBtn.disabled = status.inProgress || !status.configured;
-        if (!status.inProgress) outlookDesktopSyncStatus.textContent = formatOutlookDesktopStatus(status);
+        const status = await fetch('/api/teams/status').then((r) => r.json());
+        syncTeamsBtn.disabled = status.inProgress;
+        if (!status.inProgress) teamsSyncStatus.textContent = formatTeamsSyncStatus(status);
       } catch {
         // Feature unset/unreachable — leave status blank, same as other optional integrations.
       }
     }
 
-    syncOutlookDesktopBtn.addEventListener('click', async () => {
-      syncOutlookDesktopBtn.disabled = true;
-      outlookDesktopSyncStatus.textContent = 'Syncing… approve the Outlook prompt if one appears';
+    syncTeamsBtn.addEventListener('click', async () => {
+      syncTeamsBtn.disabled = true;
+      teamsSyncStatus.textContent = 'Syncing…';
       try {
-        const res = await fetch('/api/outlook-desktop/sync', { method: 'POST' });
+        const res = await fetch('/api/teams/sync', { method: 'POST' });
         const body = await res.json();
         if (!res.ok) {
-          outlookDesktopSyncStatus.textContent = body.error || 'Sync failed.';
-          syncOutlookDesktopBtn.disabled = false;
+          teamsSyncStatus.textContent = body.error || 'Sync failed.';
+          syncTeamsBtn.disabled = false;
           return;
         }
-        if (!body.started && body.alreadyRunning) outlookDesktopSyncStatus.textContent = 'Already syncing…';
+        if (!body.started && body.alreadyRunning) teamsSyncStatus.textContent = 'Already syncing…';
       } finally {
-        setTimeout(refreshOutlookDesktopStatus, 1500);
+        setTimeout(refreshTeamsSyncStatus, 1500);
       }
     });
 
-    refreshOutlookDesktopStatus();
+    refreshTeamsSyncStatus();
 
     // ---------- Settings modal ----------
 
@@ -2615,8 +2910,8 @@
       settingsStatus.textContent = 'Loading…';
       refreshCodebaseStatus();
       refreshCommunicationsStatus();
-      refreshMsGraphStatus();
-      refreshOutlookDesktopStatus();
+      refreshEmailSyncStatus();
+      refreshTeamsSyncStatus();
       fetch('/api/settings')
         .then((res) => res.json())
         .then((settings) => {
@@ -3186,9 +3481,26 @@
     });
     extActionSubmitBtn.addEventListener('click', submitExtActionDialog);
 
-    // ---------- My Plate ----------
+    // ---------- Dashboard (formerly "My Plate") ----------
 
-    const PLATE_SOURCE_LABELS = { jira: 'Jira', bitbucket_pr: 'Bitbucket', action_item: 'Action item' };
+    const PLATE_SOURCE_LABELS = { jira: 'Jira', bitbucket_pr: 'Bitbucket', action_item: 'Action item', teams_message: 'Teams', email_message: 'Email' };
+    const TASK_BOARD_COLUMNS = [{ key: 'todo', label: 'To Do' }, { key: 'in_progress', label: 'In Progress' }, { key: 'done', label: 'Done' }];
+    const MEETING_BOARD_COLUMNS = [{ key: 'upcoming', label: 'Upcoming' }, { key: 'live', label: 'Live' }, { key: 'done', label: 'Done' }];
+
+    let dashboardTasks = [];
+    let currentDashboardTab = 'meetings';
+    let dashboardActive = false;
+
+    function plateTaskPriorityLabel(priorityScore) {
+      if (priorityScore >= 16) return { text: 'High', cls: 'high' };
+      if (priorityScore >= 8) return { text: 'Med', cls: 'med' };
+      return { text: 'Low', cls: 'low' };
+    }
+
+    /** Recovers the real subject/chat-title from a title shaped like "Reply needed: X" / "FYI: X" (see taskSync.ts's syncEmailMessages/syncTeamsMessages). */
+    function plateTaskSubject(task) {
+      return task.title.replace(/^(Reply needed|FYI): /, '');
+    }
 
     function plateTaskHtml(task) {
       const label = PLATE_SOURCE_LABELS[task.source] || task.source;
@@ -3199,55 +3511,743 @@
       const titleHtml = task.url && !isInternalLink
         ? `<a href="${escapeHtml(task.url)}" target="_blank" rel="noopener">${escapeHtml(task.title)}</a>`
         : escapeHtml(task.title);
+      const priority = plateTaskPriorityLabel(task.priorityScore);
+      // Teams/email reply drafts go through the generic Draft Panel
+      // (refine -> approve -> redo, src/drafts/) rather than a read-only
+      // textarea — 'Reply draft' opens the same gate every other write in
+      // this app uses.
+      const draftKind = task.source === 'teams_message' ? 'teams_reply' : task.source === 'email_message' ? 'email_reply' : null;
+      const draftHtml = draftKind && task.draftReply
+        ? `<button class="plate-task-draft-open tool-btn" type="button" data-draft-kind="${draftKind}">Reply draft…</button>`
+        : '';
+      const jiraCcHtml = task.source === 'jira'
+        ? `<div class="cc-cell" data-task-id="${task.id}">${codeChangeCellHtml(null)}</div>
+           <button class="plate-task-devcycle-btn tool-btn" type="button" data-ticket-key="${escapeHtml(task.externalRef)}">Dev cycle…</button>
+           <button class="plate-task-openpr-btn tool-btn" type="button" data-ticket-key="${escapeHtml(task.externalRef)}">Open PR…</button>
+           <button class="plate-task-document-btn tool-btn" type="button" data-ticket-key="${escapeHtml(task.externalRef)}">Document…</button>`
+        : '';
+      const reviewHtml = task.source === 'bitbucket_pr'
+        ? `<button class="plate-review-btn tool-btn" type="button">Review PR</button>`
+        : '';
+      const jenkinsFixHtml = task.source === 'jenkins_build'
+        ? `<button class="plate-task-draft-open tool-btn" type="button" data-draft-kind="jenkins_fix" data-subject-id="${escapeHtml(task.externalRef)}" data-subject-kind="jenkins_build">Propose fix…</button>`
+        : '';
       return `
-        <div class="plate-task" data-task-id="${task.id}" ${isInternalLink ? `data-session-id="${escapeHtml(task.url.replace('session://', ''))}"` : ''}>
+        <div class="plate-task" draggable="true" data-task-id="${task.id}" ${isInternalLink ? `data-session-id="${escapeHtml(task.url.replace('session://', ''))}"` : ''}>
           <span class="plate-task-source">${escapeHtml(label)}</span>
           <div class="plate-task-body">
             <div class="plate-task-title" ${isInternalLink ? 'style="cursor:pointer;text-decoration:underline;"' : ''}>${titleHtml}</div>
             ${meta.length ? `<div class="plate-task-meta">${meta.join(' · ')}</div>` : ''}
+            ${draftHtml}
+            ${jiraCcHtml}
+            ${reviewHtml}
+            ${jenkinsFixHtml}
           </div>
+          <span class="plate-task-priority plate-task-priority-${priority.cls}" title="Priority score ${task.priorityScore}">${priority.text}</span>
           <button class="plate-task-dismiss icon-btn" title="Dismiss"><svg class="icon"><use href="#icon-x"></use></svg></button>
         </div>
       `;
     }
 
-    function renderPlateList(tasks) {
-      plateEmptyState.hidden = tasks.length > 0;
-      plateList.innerHTML = tasks.map(plateTaskHtml).join('');
+    function prepMeetingButtonHtml(session) {
+      if (session.prepStatus === 'pending') return `<button class="plate-prep-btn tool-btn" type="button" disabled>Running…</button>`;
+      if (session.prepStatus === 'ready') return `<button class="plate-prep-btn plate-prep-view tool-btn" type="button">View prep ✓</button>`;
+      if (session.prepStatus === 'failed') return `<button class="plate-prep-btn tool-btn" type="button">Retry prep</button>`;
+      return `<button class="plate-prep-btn tool-btn" type="button">Prep meeting</button>`;
     }
 
-    async function loadPlate() {
-      try {
-        const tasks = await fetch('/api/plate').then((r) => r.json());
-        renderPlateList(tasks);
-      } catch {
-        renderPlateList([]);
+    function meetingCardHtml(session) {
+      const meta = [];
+      if (session.scheduledStartAt) meta.push(new Date(session.scheduledStartAt).toLocaleString());
+      else if (session.startedAt) meta.push(new Date(session.startedAt).toLocaleString());
+      return `
+        <div class="plate-task meeting-card" data-session-id="${session.id}">
+          <div class="plate-task-body">
+            <div class="plate-task-title" style="cursor:pointer;text-decoration:underline;">${escapeHtml(session.name || 'Untitled meeting')}</div>
+            ${meta.length ? `<div class="plate-task-meta">${meta.join(' · ')}</div>` : ''}
+            ${prepMeetingButtonHtml(session)}
+          </div>
+        </div>
+      `;
+    }
+
+    function bucketMeetingsByColumn() {
+      const buckets = { upcoming: [], live: [], done: [] };
+      const meetings = sessions.filter((s) => s.sessionKind === 'meeting');
+      for (const s of meetings) {
+        // Mirrors renderSessionList()'s own notYetStarted heuristic — a
+        // session can have endedAt set and still never have recorded
+        // anything real (e.g. an auto-started/auto-stopped calendar import),
+        // so segmentCount, not just endedAt, decides "actually happened."
+        const neverRecorded = !s.endedAt || s.segmentCount === 0;
+        if (s.id === liveSessionId) buckets.live.push(s);
+        else if (neverRecorded) buckets.upcoming.push(s);
+        else buckets.done.push(s);
+      }
+      return buckets;
+    }
+
+    function renderDashboardBoard() {
+      const isMeetings = currentDashboardTab === 'meetings';
+      const isToday = currentDashboardTab === 'today';
+      const columns = isMeetings ? MEETING_BOARD_COLUMNS : TASK_BOARD_COLUMNS;
+      const buckets = isMeetings ? bucketMeetingsByColumn() : null;
+      const filteredTasks = isMeetings ? null : isToday ? dashboardTasks : dashboardTasks.filter((t) => t.source === currentDashboardTab);
+
+      const isEmpty = isMeetings
+        ? columns.every((c) => buckets[c.key].length === 0)
+        : (filteredTasks?.length ?? 0) === 0;
+      dashboardEmptyState.hidden = !isEmpty;
+
+      if (isToday) {
+        // A flat, priority-sorted list across every source (already sorted
+        // server-side by GET /api/plate's priority_score DESC) — no kanban
+        // columns, since board_status is meaningful per-source but mixing
+        // every source's status into one shared set of columns would be
+        // confusing (blueprint §9: "prioritize into a single queue").
+        dashboardBoard.innerHTML = `<div class="dash-column dash-column-flat"><div class="dash-column-list" data-column="today">${filteredTasks.map(plateTaskHtml).join('')}</div></div>`;
+        return;
+      }
+
+      dashboardBoard.innerHTML = columns.map((col) => {
+        const items = isMeetings ? buckets[col.key] : filteredTasks.filter((t) => t.boardStatus === col.key);
+        const cardsHtml = isMeetings ? items.map(meetingCardHtml).join('') : items.map(plateTaskHtml).join('');
+        return `
+          <div class="dash-column">
+            <h3>${col.label}</h3>
+            <div class="dash-column-list" data-column="${col.key}">${cardsHtml}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Jira cards render a static "Implement" placeholder synchronously
+      // (codeChangeCellHtml(null)) — same convention as the Action Items
+      // table's cc-cell — then get patched to their real running/ready/
+      // applied/pushed state async right after, one fetch per card.
+      if (currentDashboardTab === 'jira') {
+        for (const task of filteredTasks) refreshJiraCodeChangeCell(task.id);
       }
     }
 
-    plateList.addEventListener('click', (e) => {
+    // ---------- Jira Dashboard cards: "Implement with Claude Code" ----------
+    // Same engine as the Action Items table's cc-cell (codeChangeCellHtml is
+    // shared verbatim — it only knows about the abstract request/status, not
+    // its origin) — just a different URL prefix (/api/plate/:id/... instead
+    // of /api/action-items/:id/...) and a different cell lookup (dashboard
+    // cards, not the action items table's rows).
+
+    async function currentJiraRequestIdFor(taskId) {
+      const request = await fetch(`/api/plate/${taskId}/code-change`).then((r) => r.json());
+      return request?.id;
+    }
+
+    function wireJiraCodeChangeCell(cell, taskId) {
+      const implementBtn = cell.querySelector('.cc-implement-btn');
+      if (implementBtn) {
+        implementBtn.addEventListener('click', async () => {
+          implementBtn.disabled = true;
+          cell.innerHTML = '<span class="cc-status">Starting…</span>';
+          try {
+            const res = await fetch(`/api/plate/${taskId}/implement`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const body = await res.json();
+            if (!res.ok) {
+              cell.innerHTML = `<span class="cc-status cc-error">${escapeHtml(body.error || 'Failed to start.')}</span><button class="cc-implement-btn">Retry</button>`;
+              wireJiraCodeChangeCell(cell, taskId);
+              return;
+            }
+          } catch (err) {
+            cell.innerHTML = `<span class="cc-status cc-error">${escapeHtml(err.message)}</span><button class="cc-implement-btn">Retry</button>`;
+            wireJiraCodeChangeCell(cell, taskId);
+            return;
+          }
+          refreshJiraCodeChangeCell(taskId);
+        });
+      }
+      const viewDiffBtn = cell.querySelector('.cc-view-diff-btn');
+      const diffEl = cell.querySelector('.cc-diff');
+      if (viewDiffBtn && diffEl) {
+        viewDiffBtn.addEventListener('click', () => {
+          diffEl.hidden = !diffEl.hidden;
+          viewDiffBtn.textContent = diffEl.hidden ? 'View diff' : 'Hide diff';
+        });
+      }
+      const approveBtn = cell.querySelector('.cc-approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', async () => {
+          approveBtn.disabled = true;
+          const requestId = await currentJiraRequestIdFor(taskId);
+          const res = await fetch(`/api/code-change-requests/${requestId}/approve`, { method: 'POST' });
+          const body = await res.json();
+          if (!res.ok) { alert(`Could not commit: ${body.error}`); approveBtn.disabled = false; return; }
+          refreshJiraCodeChangeCell(taskId);
+        });
+      }
+      const discardBtn = cell.querySelector('.cc-discard-btn');
+      if (discardBtn) {
+        discardBtn.addEventListener('click', async () => {
+          if (!confirm('Discard this Claude Code change? The worktree and its changes will be deleted.')) return;
+          discardBtn.disabled = true;
+          const requestId = await currentJiraRequestIdFor(taskId);
+          await fetch(`/api/code-change-requests/${requestId}/discard`, { method: 'POST' });
+          refreshJiraCodeChangeCell(taskId);
+        });
+      }
+      const pushBtn = cell.querySelector('.cc-push-btn');
+      if (pushBtn) {
+        pushBtn.addEventListener('click', async () => {
+          pushBtn.disabled = true;
+          const requestId = await currentJiraRequestIdFor(taskId);
+          const res = await fetch(`/api/code-change-requests/${requestId}/push`, { method: 'POST' });
+          const body = await res.json();
+          if (!res.ok) { alert(`Could not push: ${body.error}`); pushBtn.disabled = false; return; }
+          refreshJiraCodeChangeCell(taskId);
+        });
+      }
+    }
+
+    async function refreshJiraCodeChangeCell(taskId) {
+      const cell = dashboardBoard.querySelector(`.plate-task[data-task-id="${taskId}"] .cc-cell`);
+      if (!cell) return;
+      const request = await fetch(`/api/plate/${taskId}/code-change`).then((r) => r.json());
+      cell.innerHTML = codeChangeCellHtml(request);
+      wireJiraCodeChangeCell(cell, taskId);
+    }
+
+    // ---------- Dashboard unread badges ----------
+    // Task-backed sources have auto-increment ids, so "new since last seen"
+    // is just id > lastSeenId (persisted in localStorage, survives reload).
+    // Meeting session ids are UUIDs (not orderable), so those are tracked as
+    // a seen-set instead.
+    const DASHBOARD_BADGE_TASK_SOURCES = ['jira', 'bitbucket_pr', 'teams_message', 'email_message'];
+
+    function getLastSeenTaskId(source) {
+      return Number(localStorage.getItem(`speako.dashboardLastSeen.${source}`) || 0);
+    }
+    function setLastSeenTaskId(source, id) {
+      localStorage.setItem(`speako.dashboardLastSeen.${source}`, String(id));
+    }
+    function getSeenMeetingIds() {
+      try {
+        return new Set(JSON.parse(localStorage.getItem('speako.dashboardSeenMeetings') || '[]'));
+      } catch {
+        return new Set();
+      }
+    }
+    function setSeenMeetingIds(set) {
+      localStorage.setItem('speako.dashboardSeenMeetings', JSON.stringify([...set]));
+    }
+
+    function computeDashboardBadges() {
+      const badges = {};
+      for (const source of DASHBOARD_BADGE_TASK_SOURCES) {
+        const lastSeen = getLastSeenTaskId(source);
+        badges[source] = dashboardTasks.filter((t) => t.source === source && t.id > lastSeen).length;
+      }
+      const seenMeetings = getSeenMeetingIds();
+      badges.meetings = sessions.filter((s) => s.sessionKind === 'meeting' && !seenMeetings.has(s.id)).length;
+      return badges;
+    }
+
+    function renderDashboardTabBadges() {
+      const badges = computeDashboardBadges();
+      for (const btn of dashboardTabsEl.querySelectorAll('.dash-tab-btn')) {
+        const count = badges[btn.dataset.tab] || 0;
+        let badgeEl = btn.querySelector('.dash-tab-badge');
+        if (count > 0) {
+          if (!badgeEl) {
+            badgeEl = document.createElement('span');
+            badgeEl.className = 'dash-tab-badge';
+            btn.appendChild(badgeEl);
+          }
+          badgeEl.textContent = String(count);
+        } else if (badgeEl) {
+          badgeEl.remove();
+        }
+      }
+    }
+
+    function markTabSeen(tab) {
+      if (tab === 'meetings') {
+        const seen = getSeenMeetingIds();
+        for (const s of sessions.filter((s) => s.sessionKind === 'meeting')) seen.add(s.id);
+        setSeenMeetingIds(seen);
+      } else {
+        const items = dashboardTasks.filter((t) => t.source === tab);
+        if (items.length) {
+          const maxId = Math.max(...items.map((t) => t.id));
+          if (maxId > getLastSeenTaskId(tab)) setLastSeenTaskId(tab, maxId);
+        }
+      }
+      renderDashboardTabBadges();
+    }
+
+    async function loadDashboardTasks() {
+      try {
+        dashboardTasks = await fetch('/api/plate').then((r) => r.json());
+      } catch {
+        dashboardTasks = [];
+      }
+      renderDashboardBoard();
+      renderDashboardTabBadges();
+      renderSidebarQueue();
+    }
+
+    // The sidebar's persistent, always-visible task queue — a compact flat
+    // priority list off the exact same dashboardTasks array/sort order the
+    // full board's "Today" tab already uses (server-sorted by priority_score
+    // DESC), just rendered into the sidebar instead of the main frame.
+    function renderSidebarQueue() {
+      sidebarQueueEmptyState.hidden = dashboardTasks.length > 0;
+      sidebarQueueList.innerHTML = dashboardTasks.map(plateTaskHtml).join('');
+    }
+
+    // The morning digest (blueprint §9) — dismissed for the current tab
+    // session only (client-side state, not persisted); it comes back on
+    // reload/next day since GET /api/plate/briefing always reflects today's
+    // row until checkMorningBriefing() generates tomorrow's.
+    let morningBriefingDismissed = false;
+
+    async function loadMorningBriefing() {
+      if (morningBriefingDismissed) return;
+      try {
+        const briefing = await fetch('/api/plate/briefing').then((r) => r.json());
+        if (briefing?.content) {
+          morningBriefingText.textContent = briefing.content;
+          morningBriefingBanner.hidden = false;
+        } else {
+          morningBriefingBanner.hidden = true;
+        }
+      } catch {
+        morningBriefingBanner.hidden = true;
+      }
+    }
+
+    morningBriefingDismiss.addEventListener('click', () => {
+      morningBriefingDismissed = true;
+      morningBriefingBanner.hidden = true;
+    });
+
+    // End-of-day review queue (blueprint §9) — every draft still awaiting
+    // approval across every kind, reusing the same per-kind title map and
+    // the already-existing openDraftPanelById (no new draft-rendering logic).
+    let reviewQueueDrafts = [];
+
+    async function refreshReviewQueueCount() {
+      try {
+        reviewQueueDrafts = await fetch('/api/drafts/pending').then((r) => r.json());
+      } catch {
+        reviewQueueDrafts = [];
+      }
+      reviewQueueBtn.textContent = reviewQueueDrafts.length ? `Review queue (${reviewQueueDrafts.length})` : 'Review queue';
+    }
+
+    function renderReviewQueue() {
+      if (!reviewQueueDrafts.length) {
+        reviewQueueList.innerHTML = '<p class="tools-hint">Nothing pending — you\'re all caught up.</p>';
+        return;
+      }
+      reviewQueueList.innerHTML = reviewQueueDrafts.map((d) => {
+        const title = DRAFT_KIND_TITLES[d.kind] || d.kind;
+        return `
+          <div class="review-queue-row" data-draft-id="${d.id}">
+            <span>${escapeHtml(title)}</span>
+            <button class="review-queue-open-btn tool-btn" type="button">Review</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function openReviewQueue() {
+      await refreshReviewQueueCount();
+      renderReviewQueue();
+      reviewQueueOverlay.hidden = false;
+    }
+
+    reviewQueueBtn.addEventListener('click', openReviewQueue);
+    reviewQueueModalClose.addEventListener('click', () => { reviewQueueOverlay.hidden = true; });
+    reviewQueueOverlay.addEventListener('click', (e) => {
+      if (e.target === reviewQueueOverlay) reviewQueueOverlay.hidden = true;
+    });
+    reviewQueueList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.review-queue-open-btn');
+      if (!btn) return;
+      const row = btn.closest('.review-queue-row');
+      const draft = reviewQueueDrafts.find((d) => String(d.id) === row.dataset.draftId);
+      if (!draft) return;
+      reviewQueueOverlay.hidden = true;
+      openDraftPanelById(draft.id, DRAFT_KIND_TITLES[draft.kind] || draft.kind);
+    });
+
+    function switchDashboardTab(tab) {
+      currentDashboardTab = tab;
+      for (const btn of dashboardTabsEl.querySelectorAll('.dash-tab-btn')) {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      }
+      renderDashboardBoard();
+      markTabSeen(tab);
+    }
+
+    dashboardTabsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dash-tab-btn');
+      if (btn) switchDashboardTab(btn.dataset.tab);
+    });
+
+    // Shared delegated click handler for .plate-task cards — attached to both
+    // #dashboardBoard (full board) and #sidebarQueueList (compact sidebar
+    // queue), since both render the exact same plateTaskHtml() cards off the
+    // same dashboardTasks array.
+    function handlePlateTaskClick(e) {
       const dismissBtn = e.target.closest('.plate-task-dismiss');
       if (dismissBtn) {
         const card = dismissBtn.closest('.plate-task');
-        fetch(`/api/plate/${card.dataset.taskId}/dismiss`, { method: 'POST' }).then(loadPlate);
+        fetch(`/api/plate/${card.dataset.taskId}/dismiss`, { method: 'POST' }).then(loadDashboardTasks);
+        return;
+      }
+      const draftOpenBtn = e.target.closest('.plate-task-draft-open');
+      if (draftOpenBtn) {
+        // Most draft-open buttons act on the plate task itself (subjectKind
+        // 'task'); a few (e.g. jenkins_fix) target a different subject
+        // entirely and carry their own subjectKind/subjectId explicitly.
+        const taskId = draftOpenBtn.closest('.plate-task').dataset.taskId;
+        const subjectKind = draftOpenBtn.dataset.subjectKind || 'task';
+        const subjectId = draftOpenBtn.dataset.subjectId || taskId;
+        openDraftPanel({ kind: draftOpenBtn.dataset.draftKind, subjectKind, subjectId });
+        return;
+      }
+      const devCycleBtn = e.target.closest('.plate-task-devcycle-btn');
+      if (devCycleBtn) {
+        const taskId = Number(devCycleBtn.closest('.plate-task').dataset.taskId);
+        openDevCyclePanel({ ticketKey: devCycleBtn.dataset.ticketKey, taskId });
+        return;
+      }
+      const openPrBtn = e.target.closest('.plate-task-openpr-btn');
+      if (openPrBtn) {
+        openPrForTicket(openPrBtn.dataset.ticketKey);
+        return;
+      }
+      const documentBtn = e.target.closest('.plate-task-document-btn');
+      if (documentBtn) {
+        openConfluenceDevCycleDraftForTicket(documentBtn.dataset.ticketKey);
+        return;
+      }
+      const prepBtn = e.target.closest('.plate-prep-btn');
+      if (prepBtn) {
+        const sessionId = prepBtn.closest('.meeting-card').dataset.sessionId;
+        if (prepBtn.classList.contains('plate-prep-view')) {
+          showDashboard(false);
+          openSession(sessionId);
+          switchTab('prepBrief');
+          return;
+        }
+        prepBtn.disabled = true;
+        prepBtn.textContent = 'Running…';
+        fetch(`/api/sessions/${sessionId}/prep`, { method: 'POST' })
+          .catch(() => {})
+          .finally(() => refreshSessions());
+        return;
+      }
+      const meetingCard = e.target.closest('.meeting-card');
+      if (meetingCard) {
+        showDashboard(false);
+        openSession(meetingCard.dataset.sessionId);
+        return;
+      }
+      const reviewBtn = e.target.closest('.plate-review-btn');
+      if (reviewBtn) {
+        const taskId = reviewBtn.closest('.plate-task').dataset.taskId;
+        openPrReview(taskId);
         return;
       }
       const titleEl = e.target.closest('.plate-task-title');
       const card = titleEl?.closest('.plate-task');
       if (titleEl && card?.dataset.sessionId) {
-        closePlateModal();
+        showDashboard(false);
         openSession(card.dataset.sessionId);
+      }
+    }
+    dashboardBoard.addEventListener('click', handlePlateTaskClick);
+    sidebarQueueList.addEventListener('click', handlePlateTaskClick);
+
+    // Drag-and-drop between kanban columns — delegated on the stable board
+    // container since column contents get fully replaced on every render.
+    dashboardBoard.addEventListener('dragstart', (e) => {
+      const card = e.target.closest('.plate-task:not(.meeting-card)');
+      if (card) e.dataTransfer.setData('text/plain', card.dataset.taskId);
+    });
+    dashboardBoard.addEventListener('dragover', (e) => {
+      if (e.target.closest('.dash-column-list') && currentDashboardTab !== 'meetings' && currentDashboardTab !== 'today') e.preventDefault();
+    });
+    dashboardBoard.addEventListener('drop', (e) => {
+      const columnEl = e.target.closest('.dash-column-list');
+      // The Today tab is a flat, unified priority queue across every source —
+      // no kanban columns/board_status here, so drag-to-reorder doesn't apply.
+      if (!columnEl || currentDashboardTab === 'meetings' || currentDashboardTab === 'today') return;
+      e.preventDefault();
+      const taskId = e.dataTransfer.getData('text/plain');
+      const boardStatus = columnEl.dataset.column;
+      const task = dashboardTasks.find((t) => String(t.id) === taskId);
+      if (task) task.boardStatus = boardStatus;
+      renderDashboardBoard();
+      fetch(`/api/plate/${taskId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardStatus }),
+      }).catch(() => loadDashboardTasks()); // reconcile from the server if the move didn't actually persist
+    });
+
+    function showDashboard(show) {
+      dashboardActive = show;
+      dashboardView.style.display = show ? 'flex' : 'none';
+      mainView.style.display = show ? 'none' : 'flex';
+      prReviewView.style.display = 'none';
+      sessionsView.style.display = 'none';
+      draftView.style.display = 'none';
+      if (show) {
+        switchDashboardTab(currentDashboardTab);
+        loadDashboardTasks();
+      }
+    }
+
+    // The Sessions view — a full main-frame panel, same swap pattern as the
+    // Dashboard board/PR review, since sessions are a tool you open on
+    // demand now, not the sidebar's organizing list.
+    function showSessionsView(show) {
+      sessionsView.style.display = show ? 'flex' : 'none';
+      sessionsBtn.classList.toggle('active', show);
+      if (show) {
+        dashboardView.style.display = 'none';
+        mainView.style.display = 'none';
+        prReviewView.style.display = 'none';
+        draftView.style.display = 'none';
+        renderSessionList();
+      }
+    }
+
+    // Returns which of the main-frame views is currently on screen, so a
+    // panel opened on top of any of them (e.g. the draft view) can restore
+    // the right one when closed instead of always falling back to one spot.
+    function currentMainFrameView() {
+      if (dashboardView.style.display !== 'none') return 'dashboard';
+      if (sessionsView.style.display !== 'none') return 'sessions';
+      if (prReviewView.style.display !== 'none') return 'prReview';
+      return 'main';
+    }
+
+    let draftReturnView = null;
+
+    // The Draft view — the generic draft -> refine -> approve -> redo gate
+    // (reply drafts, dev cycle, open PR, document), same swap pattern as the
+    // other main-frame panels rather than a modal, since these are actions
+    // on a task, not a popup dialog.
+    function showDraftView(show) {
+      draftView.style.display = show ? 'flex' : 'none';
+      if (show) {
+        dashboardView.style.display = 'none';
+        mainView.style.display = 'none';
+        prReviewView.style.display = 'none';
+        sessionsView.style.display = 'none';
+      }
+    }
+
+    // ---------- PR Review window ----------
+
+    let currentPrReviewTaskId = null;
+    let currentPrReviewRequestId = null;
+    const prReviewPostSection = document.getElementById('prReviewPostSection');
+    const prReviewStageBtn = document.getElementById('prReviewStageBtn');
+    const prReviewCommentDrafts = document.getElementById('prReviewCommentDrafts');
+    let currentPrReview = null;
+
+    function showPrReview(show) {
+      prReviewView.style.display = show ? 'flex' : 'none';
+      if (show) {
+        dashboardView.style.display = 'none';
+        mainView.style.display = 'none';
+        sessionsView.style.display = 'none';
+        draftView.style.display = 'none';
+      }
+    }
+
+    function prReviewContextItemHtml(item, kind) {
+      if (kind === 'jira') return `<div class="pr-review-context-item"><strong>${escapeHtml(item.key)}</strong> [${escapeHtml(item.status)}] — ${escapeHtml(item.summary)}</div>`;
+      return `<div class="pr-review-context-item">${escapeHtml(item.title)}</div>`;
+    }
+
+    function prReviewLogLineHtml(message) {
+      return `<div class="pr-review-log-line">${escapeHtml(message)}</div>`;
+    }
+
+    function renderPrReviewLog(log) {
+      const lines = log ?? [];
+      prReviewLogSection.hidden = lines.length === 0;
+      prReviewLog.innerHTML = lines.map(prReviewLogLineHtml).join('');
+      prReviewLog.scrollTop = prReviewLog.scrollHeight;
+    }
+
+    /** Appends one line without a full re-render — used for live WS-driven progress updates so the log visibly "tails" as each step happens, rather than looking stuck until the whole run finishes. */
+    function appendPrReviewLogLine(message) {
+      prReviewLogSection.hidden = false;
+      prReviewLog.insertAdjacentHTML('beforeend', prReviewLogLineHtml(message));
+      prReviewLog.scrollTop = prReviewLog.scrollHeight;
+    }
+
+    function renderPrReview(task, request) {
+      prReviewTitle.textContent = task ? task.title : 'PR Review';
+      prReviewMeta.textContent = task?.url ? task.url : '';
+
+      const context = request?.context;
+      const hasContext = context && (context.jiraIssues?.length || context.confluencePages?.length);
+      prReviewContextSection.hidden = !hasContext;
+      if (hasContext) {
+        prReviewContextList.innerHTML = [
+          ...(context.jiraIssues ?? []).map((i) => prReviewContextItemHtml(i, 'jira')),
+          ...(context.confluencePages ?? []).map((p) => prReviewContextItemHtml(p, 'confluence')),
+        ].join('');
+      }
+
+      renderPrReviewLog(request?.log);
+
+      if (!request || request.status === 'running') {
+        prReviewStatus.textContent = 'Running — see progress below. This can take a few minutes.';
+        prReviewStatus.hidden = false;
+        prReviewResult.hidden = true;
+      } else if (request.status === 'failed') {
+        prReviewStatus.textContent = `Failed: ${request.error || 'unknown error'}`;
+        prReviewStatus.hidden = false;
+        prReviewResult.hidden = true;
+      } else {
+        prReviewStatus.hidden = true;
+        prReviewResult.hidden = false;
+        currentPrReview = request.review;
+        currentPrReviewRequestId = request.id;
+        renderStructuredReview(request.review);
+        prReviewPostSection.hidden = !(request.review?.findings?.length);
+        loadCommentDrafts(request.id);
+      }
+    }
+
+    const PR_COMMENT_DRAFT_STATUS_LABELS = {
+      generating: 'Drafting…', refining: 'Refining…', executing: 'Posting…',
+      ready: 'Ready', completed: 'Posted', failed: 'Failed', discarded: 'Discarded',
+    };
+
+    function prCommentDraftCardHtml(draft) {
+      const statusLabel = PR_COMMENT_DRAFT_STATUS_LABELS[draft.status] || draft.status;
+      const preview = draft.content?.text ? escapeHtml(draft.content.text) : '';
+      const warning = draft.content?.anchorWarning ? ` · ${escapeHtml(draft.content.anchorWarning)}` : '';
+      return `
+        <div class="pr-comment-draft" data-draft-id="${draft.id}">
+          <span class="pr-comment-draft-status">${statusLabel}${warning}</span>
+          <span class="pr-comment-draft-preview">${preview}</span>
+          <button class="pr-comment-draft-open tool-btn" type="button">Open</button>
+        </div>`;
+    }
+
+    async function loadCommentDrafts(requestId) {
+      const drafts = await fetch(`/api/pr-reviews/${requestId}/comment-drafts`).then((r) => r.json());
+      prReviewCommentDrafts.innerHTML = drafts.length ? drafts.map(prCommentDraftCardHtml).join('') : '<p><em>Not staged yet.</em></p>';
+    }
+
+    prReviewStageBtn.addEventListener('click', async () => {
+      if (!currentPrReviewRequestId) return;
+      prReviewStageBtn.disabled = true;
+      try {
+        await fetch(`/api/pr-reviews/${currentPrReviewRequestId}/stage`, { method: 'POST' });
+        await loadCommentDrafts(currentPrReviewRequestId);
+      } finally {
+        prReviewStageBtn.disabled = false;
       }
     });
 
-    async function openPlateModal() {
-      plateOverlay.hidden = false;
-      await loadPlate();
+    prReviewCommentDrafts.addEventListener('click', (e) => {
+      const openBtn = e.target.closest('.pr-comment-draft-open');
+      if (openBtn) {
+        const draftId = Number(openBtn.closest('.pr-comment-draft').dataset.draftId);
+        openDraftPanelById(draftId, 'PR review comment');
+      }
+    });
+
+    const REVIEW_RECOMMENDATION_LABELS = { approve: 'Approve', request_changes: 'Request changes', comment: 'Comment' };
+    const REVIEW_SEVERITY_LABELS = { blocker: 'Blocker', major: 'Major', minor: 'Minor', nit: 'Nit' };
+
+    function prFindingHtml(finding) {
+      const location = finding.file ? `${escapeHtml(finding.file)}${finding.line != null ? `:${finding.line}` : ''}` : '';
+      return `
+        <div class="pr-finding">
+          <div class="pr-finding-body">
+            <span class="pr-finding-severity pr-finding-severity-${finding.severity}">${REVIEW_SEVERITY_LABELS[finding.severity] || finding.severity}</span>
+            ${location ? `<span class="pr-finding-location">${location}</span>` : ''}
+          </div>
+          <div class="pr-finding-comment">${escapeHtml(finding.comment)}</div>
+        </div>`;
     }
 
-    function closePlateModal() {
-      plateOverlay.hidden = true;
+    function renderStructuredReview(review) {
+      prReviewSummary.textContent = review?.summary ?? '';
+      prReviewRecommendation.textContent = REVIEW_RECOMMENDATION_LABELS[review?.recommendation] || review?.recommendation || '';
+      prReviewRecommendation.className = `rec-${review?.recommendation ?? ''}`;
+      const findings = review?.findings ?? [];
+      prReviewFindings.innerHTML = findings.length
+        ? findings.map(prFindingHtml).join('')
+        : '<div class="pr-findings-empty">No findings — nothing to flag.</div>';
     }
+
+    function structuredReviewToText(review) {
+      if (!review) return '';
+      const lines = [
+        review.summary ?? '',
+        '',
+        `Recommendation: ${REVIEW_RECOMMENDATION_LABELS[review.recommendation] || review.recommendation}`,
+      ];
+      for (const f of review.findings ?? []) {
+        const location = f.file ? `${f.file}${f.line != null ? `:${f.line}` : ''}` : '';
+        lines.push('', `[${(REVIEW_SEVERITY_LABELS[f.severity] || f.severity).toUpperCase()}]${location ? ` ${location}` : ''}`, f.comment);
+      }
+      return lines.join('\n');
+    }
+
+    async function loadPrReview(taskId) {
+      const [task, request] = await Promise.all([
+        Promise.resolve(dashboardTasks.find((t) => String(t.id) === String(taskId))),
+        fetch(`/api/plate/${taskId}/review`).then((r) => r.json()),
+      ]);
+      renderPrReview(task, request);
+      return request;
+    }
+
+    async function openPrReview(taskId) {
+      currentPrReviewTaskId = String(taskId);
+      showPrReview(true);
+      renderPrReview(dashboardTasks.find((t) => String(t.id) === String(taskId)), null);
+      const existing = await fetch(`/api/plate/${taskId}/review`).then((r) => r.json());
+      if (existing) {
+        renderPrReview(dashboardTasks.find((t) => String(t.id) === String(taskId)), existing);
+        if (existing.status !== 'running') return;
+      } else {
+        await fetch(`/api/plate/${taskId}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          .then((res) => res.json())
+          .then((body) => {
+            if (body.error) {
+              prReviewStatus.textContent = `Could not start review: ${body.error}`;
+              prReviewStatus.hidden = false;
+              prReviewResult.hidden = true;
+            }
+          });
+      }
+    }
+
+    prReviewBackBtn.addEventListener('click', () => {
+      showPrReview(false);
+      showDashboard(true);
+    });
+
+    prReviewCopyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(structuredReviewToText(currentPrReview)).then(() => {
+        const original = prReviewCopyBtn.textContent;
+        prReviewCopyBtn.textContent = 'Copied!';
+        setTimeout(() => { prReviewCopyBtn.textContent = original; }, 1500);
+      });
+    });
 
     async function syncPlateNow() {
       plateSyncBtn.disabled = true;
@@ -3260,11 +4260,9 @@
       }
     }
 
-    plateBtn.addEventListener('click', openPlateModal);
-    plateModalClose.addEventListener('click', closePlateModal);
-    plateOverlay.addEventListener('click', (e) => {
-      if (e.target === plateOverlay) closePlateModal();
-    });
+    sessionsBtn.addEventListener('click', () => showSessionsView(true));
+    sessionsBackToBoardBtn.addEventListener('click', () => showDashboard(true));
+    backToBoardBtn.addEventListener('click', () => showDashboard(true));
     plateSyncBtn.addEventListener('click', syncPlateNow);
 
     // ---------- New-session modal ----------
@@ -3877,10 +4875,10 @@
           draftThenOpen(item, button, 'email/suggest', (d) => `mailto:?subject=${encodeURIComponent(d.subject || item.description)}&body=${encodeURIComponent(d.body || '')}`, false);
           break;
         case 'jira':
-          openExtActionDialog(item, 'jira');
+          openDraftPanel({ kind: 'jira_action', subjectKind: 'action_item', subjectId: item.id });
           break;
         case 'confluence':
-          openExtActionDialog(item, 'confluence');
+          openDraftPanel({ kind: 'confluence_page', subjectKind: 'action_item', subjectId: item.id });
           break;
         case 'schedule_meeting':
           draftThenOpen(item, button, 'schedule-meeting/suggest', (d) => `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(d.title || item.description)}&details=${encodeURIComponent(d.details || '')}`, true);
@@ -4063,6 +5061,611 @@
       const el = fields.querySelector(`[name="${name}"]`);
       return el ? el.value.trim() : '';
     }
+
+    // ---------- Draft Panel: generic draft -> refine -> approve -> execute -> redo gate (src/drafts/) ----------
+
+    let draftPanelState = null; // { draft, revisions }
+    let draftMessageContext = null; // { title, participants, occurredAt, bodyText } for teams_reply/email_reply, or null
+    let draftContextRequestSeq = 0; // guards the fire-and-forget context fetch below against a later open() winning the race
+
+    const DRAFT_KIND_TITLES = {
+      teams_reply: 'Teams reply',
+      email_reply: 'Email reply',
+      jira_action: 'Jira',
+      confluence_page: 'Confluence',
+      confluence_dev_cycle_update: 'Document (Confluence)',
+      git_branch_create: 'Start dev cycle: branch',
+      dev_plan: 'Dev cycle: plan',
+      bitbucket_pr_comment: 'PR review comment',
+      pr_open: 'Open PR',
+      jenkins_fix: 'Propose Jenkins fix',
+      jenkins_rebuild: 'Rebuild',
+    };
+
+    function draftPanelRelevant(draftId) {
+      return !!draftPanelState && draftPanelState.draft.id === draftId;
+    }
+
+    // Content shape/renderer varies per draft kind. teams_reply/email_reply
+    // are plain text; jira_action/confluence_page are a create-or-update
+    // form, reusing the same .ext-mode-toggle/.ext-mode-fields CSS the old
+    // per-tool dialog used. Later kinds add their own case here.
+    function draftKindMeta(kind) {
+      if (kind === 'jira_action') {
+        return {
+          render(content) {
+            const mode = content.mode || 'create';
+            return `
+              <div class="ext-mode-toggle">
+                <label><input type="radio" name="draftMode" value="create" ${mode === 'create' ? 'checked' : ''}> Create new issue</label>
+                <label><input type="radio" name="draftMode" value="update" ${mode === 'update' ? 'checked' : ''}> Update existing issue</label>
+              </div>
+              <div class="ext-mode-fields" data-mode="create" ${mode !== 'create' ? 'hidden' : ''}>
+                <label>Project key</label><input name="projectKey" value="${escapeHtml(content.projectKey || '')}" placeholder="e.g. PROJ" />
+                <label>Issue type</label><input name="issueType" value="${escapeHtml(content.issueType || 'Task')}" />
+                <label>Summary</label><input name="summary" value="${escapeHtml(content.summary || '')}" />
+                <label>Description (optional)</label><textarea name="description" rows="3">${escapeHtml(content.description || '')}</textarea>
+              </div>
+              <div class="ext-mode-fields" data-mode="update" ${mode !== 'update' ? 'hidden' : ''}>
+                <label>Issue key</label><input name="issueKey" value="${escapeHtml(content.issueKey || '')}" placeholder="e.g. PROJ-123" />
+                <label>Transition to status (optional)</label><input name="transition" value="${escapeHtml(content.transition || '')}" placeholder="e.g. In Progress, Done" />
+                <label>Comment (optional)</label><textarea name="comment" rows="3">${escapeHtml(content.comment || '')}</textarea>
+              </div>
+            `;
+          },
+          collect() {
+            const modeEl = draftContentBody.querySelector('input[name="draftMode"]:checked');
+            if (!modeEl) return null;
+            const field = (name) => { const el = draftContentBody.querySelector(`[name="${name}"]`); return el ? el.value.trim() : ''; };
+            return {
+              mode: modeEl.value,
+              projectKey: field('projectKey'),
+              issueType: field('issueType'),
+              summary: field('summary'),
+              description: field('description'),
+              issueKey: field('issueKey'),
+              transition: field('transition'),
+              comment: field('comment'),
+            };
+          },
+        };
+      }
+      if (kind === 'confluence_page' || kind === 'confluence_dev_cycle_update') {
+        return {
+          render(content) {
+            const mode = content.mode || 'create';
+            return `
+              <div class="ext-mode-toggle">
+                <label><input type="radio" name="draftMode" value="create" ${mode === 'create' ? 'checked' : ''}> Create new page</label>
+                <label><input type="radio" name="draftMode" value="update" ${mode === 'update' ? 'checked' : ''}> Update existing page</label>
+              </div>
+              <div class="ext-mode-fields" data-mode="create" ${mode !== 'create' ? 'hidden' : ''}>
+                <label>Space key</label><input name="spaceKey" value="${escapeHtml(content.spaceKey || '')}" placeholder="e.g. DEV" />
+                <label>Title</label><input name="title" value="${escapeHtml(content.title || '')}" />
+                <label>Content (markdown)</label><textarea name="content" rows="4">${escapeHtml(content.content || '')}</textarea>
+                <label>Parent page ID (optional)</label><input name="parentId" value="${escapeHtml(content.parentId || '')}" />
+              </div>
+              <div class="ext-mode-fields" data-mode="update" ${mode !== 'update' ? 'hidden' : ''}>
+                <label>Page ID</label><input name="pageId" value="${escapeHtml(content.pageId || '')}" placeholder="e.g. 12345678" />
+                <label>Title</label><input name="title" value="${escapeHtml(content.title || '')}" />
+                <label>Content (markdown)</label><textarea name="content" rows="4">${escapeHtml(content.content || '')}</textarea>
+              </div>
+            `;
+          },
+          collect() {
+            const modeEl = draftContentBody.querySelector('input[name="draftMode"]:checked');
+            if (!modeEl) return null;
+            const mode = modeEl.value;
+            const field = (name) => { const el = draftContentBody.querySelector(`.ext-mode-fields[data-mode="${mode}"] [name="${name}"]`); return el ? el.value.trim() : ''; };
+            return { mode, spaceKey: field('spaceKey'), parentId: field('parentId'), pageId: field('pageId'), title: field('title'), content: field('content') };
+          },
+        };
+      }
+      if (kind === 'git_branch_create') {
+        return {
+          render(content) {
+            return `
+              <label>Branch name</label><input name="branchName" value="${escapeHtml(content.branchName || '')}" />
+              <label>Base branch</label><input name="baseBranch" value="${escapeHtml(content.baseBranch || 'main')}" />
+            `;
+          },
+          collect() {
+            const field = (name) => { const el = draftContentBody.querySelector(`[name="${name}"]`); return el ? el.value.trim() : ''; };
+            return { branchName: field('branchName'), baseBranch: field('baseBranch') };
+          },
+        };
+      }
+      if (kind === 'dev_plan') {
+        return {
+          // Read-only structured summary — a plan's shape (files/tests/risks
+          // arrays) doesn't lend itself to inline field editing the way a
+          // short Jira/Confluence form does; go/no-go is the gate here, not
+          // per-field edits. Refine via chat still fully applies.
+          render(content) {
+            const list = (items, render) => (items && items.length ? `<ul>${items.map(render).join('')}</ul>` : '<p><em>None.</em></p>');
+            return `
+              <p><strong>Understanding:</strong> ${escapeHtml(content.understanding || '')}</p>
+              <p><strong>Approach:</strong> ${escapeHtml(content.approach || '')}</p>
+              <p><strong>Estimated size:</strong> ${escapeHtml(content.estimatedSize || '')}</p>
+              <p><strong>Files:</strong></p>
+              ${list(content.files, (f) => `<li><code>${escapeHtml(f.path)}</code> (${escapeHtml(f.action)}) — ${escapeHtml(f.why)}</li>`)}
+              <p><strong>Tests:</strong></p>
+              ${list(content.tests, (t) => `<li>${escapeHtml(t)}</li>`)}
+              <p><strong>Risks:</strong></p>
+              ${list(content.risks, (r) => `<li><strong>${escapeHtml(r.severity)}:</strong> ${escapeHtml(r.risk)} — ${escapeHtml(r.mitigation)}</li>`)}
+              <p><strong>Open questions:</strong></p>
+              ${list(content.openQuestions, (q) => `<li>${escapeHtml(q)}</li>`)}
+            `;
+          },
+          collect() {
+            return null; // never treated as manually edited — refine via chat instead
+          },
+        };
+      }
+      if (kind === 'pr_open') {
+        return {
+          render(content) {
+            const checkRow = (c) => {
+              const cls = c.status === 'pass' ? 'ok' : c.status === 'skipped' ? 'muted' : c.status;
+              return `<li class="pr-check-${cls}"><strong>${escapeHtml(c.title)}</strong> [${escapeHtml(c.status)}]${c.detail ? ` — ${escapeHtml(c.detail)}` : ''}</li>`;
+            };
+            const deterministic = (content.checks?.deterministic || []).map(checkRow).join('');
+            const verdict = content.checks?.agent?.verdict;
+            const verdictHtml = verdict
+              ? `<p><strong>Self-review verdict:</strong> ${escapeHtml(verdict)} — ${escapeHtml(content.checks.agent.summary || '')}</p>`
+              : '';
+            const overrideHtml = verdict === 'blocked'
+              ? `<label><input type="checkbox" name="overridden" ${content.overridden ? 'checked' : ''}> Open anyway — I've read the gaps</label>`
+              : '';
+            return `
+              <label>Bitbucket project key</label><input name="projectKey" value="${escapeHtml(content.projectKey || '')}" placeholder="e.g. PROJ" />
+              <label>Bitbucket repo slug</label><input name="repoSlug" value="${escapeHtml(content.repoSlug || '')}" placeholder="e.g. officercc" />
+              <label>Title</label><input name="title" value="${escapeHtml(content.title || '')}" />
+              <label>Description (markdown)</label><textarea name="description" rows="8">${escapeHtml(content.description || '')}</textarea>
+              <label>Reviewers (comma-separated usernames)</label><input name="reviewers" value="${escapeHtml((content.reviewers || []).join(', '))}" />
+              <p><strong>Self-review checklist</strong></p>
+              <ul>${deterministic}</ul>
+              ${verdictHtml}
+              ${overrideHtml}
+            `;
+          },
+          collect() {
+            const current = (draftPanelState && draftPanelState.draft.content) || {};
+            const field = (name) => { const el = draftContentBody.querySelector(`[name="${name}"]`); return el ? el.value.trim() : ''; };
+            const overriddenEl = draftContentBody.querySelector('[name="overridden"]');
+            return {
+              ...current,
+              projectKey: field('projectKey'),
+              repoSlug: field('repoSlug'),
+              title: field('title'),
+              description: field('description'),
+              reviewers: field('reviewers').split(',').map((s) => s.trim()).filter(Boolean),
+              overridden: overriddenEl ? overriddenEl.checked : current.overridden,
+            };
+          },
+        };
+      }
+      if (kind === 'jenkins_fix') {
+        return {
+          render(content) {
+            return `
+              <p><strong>Category:</strong> ${escapeHtml(content.category || '')}</p>
+              <p><strong>Summary:</strong> ${escapeHtml(content.summary || '')}</p>
+              ${content.suspectFiles?.length ? `<p><strong>Suspect files:</strong> ${escapeHtml(content.suspectFiles.join(', '))}</p>` : ''}
+              ${content.suspectTests?.length ? `<p><strong>Suspect tests:</strong> ${escapeHtml(content.suspectTests.join(', '))}</p>` : ''}
+              <label>Fix prompt (editable)</label><textarea name="prompt" rows="8">${escapeHtml(content.prompt || '')}</textarea>
+            `;
+          },
+          collect() {
+            const current = (draftPanelState && draftPanelState.draft.content) || {};
+            const el = draftContentBody.querySelector('[name="prompt"]');
+            return el ? { ...current, prompt: el.value } : null;
+          },
+        };
+      }
+      if (kind === 'jenkins_rebuild') {
+        return {
+          render(content) {
+            return `<p>Trigger a fresh build for <code>${escapeHtml(content.branchName || content.jobPath || '')}</code>?</p>`;
+          },
+          collect() {
+            return null;
+          },
+        };
+      }
+      if (kind === 'bitbucket_pr_comment') {
+        return {
+          render(content) {
+            const warning = content.anchorWarning ? `<p><em>${escapeHtml(content.anchorWarning)}</em></p>` : '';
+            return `${warning}<textarea id="draftTextField" rows="5">${escapeHtml(content.text || '')}</textarea>`;
+          },
+          collect() {
+            // Merges with the current content rather than replacing it outright —
+            // mode/anchor/anchorWarning must survive a manual text edit, only
+            // .text itself is user-editable here.
+            const el = document.getElementById('draftTextField');
+            if (!el) return null;
+            const current = (draftPanelState && draftPanelState.draft.content) || {};
+            return { ...current, text: el.value };
+          },
+        };
+      }
+      // Default: plain-text reply (teams_reply/email_reply) — prefixed with a
+      // read-only conversation-context block (original message/sender/time,
+      // fetched separately by openDraftPanel() into draftMessageContext,
+      // since it isn't part of the draft's own content) when available.
+      return {
+        render(content) {
+          const text = (content && content.text) || '';
+          const ctx = draftMessageContext;
+          const context = ctx
+            ? `
+              <div class="draft-context">
+                <div class="draft-context-header">
+                  <strong>${escapeHtml(ctx.title || 'Original message')}</strong>
+                  <span class="draft-context-meta">
+                    ${ctx.participants?.length ? escapeHtml(ctx.participants.join(', ')) + ' · ' : ''}${ctx.occurredAt ? new Date(ctx.occurredAt).toLocaleString() : ''}
+                  </span>
+                </div>
+                <p class="draft-context-body">${escapeHtml(ctx.bodyText || '')}</p>
+              </div>
+            `
+            : '';
+          return `${context}<textarea id="draftTextField" rows="5">${escapeHtml(text)}</textarea>`;
+        },
+        collect() {
+          const el = document.getElementById('draftTextField');
+          if (!el) return null;
+          // Merges with the current content rather than replacing it outright —
+          // gatheredContext (the smart-reply engine's cached tool-search results)
+          // must survive a manual text edit, only .text itself is user-editable.
+          const current = (draftPanelState && draftPanelState.draft.content) || {};
+          return { ...current, text: el.value };
+        },
+      };
+    }
+
+    async function openPrForTicket(ticketKey) {
+      try {
+        const cycle = await fetch(`/api/dev-cycles/for-ticket/${encodeURIComponent(ticketKey)}`).then((r) => r.json());
+        if (!cycle) {
+          alert('Start a dev cycle for this ticket first ("Dev cycle…").');
+          return;
+        }
+        openDraftPanel({ kind: 'pr_open', subjectKind: 'dev_cycle', subjectId: cycle.id });
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    // Opens the auto-drafted Confluence update if prOpenDraft.ts already
+    // created one (blueprint §6 item 2), or creates one fresh on demand
+    // (blueprint §6 item 3) — openDraftPanel's get-or-create flow handles
+    // both cases identically.
+    async function openConfluenceDevCycleDraftForTicket(ticketKey) {
+      try {
+        const cycle = await fetch(`/api/dev-cycles/for-ticket/${encodeURIComponent(ticketKey)}`).then((r) => r.json());
+        if (!cycle) {
+          alert('Start a dev cycle for this ticket first ("Dev cycle…").');
+          return;
+        }
+        openDraftPanel({ kind: 'confluence_dev_cycle_update', subjectKind: 'dev_cycle', subjectId: cycle.id });
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function openDevCyclePanel({ ticketKey, taskId }) {
+      try {
+        const res = await fetch('/api/dev-cycles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticketKey, taskId }),
+        });
+        const cycle = await res.json();
+        if (!res.ok) {
+          alert(cycle.error || 'Failed to start dev cycle.');
+          return;
+        }
+        if (!cycle.branchName) {
+          openDraftPanel({ kind: 'git_branch_create', subjectKind: 'dev_cycle', subjectId: cycle.id });
+        } else {
+          openDraftPanel({ kind: 'dev_plan', subjectKind: 'dev_cycle', subjectId: cycle.id });
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    function renderDraftRevision(rev) {
+      const roleClass = `draft-revision-role-${rev.role}`;
+      const kindClass = rev.kind === 'question' ? ' draft-revision-kind-question' : '';
+      const kindLabel = { instruction: 'You asked', draft: 'Revised draft', answer: 'Answer', manual_edit: 'You edited', note: 'Note', question: 'Speako asks' }[rev.kind] || rev.kind;
+      const text = rev.text ? escapeHtml(rev.text) : rev.kind === 'manual_edit' ? '(edited directly)' : '(no note)';
+      return `<div class="draft-revision ${roleClass}${kindClass}"><div class="draft-revision-kind">${kindLabel}</div><div>${text}</div></div>`;
+    }
+
+    function renderDraftPanel() {
+      if (!draftPanelState) return;
+      const { draft, revisions } = draftPanelState;
+      const meta = draftKindMeta(draft.kind);
+
+      const statusLabels = {
+        generating: 'Drafting…', refining: 'Refining…', executing: 'Working…',
+        ready: 'Ready for review', completed: 'Completed', failed: 'Failed', discarded: 'Discarded',
+        awaiting_clarification: 'Waiting for your answer…',
+      };
+      draftStatus.textContent = statusLabels[draft.status] || draft.status;
+      draftStatus.classList.toggle('draft-status-failed', draft.status === 'failed');
+
+      // 'ready' can approve AND edit content directly; 'awaiting_clarification'
+      // (Speako asked a clarifying question) can only chat back a reply —
+      // Approve and direct content editing stay blocked until it resolves
+      // into a real draft.
+      const canApprove = draft.status === 'ready';
+      const canChat = draft.status === 'ready' || draft.status === 'awaiting_clarification';
+      draftContentBody.innerHTML = draft.content ? meta.render(draft.content) : '<p>No draft yet.</p>';
+      // Generic create/update mode toggle wiring (jira_action/confluence_page)
+      // — a no-op for kinds whose render() didn't emit any .ext-mode-toggle.
+      draftContentBody.querySelectorAll('input[name="draftMode"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          draftContentBody.querySelectorAll('.ext-mode-fields').forEach((div) => { div.hidden = div.dataset.mode !== radio.value; });
+        });
+      });
+      if (!canApprove) {
+        draftContentBody.querySelectorAll('textarea, input').forEach((el) => { el.disabled = true; });
+      }
+
+      draftRedoNote.hidden = !draft.redoOfDraftId;
+      if (draft.redoOfDraftId) draftRedoNote.textContent = 'This is a redo of a previously completed draft.';
+
+      draftHistory.hidden = revisions.length === 0;
+      draftHistoryList.innerHTML = revisions.map(renderDraftRevision).join('');
+      // A pending clarifying question is easy to miss inside a collapsed
+      // <details> disclosure — force it open, and steer the user straight
+      // to the input that answers it.
+      if (draft.status === 'awaiting_clarification') {
+        draftHistory.open = true;
+        draftInstruction.placeholder = "Answer Speako's question…";
+      } else {
+        draftInstruction.placeholder = 'Ask for a change, or ask a question…';
+      }
+
+      draftError.hidden = draft.status !== 'failed';
+      if (draft.status === 'failed') draftError.textContent = draft.error || 'Something went wrong.';
+
+      const busy = ['generating', 'refining', 'executing'].includes(draft.status);
+      draftInstruction.disabled = !canChat || busy;
+      draftRefineBtn.disabled = !canChat || busy;
+      draftDiscardBtn.hidden = !['generating', 'ready', 'refining', 'failed', 'awaiting_clarification'].includes(draft.status);
+
+      draftRedoBtn.hidden = !['completed', 'failed'].includes(draft.status);
+
+      if (canApprove) {
+        draftGateLabel.textContent = `Step ${draft.stage + 1} of ${draft.stage + 1}`;
+        draftApproveBtn.hidden = false;
+        draftApproveBtn.textContent = 'Approve';
+      } else {
+        draftGateLabel.textContent = '';
+        draftApproveBtn.hidden = true;
+      }
+    }
+
+    async function loadDraftPanel(draftId) {
+      const [draftRes, revisionsRes] = await Promise.all([
+        fetch(`/api/drafts/${draftId}`),
+        fetch(`/api/drafts/${draftId}/revisions`),
+      ]);
+      const draft = await draftRes.json();
+      if (!draftRes.ok) throw new Error(draft.error || 'Failed to load draft.');
+      const revisions = await revisionsRes.json();
+      // The panel may have been closed, or moved on to a different draft
+      // (e.g. via redo) while this fetch was in flight — never let a stale
+      // poll response reopen/clobber whatever's actually showing now.
+      if (draftView.style.display === 'none') return;
+      if (draftPanelState !== null && draftPanelState.draft.id !== draftId) return;
+      draftPanelState = { draft, revisions };
+      renderDraftPanel();
+      if (['generating', 'refining', 'executing'].includes(draft.status)) {
+        setTimeout(() => {
+          if (draftPanelRelevant(draftId)) loadDraftPanel(draftId).catch(() => {});
+        }, 1200);
+      }
+    }
+
+    async function openDraftPanel({ kind, subjectKind, subjectId }) {
+      draftTitle.textContent = DRAFT_KIND_TITLES[kind] || kind;
+      draftError.hidden = true;
+      draftHistory.hidden = true;
+      draftRedoNote.hidden = true;
+      // Otherwise a still-in-flight open can show the PREVIOUS draft's status
+      // label (e.g. "Ready for review") next to this one's "Loading…" content
+      // placeholder — confusing, looks stuck even though it's just loading.
+      draftStatus.textContent = '';
+      draftStatus.classList.remove('draft-status-failed');
+      draftContentBody.innerHTML = '<p>Loading…</p>';
+      // Also reset draftPanelState — the sidebar queue stays clickable even
+      // while a draft is open (it's a main-frame panel now, not a modal with
+      // a click-blocking backdrop), so a user can open a second draft before
+      // closing the first. loadDraftPanel()'s stale-response guard compares
+      // against draftPanelState.draft.id to protect a background poll from
+      // clobbering a newer draft — without this reset it instead saw the
+      // PREVIOUS draft's id, decided this fresh load was the stale one, and
+      // silently dropped it, leaving the panel stuck on "Loading…" forever.
+      draftPanelState = null;
+      draftMessageContext = null;
+      const contextSeq = ++draftContextRequestSeq;
+      if ((kind === 'teams_reply' || kind === 'email_reply') && subjectKind === 'task') {
+        fetch(`/api/plate/${encodeURIComponent(subjectId)}/message`)
+          .then((r) => r.json())
+          .then((message) => {
+            if (contextSeq !== draftContextRequestSeq) return; // superseded by a later openDraftPanel() call
+            draftMessageContext = message;
+            if (draftPanelState) renderDraftPanel();
+          })
+          .catch(() => {});
+      }
+      draftReturnView = currentMainFrameView();
+      showDraftView(true);
+      try {
+        const res = await fetch(`/api/drafts/for/${encodeURIComponent(subjectKind)}/${encodeURIComponent(subjectId)}?kind=${encodeURIComponent(kind)}`);
+        let draft = await res.json();
+        if (!draft || draft.status === 'completed' || draft.status === 'discarded') {
+          const startRes = await fetch('/api/drafts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind, subjectId }),
+          });
+          draft = await startRes.json();
+          if (!startRes.ok) throw new Error(draft.error || 'Failed to start draft.');
+        }
+        await loadDraftPanel(draft.id);
+      } catch (err) {
+        draftContentBody.innerHTML = '';
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      }
+    }
+
+    function closeDraftPanel() {
+      showDraftView(false);
+      draftPanelState = null;
+      if (draftReturnView === 'dashboard') showDashboard(true);
+      else if (draftReturnView === 'sessions') showSessionsView(true);
+      else if (draftReturnView === 'prReview') showPrReview(true);
+      else showDashboard(false);
+      draftReturnView = null;
+    }
+
+    /** Opens the panel for a draft whose id is already known (e.g. one of a PR review's staged comment drafts) — skips the kind+subject lookup openDraftPanel() does, since the caller already has the id. */
+    async function openDraftPanelById(draftId, title) {
+      draftTitle.textContent = title || 'Draft';
+      draftError.hidden = true;
+      draftHistory.hidden = true;
+      draftRedoNote.hidden = true;
+      draftStatus.textContent = '';
+      draftStatus.classList.remove('draft-status-failed');
+      draftContentBody.innerHTML = '<p>Loading…</p>';
+      draftPanelState = null;
+      draftMessageContext = null;
+      draftContextRequestSeq++; // invalidates any still-pending openDraftPanel() context fetch
+      draftReturnView = currentMainFrameView();
+      showDraftView(true);
+      try {
+        await loadDraftPanel(draftId);
+      } catch (err) {
+        draftContentBody.innerHTML = '';
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      }
+    }
+
+    async function submitDraftRefine() {
+      if (!draftPanelState) return;
+      const instruction = draftInstruction.value.trim();
+      if (!instruction) return;
+      const draftId = draftPanelState.draft.id;
+      draftInstruction.disabled = true;
+      draftRefineBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/drafts/${draftId}/refine`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruction }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Refine failed.');
+        draftInstruction.value = '';
+        await loadDraftPanel(draftId);
+      } catch (err) {
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      } finally {
+        draftInstruction.disabled = false;
+        draftRefineBtn.disabled = false;
+      }
+    }
+
+    async function submitDraftApprove() {
+      if (!draftPanelState) return;
+      const { draft } = draftPanelState;
+      const meta = draftKindMeta(draft.kind);
+      const edited = meta.collect();
+      draftApproveBtn.disabled = true;
+      try {
+        if (edited && JSON.stringify(edited) !== JSON.stringify(draft.content)) {
+          const patchRes = await fetch(`/api/drafts/${draft.id}/content`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: edited }),
+          });
+          const patchData = await patchRes.json();
+          if (!patchRes.ok) throw new Error(patchData.error || 'Failed to save edits.');
+        }
+        const res = await fetch(`/api/drafts/${draft.id}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Approve failed.');
+        await loadDraftPanel(draft.id);
+        loadDashboardTasks();
+      } catch (err) {
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      } finally {
+        draftApproveBtn.disabled = false;
+      }
+    }
+
+    async function submitDraftDiscard() {
+      if (!draftPanelState) return;
+      const { draft } = draftPanelState;
+      draftDiscardBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/drafts/${draft.id}/discard`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Discard failed.');
+        closeDraftPanel();
+        loadDashboardTasks();
+      } catch (err) {
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      } finally {
+        draftDiscardBtn.disabled = false;
+      }
+    }
+
+    async function submitDraftRedo() {
+      if (!draftPanelState) return;
+      const { draft } = draftPanelState;
+      draftRedoBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/drafts/${draft.id}/redo`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Redo failed.');
+        await loadDraftPanel(data.id);
+      } catch (err) {
+        draftError.textContent = err.message;
+        draftError.hidden = false;
+      } finally {
+        draftRedoBtn.disabled = false;
+      }
+    }
+
+    draftModalClose.addEventListener('click', closeDraftPanel);
+    draftRefineBtn.addEventListener('click', submitDraftRefine);
+    draftInstruction.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitDraftRefine(); }
+    });
+    draftApproveBtn.addEventListener('click', submitDraftApprove);
+    draftDiscardBtn.addEventListener('click', submitDraftDiscard);
+    draftRedoBtn.addEventListener('click', submitDraftRedo);
 
     async function submitExtActionDialog() {
       const { item, tool } = extActionContext;
@@ -4610,6 +6213,7 @@
       mainPauseBtn.hidden = true;
       mainResumeBtn.hidden = true;
       mainStopBtn.hidden = true;
+      chatTextRow.hidden = true;
       saveBtn.disabled = true;
       identifyBtn.disabled = true;
       summarizeBtn.disabled = true;
@@ -4664,9 +6268,13 @@
 
     mainStartBtn.addEventListener('click', async () => {
       if (!activeSessionId) return;
+      const session = sessions.find((s) => s.id === activeSessionId);
+      if (session && (session.sessionKind === 'chat' || session.sessionKind === 'practice')) {
+        startVoice(session.sessionKind, undefined, { resumeSessionId: session.id });
+        return;
+      }
       mainStartBtn.disabled = true;
       try {
-        const session = sessions.find((s) => s.id === activeSessionId);
         await fetch('/api/session/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4697,6 +6305,14 @@
     });
 
     mainStopBtn.addEventListener('click', async () => {
+      // The live-chat/practice lifecycle is entirely separate from meeting
+      // recording (per-client voiceSessions map + voice-stop WS message,
+      // not the single global currentSessionId + /api/session/stop) — the
+      // button just needs to call whichever one is actually live here.
+      if (activeSessionId && activeSessionId === liveVoiceSessionId) {
+        stopVoice();
+        return;
+      }
       mainStopBtn.disabled = true;
       try {
         await fetch('/api/session/stop', { method: 'POST' });
@@ -4820,7 +6436,7 @@
             pushWaveformEnvelope(msg.envelope);
           }
         } else if (msg.type === 'segment') {
-          if (msg.segment.sessionId === activeSessionId && msg.segment.sessionId === liveSessionId) {
+          if (msg.segment.sessionId === activeSessionId && (msg.segment.sessionId === liveSessionId || msg.segment.sessionId === liveVoiceSessionId)) {
             renderSegment(msg.segment);
           }
           scheduleSessionsRefresh();
@@ -4980,6 +6596,7 @@
           // refresh happened to run later.
           refreshSessions().then(() => {
             if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
+            if (dashboardActive && currentDashboardTab === 'meetings') renderDashboardBoard();
           });
         } else if (msg.type === 'calendar-session-created') {
           refreshSessions();
@@ -4987,7 +6604,11 @@
         } else if (msg.type === 'plate-updated') {
           plateSyncBtn.disabled = false;
           plateSyncStatus.textContent = `Last synced ${new Date().toLocaleTimeString()}`;
-          if (!plateOverlay.hidden) loadPlate();
+          // Always refresh, even when the dashboard is closed — badges need
+          // current data regardless of whether the board is visible.
+          loadDashboardTasks();
+          loadMorningBriefing();
+          refreshReviewQueueCount();
         } else if (msg.type === 'codebase-index-progress') {
           if (msg.status === 'started') {
             codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
@@ -5018,29 +6639,33 @@
           msg.type === 'code-change-discarded' ||
           msg.type === 'code-change-failed'
         ) {
-          refreshCodeChangeCell(msg.actionItemId);
-        } else if (msg.type === 'voice-ready') {
+          if (msg.actionItemId) refreshCodeChangeCell(msg.actionItemId);
+          if (msg.taskId) refreshJiraCodeChangeCell(msg.taskId);
+        } else if (msg.type === 'pr-review-ready' || msg.type === 'pr-review-failed') {
+          if (String(msg.taskId) === currentPrReviewTaskId) loadPrReview(msg.taskId);
+        } else if (msg.type === 'pr-review-log') {
+          if (String(msg.taskId) === currentPrReviewTaskId) appendPrReviewLogLine(msg.message);
+        } else if (msg.type === 'draft-updated' || msg.type === 'draft-revision' || msg.type === 'draft-log') {
+          if (draftPanelRelevant(msg.draftId)) loadDraftPanel(msg.draftId).catch(() => {});
+        } else if (msg.type === 'pr-comment-drafts-updated') {
+          if (String(msg.prReviewRequestId) === String(currentPrReviewRequestId)) loadCommentDrafts(msg.prReviewRequestId);
+        } else if (msg.type === 'voice-ready' || msg.type === 'voice-practice-ready') {
           clearTimeout(voiceConnectTimer);
-          voicePanelStatus.textContent = 'Listening…';
-          setVoiceTextInputEnabled(true);
-        } else if (msg.type === 'voice-practice-ready') {
-          clearTimeout(voiceConnectTimer);
-          voicePracticeSessionId = msg.sessionId;
-          voicePanelStatus.textContent = 'Listening…';
-          setVoiceTextInputEnabled(true);
-          refreshSessions();
+          liveVoiceSessionId = msg.sessionId;
+          if (msg.type === 'voice-practice-ready') voicePracticeSessionId = msg.sessionId;
+          refreshSessions().then(() => openSession(msg.sessionId));
         } else if (msg.type === 'voice-function-call') {
-          voicePanelStatus.textContent = `Checking ${msg.tool}…`;
+          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Checking ${msg.tool}…`;
         } else if (msg.type === 'voice-transcript') {
-          appendVoiceLogEntry(msg.role, msg.text);
+          if (activeSessionId === liveVoiceSessionId) appendLiveChatBubble(msg.role, msg.text);
         } else if (msg.type === 'voice-turn-complete') {
-          finalizeVoiceBubble();
+          finalizeLiveChatBubble();
         } else if (msg.type === 'voice-error') {
           clearTimeout(voiceConnectTimer);
-          voicePanelStatus.textContent = `Error: ${msg.error}`;
-          setVoiceTextInputEnabled(false);
+          voiceChatBtn.classList.remove('active');
+          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Voice chat error: ${msg.error}`;
         } else if (msg.type === 'voice-idle-timeout') {
-          voicePanelStatus.textContent = 'Session ended after a period of inactivity.';
+          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = 'Session ended after a period of inactivity.';
           stopVoice();
         }
       };
@@ -5050,16 +6675,22 @@
 
     let voiceMode = null; // 'chat' | 'practice' | null
     let voicePracticeSessionId = null;
+    let liveVoiceSessionId = null; // the session id of a live chat/practice run — mirrors liveSessionId, for the separate per-client voice lifecycle
     let voiceCaptureContext = null;
     let voiceWorkletNode = null;
     let voiceMediaStream = null;
     let voicePlaybackContext = null;
     let voicePlaybackNextTime = 0;
     let voiceConnectTimer = null;
-    let voiceCurrentBubbleEl = null;
-    let voiceCurrentBubbleRole = null;
+    let voiceMuted = false; // live toggle — true means text-only both directions (mic not forwarded, replies not played)
+    let voiceCurrentBubbleEl = null; // the live-chat-log bubble currently being appended to (delta accumulation)
+    let voiceCurrentBubbleRole = null; // 'you' | 'assistant' | null — which role owns that bubble
 
-    function appendVoiceLogEntry(role, text) {
+    // Appends a transcript delta to the live chat log — reuses the current
+    // bubble if the same role is still talking, otherwise starts a fresh one
+    // (mirrors the pre-main-panel floating chat log's exact accumulation
+    // logic, just targeting #liveChatLog instead of a separate overlay).
+    function appendLiveChatBubble(role, text) {
       if (voiceCurrentBubbleEl && voiceCurrentBubbleRole === role) {
         voiceCurrentBubbleEl.textContent += text;
       } else {
@@ -5067,85 +6698,94 @@
         voiceCurrentBubbleEl.className = `voice-log-entry ${role}`;
         voiceCurrentBubbleEl.textContent = text;
         voiceCurrentBubbleRole = role;
-        voicePanelLog.appendChild(voiceCurrentBubbleEl);
+        liveChatLog.appendChild(voiceCurrentBubbleEl);
       }
-      voicePanelLog.scrollTop = voicePanelLog.scrollHeight;
+      liveChatLog.scrollTop = liveChatLog.scrollHeight;
     }
 
-    // Called when a turn genuinely finishes (generationComplete) or when the
-    // user sends a fresh typed message — either way, the next transcript
-    // delta for that role should start its own bubble, not append to a
-    // stale one from a previous turn.
-    function finalizeVoiceBubble() {
+    function finalizeLiveChatBubble() {
       voiceCurrentBubbleEl = null;
       voiceCurrentBubbleRole = null;
     }
 
-    function clearVoicePanelLog() {
-      voicePanelLog.innerHTML = '';
-      finalizeVoiceBubble();
+    function clearLiveChatLog() {
+      liveChatLog.innerHTML = '';
+      finalizeLiveChatBubble();
     }
 
-    function setVoiceTextInputEnabled(enabled) {
-      voicePanelTextInput.disabled = !enabled;
-      voicePanelSendBtn.disabled = !enabled;
-    }
-
-    function sendVoiceText() {
-      const text = voicePanelTextInput.value.trim();
+    function sendChatText() {
+      const text = chatTextInput.value.trim();
       if (!text || !voiceMode || !controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
       controlSocket.send(JSON.stringify({ type: 'voice-text', text }));
-      finalizeVoiceBubble(); // the typed message is its own complete bubble, not a delta to accumulate
-      appendVoiceLogEntry('you', text);
-      finalizeVoiceBubble(); // ...and the *next* thing (spoken or typed) shouldn't append into it either
-      voicePanelTextInput.value = '';
-      voicePanelTextInput.focus();
+      // Typed text never produces a 'voice-transcript' delta (that only
+      // fires for actual spoken-audio transcription) — the server still
+      // persists+broadcasts it as a real segment for the eventual saved
+      // transcript, but the live chat log needs its own optimistic render
+      // or a typed message would silently never appear while chatting.
+      finalizeLiveChatBubble();
+      appendLiveChatBubble('you', text);
+      finalizeLiveChatBubble();
+      chatTextInput.value = '';
+      chatTextInput.focus();
     }
 
-    voicePanelSendBtn.addEventListener('click', sendVoiceText);
-    voicePanelTextInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendVoiceText();
+    chatTextSendBtn.addEventListener('click', sendChatText);
+    chatTextInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendChatText();
     });
+
+    // Live, reconnect-free toggle — text-only both directions while muted
+    // (see appendLiveChatBubble's caller and handleVoiceAudioFrame's early
+    // return above). Disabling the track (not stopping it) is the standard
+    // cheap way to silence a live MediaStreamTrack without tearing down the
+    // WebAudio capture graph, so unmuting resumes instantly.
+    function setVoiceMuted(muted) {
+      voiceMuted = muted;
+      chatMuteBtn.classList.toggle('muted', muted);
+      chatMuteBtn.title = muted ? 'Unmute' : 'Mute (text-only)';
+      chatMuteBtn.querySelector('use').setAttribute('href', muted ? '#icon-mic-off' : '#icon-mic');
+      const track = voiceMediaStream?.getAudioTracks?.()[0];
+      if (track) track.enabled = !muted;
+    }
+
+    chatMuteBtn.addEventListener('click', () => setVoiceMuted(!voiceMuted));
 
     async function startVoice(mode, sourceSessionId, chatOptions) {
       if (voiceMode) return;
       if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) {
-        voicePanelTitleText.textContent = mode === 'practice' ? 'Practicing meeting' : 'Voice chat';
-        voicePanelStatus.textContent = 'Not connected to the server — try again in a moment.';
-        voicePanel.hidden = false;
+        alert('Not connected to the server — try again in a moment.');
         return;
       }
       voiceMode = mode;
       voicePracticeSessionId = null;
-      voicePanelTitleText.textContent = mode === 'practice' ? 'Practicing meeting' : 'Voice chat';
-      voicePanelStatus.textContent = 'Connecting…';
-      voicePanel.hidden = false;
+      clearLiveChatLog();
+      setVoiceMuted(false);
       voiceChatBtn.classList.toggle('active', mode === 'chat');
-      clearVoicePanelLog();
-      setVoiceTextInputEnabled(false);
 
       if (!navigator.mediaDevices?.getUserMedia) {
         // getUserMedia/AudioWorklet are both gated behind a secure context
         // (HTTPS, or the literal hostname "localhost") — undefined here
         // means the page was loaded over plain HTTP via a LAN IP/hostname,
         // not that permission was denied.
-        voicePanelStatus.textContent = 'Voice chat needs a secure context — open this page via http://localhost, not a LAN IP/hostname.';
+        alert('Voice chat needs a secure context — open this page via http://localhost, not a LAN IP/hostname.');
         voiceMode = null;
+        voiceChatBtn.classList.remove('active');
         return;
       }
 
       try {
         voiceMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (err) {
-        voicePanelStatus.textContent = `Microphone access denied: ${err.message}`;
+        alert(`Microphone access denied: ${err.message}`);
         voiceMode = null;
+        voiceChatBtn.classList.remove('active');
         return;
       }
 
       // Everything from here on can fail in ways getUserMedia's catch above
       // doesn't cover (worklet module 404/parse error, unsupported browser,
-      // etc.) — without this try/catch, a rejection here left the panel
-      // stuck on "Connecting…" forever with no feedback and no way to retry.
+      // etc.) — without this try/catch, a rejection here left voiceMode
+      // stuck set forever with no feedback and no way to retry.
       try {
         // 16kHz to match config.sampleRate exactly — no resampling anywhere in this pipeline.
         voiceCaptureContext = new AudioContext({ sampleRate: 16000 });
@@ -5153,41 +6793,43 @@
         const source = voiceCaptureContext.createMediaStreamSource(voiceMediaStream);
         voiceWorkletNode = new AudioWorkletNode(voiceCaptureContext, 'pcm-recorder');
         voiceWorkletNode.port.onmessage = (e) => {
-          if (controlSocket && controlSocket.readyState === WebSocket.OPEN) controlSocket.send(e.data);
+          if (!voiceMuted && controlSocket && controlSocket.readyState === WebSocket.OPEN) controlSocket.send(e.data);
         };
         source.connect(voiceWorkletNode);
       } catch (err) {
-        voicePanelStatus.textContent = `Could not set up audio capture: ${err.message}`;
+        alert(`Could not set up audio capture: ${err.message}`);
         voiceMediaStream?.getTracks().forEach((t) => t.stop());
         voiceCaptureContext?.close();
         voiceMediaStream = null;
         voiceCaptureContext = null;
         voiceWorkletNode = null;
         voiceMode = null;
+        voiceChatBtn.classList.remove('active');
         return;
       }
 
       // The server can also take a while (or fail) to establish the Gemini
       // Live connection — without a timeout, a slow/hung server-side connect
-      // left this stuck on "Connecting…" with no feedback either, same
-      // failure mode as the client-side gaps above.
+      // left this stuck with no feedback either, same failure mode as the
+      // client-side gaps above. There's no session to open yet at this
+      // point (the server only assigns one once connected), so the mic
+      // icon's pulsing '.active' state is the only "something's happening"
+      // cue until voice-ready/voice-practice-ready arrives.
       clearTimeout(voiceConnectTimer);
       voiceConnectTimer = setTimeout(() => {
-        if (voiceMode) {
-          voicePanelStatus.textContent = 'Still trying to connect — the voice service may be unavailable right now.';
-        }
+        if (voiceMode) alert('Still trying to connect — the voice service may be unavailable right now.');
       }, 15_000);
 
       controlSocket.send(JSON.stringify({ type: 'voice-start', mode, sourceSessionId, ...chatOptions }));
     }
 
-    // Idempotent — also used to dismiss the panel when startVoice() bailed
-    // out early (e.g. not connected yet) without voiceMode ever having been set.
+    // Idempotent — also used to bail out cleanly when startVoice() failed
+    // early (e.g. not connected yet) without voiceMode ever having been set.
     function stopVoice() {
       clearTimeout(voiceConnectTimer);
       const wasPractice = voiceMode === 'practice';
       const wasVoiceSession = !!voiceMode; // both 'chat' and 'practice' persist a real session now — see NOTES.md
-      const practiceId = voicePracticeSessionId;
+      const stoppedId = liveVoiceSessionId;
 
       if (voiceMode && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
         controlSocket.send(JSON.stringify({ type: 'voice-stop' }));
@@ -5200,29 +6842,31 @@
       voiceCaptureContext = null;
       voiceMode = null;
       voicePracticeSessionId = null;
-      voicePanel.hidden = true;
+      liveVoiceSessionId = null;
       voiceChatBtn.classList.remove('active');
-      setVoiceTextInputEnabled(false);
 
-      // Jump to the practice session's Coaching tab — real feedback appears
-      // once the server finishes analyzeConversation() and pushes 'coaching',
-      // exactly like a real meeting's, since activeSessionId is now set to it.
-      // Chat sessions also need refreshSessions() now that they persist too
-      // (previously a no-op, since chat left nothing behind to refresh) —
-      // just without the coaching-tab jump, since there's no coaching for chat.
-      if (wasVoiceSession) {
-        if (wasPractice && practiceId) {
-          refreshSessions().then(() => {
-            openSession(practiceId);
-            switchTab('coaching');
-          });
-        } else {
-          refreshSessions();
-        }
+      // Re-opening the just-stopped session reloads its now-final, settled
+      // segments (clearing any residual interim-rendering state) and
+      // refreshes its recording-controls/tab-bar state — for both chat and
+      // practice now, not just practice. Practice additionally jumps to the
+      // Coaching tab — real feedback appears once the server finishes
+      // analyzeConversation() and pushes 'coaching'.
+      if (wasVoiceSession && stoppedId) {
+        refreshSessions().then(() => {
+          openSession(stoppedId);
+          if (wasPractice) switchTab('coaching');
+        });
+      } else if (wasVoiceSession) {
+        refreshSessions();
       }
     }
 
     function handleVoiceAudioFrame(arrayBuffer) {
+      // Muted means text-only, both directions — the model still technically
+      // synthesizes audio server-side (no Gemini reconnect needed to flip
+      // this instantly), the frame is just never played. outputTranscript
+      // keeps flowing into the live chat log regardless, so nothing is lost.
+      if (voiceMuted) return;
       if (!voicePlaybackContext) {
         voicePlaybackContext = new AudioContext({ sampleRate: 24000 });
         voicePlaybackNextTime = voicePlaybackContext.currentTime;
@@ -5239,7 +6883,7 @@
       if (voicePlaybackNextTime < voicePlaybackContext.currentTime) voicePlaybackNextTime = voicePlaybackContext.currentTime;
       src.start(voicePlaybackNextTime);
       voicePlaybackNextTime += buffer.duration;
-      voicePanelStatus.textContent = 'Speaking…';
+      if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = 'Speaking…';
     }
 
     voiceChatBtn.addEventListener('click', () => {
@@ -5252,13 +6896,18 @@
       startVoice('practice', activeSessionId);
     });
 
-    voicePanelStopBtn.addEventListener('click', stopVoice);
-
     setupTriggersDelegation();
     setupSuggestionsDelegation();
 
     refreshSessions();
     connect();
+    // The task queue/Dashboard is now the app's home view — the sidebar's
+    // compact queue is always visible regardless, but the main frame itself
+    // defaults to the full board rather than the old empty "no session
+    // selected" #main state.
+    showDashboard(true);
+    loadMorningBriefing();
+    refreshReviewQueueCount();
   </script>
 </body>
 </html>

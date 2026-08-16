@@ -22,12 +22,14 @@ import {
   endSession,
   insertFinalSegment,
   setPrepStatus,
+  resumeSession,
 } from '../storage/segmentRepository';
 import { LiveVoiceSession, VOICE_TOOL_KEYS } from '../voice/liveVoiceSession';
-import { buildChatInstruction, buildPracticeInstruction } from '../voice/systemInstructions';
+import { buildChatInstruction, buildPracticeInstruction, buildResumeInstruction } from '../voice/systemInstructions';
 import { diarizeSession, deleteUploadedAudio } from '../diarization/diarize';
 import { SUPPORTED_LANGUAGES } from '../languages';
 import { toPlainText } from '../transcriptFormat';
+import { cleanGeminiErrorMessage } from '../gemini/geminiClient';
 import { summarizeAndExtractActionItems } from '../summarization/summarize';
 import {
   getSummary,
@@ -58,7 +60,7 @@ import { getPrepBrief, updatePrepBriefText } from '../storage/prepBriefRepositor
 import { runPrep } from '../prep/PrepService';
 import { MeetingType } from '../prep/meetingTypes';
 import { listUpcomingEvents, isCalendarConfigured } from '../integrations/googleCalendar';
-import { listUpcomingOutlookEvents } from '../integrations/outlookDesktopCalendar';
+import { listUpcomingMicrosoft365Events } from '../integrations/microsoft365Calendar';
 import { writeSummaryFactsToMem0 } from '../prep/writeMemFacts';
 import { analyzeConversation } from '../coaching/analyzeConversation';
 import { saveCoachingFeedback, getCoachingFeedback, CoachingFeedback } from '../storage/coachingRepository';
@@ -84,7 +86,7 @@ import { updateSettings } from '../settingsStore';
 import { ALL_TOOL_KEYS, ToolKey } from '../tools/activeTools';
 import { ALL_FEATURE_KEYS, FEATURE_LABELS } from '../tools/activeFeatures';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
-import { isJiraConfigured, createJiraIssue, updateJiraIssue } from '../integrations/jiraMcp';
+import { isJiraConfigured, createJiraIssue, updateJiraIssue, getJiraIssueDetail } from '../integrations/jiraMcp';
 import { isConfluenceConfigured, createConfluencePage, updateConfluencePage } from '../integrations/confluenceMcp';
 import {
   suggestJiraFields,
@@ -99,14 +101,16 @@ import { isLocalCodebaseConfigured } from '../codebase/indexCodebase';
 import { isWebFactCheckConfigured } from '../factcheck/webFactCheck';
 import { WORKFLOW_STEPS } from '../prep/workflows/workflowSteps';
 import { runExternalMessageIndex } from '../communications/indexExternalMessages';
-import { getExternalMessageIndexSummary, hasAnyExternalMessages } from '../storage/externalMessageRepository';
-import { isMsGraphConfigured } from '../integrations/msGraphAuth';
-import { syncOutlookAndTeams } from '../integrations/msGraphSync';
-import { isOutlookDesktopConfigured, syncOutlookDesktop } from '../integrations/outlookDesktop';
+import { getExternalMessageIndexSummary, hasAnyExternalMessages, getExternalMessageById } from '../storage/externalMessageRepository';
+import { syncOutlookMail } from '../integrations/outlookMailSync';
+import { syncTeamsMessages } from '../integrations/teamsConnectorSync';
+import { runTeamsMessageTriage } from '../communications/teamsMessageTriage';
+import { runEmailTriage } from '../communications/emailTriage';
+import { isWithinBusinessHours } from '../util/businessHours';
 import { getCurrentWeekEvents, importUpcomingEventsThisWeek } from '../calendar/calendarImport';
 import { getSessionIdByCalendarEventId } from '../storage/segmentRepository';
 import { syncTasks } from '../orchestrator/taskSync';
-import { getOpenTasks, dismissTask } from '../storage/taskRepository';
+import { getOpenTasks, getTaskById, dismissTask, updateTaskBoardStatus } from '../storage/taskRepository';
 import {
   isClaudeCodeConfigured,
   resolveLocalRepoPath,
@@ -116,17 +120,41 @@ import {
   applyCodeChangeToRepo,
   pushRepoChanges,
   discardCodeChangeTask,
+  createWorktreeForBranch,
+  removeWorktree,
+  runClaudeCodeReview,
 } from '../integrations/claudeCodeCli';
 import {
   createCodeChangeRequest,
   getCodeChangeRequest,
   getLatestCodeChangeRequestForActionItem,
+  getLatestCodeChangeRequestForTask,
   markCodeChangeReady,
   markCodeChangeFailed,
   markCodeChangeApplied,
   markCodeChangePushed,
   markCodeChangeDiscarded,
 } from '../storage/codeChangeRequestRepository';
+import { pollCodeChangeRequest } from '../integrations/codeChangePoller';
+import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
+import { getPullRequest } from '../integrations/bitbucketServer';
+import { gatherReviewContext, buildReviewPrompt, REVIEW_JSON_SCHEMA } from '../summarization/prReviewContext';
+import {
+  createPrReviewRequest,
+  getPrReviewRequest,
+  getLatestPrReviewRequestForTask,
+  setPrReviewContext,
+  appendPrReviewLog,
+  markPrReviewReady,
+  markPrReviewFailed,
+} from '../storage/prReviewRequestRepository';
+import '../drafts/kinds'; // side-effect only: registers every known draft kind (teams_reply, email_reply, ...) with src/drafts/registry.ts
+import { getDraft, getDraftRevisions, getLatestDraftForSubject, getDraftsForSubject, getDraftsForSubjectPrefix, getActiveDraftsByStatus, DraftSubjectKind } from '../storage/draftRepository';
+import { getTodaysBriefing, saveTodaysBriefing } from '../storage/dailyBriefingRepository';
+import { buildMorningBriefing } from '../summarization/morningBriefing';
+import { prCommentSubjectId } from '../drafts/kinds/bitbucketPrCommentDraft';
+import { setDraftBroadcast, reconcileStuckDrafts, startDraft, refineDraft, editDraftContent, approveDraftGate, discardDraft, redoDraft, DraftConflictError } from '../drafts/draftService';
+import { createDevCycle, getDevCycle, getActiveDevCycleForTicket, BranchType } from '../storage/devCycleRepository';
 
 const SETTINGS_FIELDS = [
   'geminiApiKey',
@@ -143,6 +171,14 @@ const SETTINGS_FIELDS = [
   'bitbucketServerUsername',
   'bitbucketServerToken',
   'bitbucketServerRepos',
+  'jenkinsUrl',
+  'jenkinsUser',
+  'jenkinsApiToken',
+  'jenkinsJobFolders',
+  'jenkinsPollMinutes',
+  'devTrunkBranch',
+  'prePrMaxChangedFiles',
+  'prePrMaxChangedLines',
   'mem0McpUrl',
   'mem0McpApiKey',
   'ragMcpUrl',
@@ -152,14 +188,12 @@ const SETTINGS_FIELDS = [
   'prepWindowMinutes',
   'codebaseLocalPaths',
   'voiceToolKeys',
-  'msGraphClientId',
-  'msGraphTenantId',
-  'msGraphPollMinutes',
-  'msGraphLookbackHours',
-  'outlookDesktopLookbackHours',
+  'emailSyncPollMinutes',
+  'emailSyncLookbackHours',
+  'teamsSyncPollMinutes',
+  'teamsSyncLookbackHours',
   'calendarImportEnabled',
   'calendarImportPollMinutes',
-  'prepEnabled',
   'sentimentEnabled',
   'triggerDetectionEnabled',
   'triggerConfidenceThreshold',
@@ -186,6 +220,9 @@ function serializeSettingValue(key: (typeof SETTINGS_FIELDS)[number]): string {
   }
   if (key === 'bitbucketServerRepos') {
     return (value as { project: string; repo: string }[]).map((r) => `${r.project}/${r.repo}`).join(',');
+  }
+  if (key === 'jenkinsJobFolders') {
+    return (value as { name: string; folderPath: string }[]).map((p) => `${p.name}=${p.folderPath}`).join(',');
   }
   return String(value);
 }
@@ -214,27 +251,33 @@ export class InterfaceServer {
       persistedSessionId?: string;
       persistedSessionKind?: 'practice' | 'chat';
       flushTranscript?: () => void;
+      /** Persists one already-complete turn (a debounced-flushed spoken utterance, or an immediately-final typed message) and broadcasts it as a real 'segment' — the same shape/handler a live meeting's transcript uses, so a live chat/practice session's main-panel view updates the same way. */
+      persistTurn?: (speaker: string, text: string) => void;
       lastActivityAt: number;
     }
   >();
   private codebaseIndexInProgress = false;
   private communicationsIndexInProgress = false;
-  private msGraphSyncInProgress = false;
-  private msGraphLastSyncAt: string | null = null;
-  private msGraphLastError: string | null = null;
-  private outlookDesktopSyncInProgress = false;
-  private outlookDesktopLastSyncAt: string | null = null;
-  private outlookDesktopLastError: string | null = null;
+  private morningBriefingInProgress = false;
+  private emailSyncInProgress = false;
+  private emailSyncLastSyncAt: string | null = null;
+  private emailSyncLastError: string | null = null;
+  private teamsSyncInProgress = false;
+  private teamsSyncLastSyncAt: string | null = null;
+  private teamsSyncLastError: string | null = null;
   private calendarImportInProgress = false;
   private calendarImportLastRunAt: string | null = null;
   private calendarImportLastError: string | null = null;
   private orchestratorSyncInProgress = false;
   private orchestratorLastRunAt: string | null = null;
   private orchestratorLastError: string | null = null;
+  private jenkinsSyncInProgress = false;
+  private jenkinsSyncTimer: NodeJS.Timeout | null = null;
   private scheduleTimer: NodeJS.Timeout | null = null;
   private voiceIdleCheckTimer: NodeJS.Timeout | null = null;
-  private msGraphSyncTimer: NodeJS.Timeout | null = null;
+  private emailSyncTimer: NodeJS.Timeout | null = null;
   private calendarImportTimer: NodeJS.Timeout | null = null;
+  private teamsSyncTimer: NodeJS.Timeout | null = null;
   private orchestratorSyncTimer: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -535,14 +578,14 @@ export class InterfaceServer {
 
     // Never errors on missing calendar config — empty list is the correct
     // "not set up" response, matching every other optional integration.
-    // Google Calendar first if configured; Outlook desktop COM automation as
-    // a fallback (its own separate integration, not merged/deduped with
+    // Google Calendar first if configured; the Microsoft 365 connector as a
+    // fallback (its own separate integration, not merged/deduped with
     // Google's events — see NOTES.md) for calendars Google can't see at all.
     app.get('/api/calendar/upcoming', async (_req, res) => {
       try {
         const events = isCalendarConfigured()
           ? await listUpcomingEvents(config.prepWindowMinutes)
-          : await listUpcomingOutlookEvents(config.prepWindowMinutes);
+          : await listUpcomingMicrosoft365Events(config.prepWindowMinutes);
         res.json(events);
       } catch (err: any) {
         console.error('[calendar] failed to list upcoming events:', err.message);
@@ -594,74 +637,48 @@ export class InterfaceServer {
       res.json({ inProgress: this.communicationsIndexInProgress, sources: getExternalMessageIndexSummary() });
     });
 
-    // Native Outlook/Teams ingestion (Microsoft Graph) — writes raw rows into
-    // the same external_messages table the manual daily-agent path
-    // (docs/EXTERNAL_INGESTION_PROMPT.md) writes to; a separate background
-    // timer (see start()) also calls this automatically every
-    // config.msGraphPollMinutes when configured. This route lets Settings'
-    // "Sync now" button trigger an out-of-cadence run the same way "Index
-    // codebase"/"Index communications" do.
-    app.post('/api/msgraph/sync', (_req, res) => {
-      if (!isMsGraphConfigured()) {
-        res.status(400).json({ error: 'Microsoft Graph is not configured — run `npm run msgraph-auth` first.' });
-        return;
-      }
-      if (this.msGraphSyncInProgress) {
+    // Outlook mail ingestion via the Microsoft 365 Claude connector — writes
+    // raw rows into the same external_messages table the manual daily-agent
+    // path (docs/EXTERNAL_INGESTION_PROMPT.md) writes to; a separate
+    // background timer (see start()) also calls this automatically every
+    // config.emailSyncPollMinutes. This route lets Settings' "Sync now"
+    // button trigger an out-of-cadence run the same way "Index codebase"/
+    // "Index communications" do.
+    app.post('/api/email/sync', (_req, res) => {
+      if (this.emailSyncInProgress) {
         res.json({ started: false, alreadyRunning: true });
         return;
       }
-      this.runMsGraphSync();
+      this.runEmailSync();
       res.json({ started: true });
     });
 
-    app.get('/api/msgraph/status', (_req, res) => {
+    app.get('/api/email/status', (_req, res) => {
       res.json({
-        configured: isMsGraphConfigured(),
-        inProgress: this.msGraphSyncInProgress,
-        lastSyncAt: this.msGraphLastSyncAt,
-        lastError: this.msGraphLastError,
+        inProgress: this.emailSyncInProgress,
+        lastSyncAt: this.emailSyncLastSyncAt,
+        lastError: this.emailSyncLastError,
       });
     });
 
-    // Classic-Outlook-desktop COM automation fallback — see
-    // src/integrations/outlookDesktop.ts's comment for why this exists
-    // alongside the Graph sync above (hybrid/on-prem mailboxes and B2B-guest
-    // identities can't be reached via Graph's cloud-only Mail API). Manual
-    // only, no background timer — Outlook's Object Model Guard can show an
-    // interactive security prompt on first use in a session, so an
-    // unattended poll could silently stall behind it.
-    app.post('/api/outlook-desktop/sync', (_req, res) => {
-      if (!isOutlookDesktopConfigured()) {
-        res.status(400).json({ error: 'Outlook desktop sync is only available on Windows.' });
-        return;
-      }
-      if (this.outlookDesktopSyncInProgress) {
+    // Teams chat ingestion via the Microsoft 365 Claude connector — replaces
+    // the old headless-Chromium DOM scrape (teamsPlaywright.ts, deleted).
+    // Same shape as the email-sync routes above: a background timer (see
+    // start()) also calls this automatically every config.teamsSyncPollMinutes.
+    app.post('/api/teams/sync', (_req, res) => {
+      if (this.teamsSyncInProgress) {
         res.json({ started: false, alreadyRunning: true });
         return;
       }
-      this.outlookDesktopSyncInProgress = true;
-      syncOutlookDesktop()
-        .then((result) => {
-          this.outlookDesktopLastSyncAt = new Date().toISOString();
-          this.outlookDesktopLastError = null;
-          console.log(`[outlook-desktop] synced ${result.emailCount} email(s)`);
-        })
-        .catch((err: any) => {
-          this.outlookDesktopLastError = err.message;
-          console.error('[outlook-desktop] sync failed:', err.message);
-        })
-        .finally(() => {
-          this.outlookDesktopSyncInProgress = false;
-        });
+      this.runTeamsSync();
       res.json({ started: true });
     });
 
-    app.get('/api/outlook-desktop/status', (_req, res) => {
+    app.get('/api/teams/status', (_req, res) => {
       res.json({
-        configured: isOutlookDesktopConfigured(),
-        inProgress: this.outlookDesktopSyncInProgress,
-        lastSyncAt: this.outlookDesktopLastSyncAt,
-        lastError: this.outlookDesktopLastError,
+        inProgress: this.teamsSyncInProgress,
+        lastSyncAt: this.teamsSyncLastSyncAt,
+        lastError: this.teamsSyncLastError,
       });
     });
 
@@ -688,10 +705,6 @@ export class InterfaceServer {
     // calendar view's "Sync now" button get fresh sessions immediately
     // rather than waiting for the next tick.
     app.post('/api/calendar/import', (_req, res) => {
-      if (!isOutlookDesktopConfigured()) {
-        res.status(400).json({ error: 'Outlook desktop calendar import is only available on Windows.' });
-        return;
-      }
       if (this.calendarImportInProgress) {
         res.json({ started: false, alreadyRunning: true });
         return;
@@ -702,7 +715,7 @@ export class InterfaceServer {
 
     app.get('/api/calendar/import/status', (_req, res) => {
       res.json({
-        configured: isOutlookDesktopConfigured() && config.calendarImportEnabled,
+        configured: config.calendarImportEnabled,
         inProgress: this.calendarImportInProgress,
         lastRunAt: this.calendarImportLastRunAt,
         lastError: this.calendarImportLastError,
@@ -724,6 +737,15 @@ export class InterfaceServer {
       res.json({ started: true });
     });
 
+    app.post('/api/jenkins/poll', (_req, res) => {
+      if (this.jenkinsSyncInProgress) {
+        res.json({ started: false, alreadyRunning: true });
+        return;
+      }
+      this.runJenkinsSync();
+      res.json({ started: true });
+    });
+
     app.get('/api/plate/status', (_req, res) => {
       res.json({
         inProgress: this.orchestratorSyncInProgress,
@@ -732,10 +754,38 @@ export class InterfaceServer {
       });
     });
 
+    // The morning digest (src/summarization/morningBriefing.ts) — generated
+    // at most once per day by checkMorningBriefing() below. null until the
+    // first business-hours tick of the day has run.
+    app.get('/api/plate/briefing', (_req, res) => {
+      res.json(getTodaysBriefing() ?? null);
+    });
+
+    // Cross-kind "everything still awaiting your approval" — the end-of-day
+    // review queue (blueprint §9). getActiveDraftsByStatus already exists
+    // for startup reconciliation (reconcileStuckDrafts); this just exposes
+    // the same primitive over HTTP for the Dashboard's review-queue modal.
+    app.get('/api/drafts/pending', (_req, res) => {
+      const drafts = getActiveDraftsByStatus(['ready', 'refining']);
+      res.json(drafts.map((d) => ({ id: d.id, kind: d.kind, subjectKind: d.subjectKind, subjectId: d.subjectId, createdAt: d.createdAt })));
+    });
+
     app.post('/api/plate/:id/dismiss', (req, res) => {
       dismissTask(Number(req.params.id));
       this.broadcast({ type: 'plate-updated' });
       res.json({ dismissed: true });
+    });
+
+    // Dashboard kanban drag-and-drop — moves a task between columns.
+    app.post('/api/plate/:id/status', (req, res) => {
+      const boardStatus = req.body?.boardStatus;
+      if (!['todo', 'in_progress', 'done'].includes(boardStatus)) {
+        res.status(400).json({ error: 'boardStatus must be one of: todo, in_progress, done' });
+        return;
+      }
+      updateTaskBoardStatus(Number(req.params.id), boardStatus);
+      this.broadcast({ type: 'plate-updated' });
+      res.json({ updated: true });
     });
 
     app.post('/api/session/stop', (_req, res) => {
@@ -1342,6 +1392,241 @@ export class InterfaceServer {
       res.json(request ?? null);
     });
 
+    // Same "Implement with Claude Code" engine as the action-item route
+    // above, just originating from a Jira Dashboard card instead of a
+    // meeting action item — startClaudeCodeTask/pollCodeChangeRequest and
+    // the approve/push/discard routes below are already origin-agnostic.
+    app.post('/api/plate/:id/implement', async (req, res) => {
+      const taskId = Number(req.params.id);
+      const task = getTaskById(taskId);
+      if (!task || task.source !== 'jira') {
+        res.status(404).json({ error: 'Unknown Jira task.' });
+        return;
+      }
+      const existing = getLatestCodeChangeRequestForTask(taskId);
+      if (existing && existing.status === 'running') {
+        res.json({ started: false, alreadyRunning: true, requestId: existing.id });
+        return;
+      }
+      if (!isClaudeCodeConfigured()) {
+        res.status(400).json({ error: 'No local codebase configured — see Settings > Local codebase indexing.' });
+        return;
+      }
+      const configuredRepos = config.codebaseLocalPaths;
+      const repoName =
+        typeof req.body?.repoName === 'string' && req.body.repoName
+          ? req.body.repoName
+          : configuredRepos.length === 1
+            ? configuredRepos[0].name
+            : null;
+      if (!repoName) {
+        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
+        return;
+      }
+      let repoPath: string;
+      try {
+        repoPath = resolveLocalRepoPath(repoName);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+
+      try {
+        const prompt = `Implement this Jira ticket.\n\n${task.title}${task.description ? `\n\n${task.description}` : ''}`;
+        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath);
+        const request = createCodeChangeRequest({ taskId, repoName, repoPath, cliSessionId });
+        this.pollCodeChangeRequest(request.id).catch((err: any) => console.error('[claude-code] polling failed:', err.message));
+        this.broadcast({ type: 'code-change-started', taskId, requestId: request.id });
+        res.json({ started: true, requestId: request.id });
+      } catch (err: any) {
+        console.error('[claude-code] failed to start task:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/plate/:id/code-change', (req, res) => {
+      const taskId = Number(req.params.id);
+      const request = getLatestCodeChangeRequestForTask(taskId);
+      res.json(request ?? null);
+    });
+
+    // The reply-draft view's conversation-context section — a task sourced
+    // from teams_message/email_message carries the original message's id as
+    // externalRef (see taskSync.ts), which is also external_messages.id.
+    // Returns null (not 404) for a task with no matching message (e.g. any
+    // other source, or a message row that's aged out) — the frontend just
+    // omits the context section in that case.
+    app.get('/api/plate/:id/message', (req, res) => {
+      const taskId = Number(req.params.id);
+      const task = getTaskById(taskId);
+      if (!task || (task.source !== 'teams_message' && task.source !== 'email_message')) {
+        res.json(null);
+        return;
+      }
+      const message = getExternalMessageById(task.externalRef);
+      res.json(message ?? null);
+    });
+
+    // Real PR review: checks the linked Jira ticket (+ related Confluence
+    // docs) first for context, checks out the PR's actual branch into an
+    // isolated worktree, then runs a read-only Claude Code review against
+    // the real codebase — not just a diff string. Shown in its own dedicated
+    // window (src/interface/public/index.html's #prReviewView). Findings are
+    // never posted automatically — staging them into bitbucket_pr_comment
+    // drafts (POST /api/pr-reviews/:id/stage below) and approving each one
+    // through the generic draft gate is the only path to a real Bitbucket
+    // write. Responds immediately; the real work happens in the background
+    // (a single awaited claude -p call, not a detached agent — no separate
+    // poll loop needed, see claudeCodeCli.ts).
+    app.post('/api/plate/:id/review', async (req, res) => {
+      const taskId = Number(req.params.id);
+      const task = getTaskById(taskId);
+      if (!task || task.source !== 'bitbucket_pr') {
+        res.status(404).json({ error: 'Unknown Bitbucket task.' });
+        return;
+      }
+      const existing = getLatestPrReviewRequestForTask(taskId);
+      if (existing && existing.status === 'running') {
+        res.json({ started: false, alreadyRunning: true, requestId: existing.id });
+        return;
+      }
+      const match = task.externalRef.match(/^([^/]+)\/([^#]+)#(\d+)/);
+      if (!match) {
+        res.status(400).json({ error: 'Could not parse project/repo/PR id from this task.' });
+        return;
+      }
+      const [, projectKey, repoSlug, prId] = match;
+      if (!isClaudeCodeConfigured()) {
+        res.status(400).json({ error: 'No local codebase configured — see Settings > Local codebase indexing.' });
+        return;
+      }
+      const configuredRepos = config.codebaseLocalPaths;
+      const repoName =
+        typeof req.body?.repoName === 'string' && req.body.repoName
+          ? req.body.repoName
+          : configuredRepos.length === 1
+            ? configuredRepos[0].name
+            : null;
+      if (!repoName) {
+        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
+        return;
+      }
+      let repoPath: string;
+      try {
+        repoPath = resolveLocalRepoPath(repoName);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+
+      try {
+        const pr = await getPullRequest(projectKey, repoSlug, Number(prId));
+        if (!pr.fromRefDisplayId) {
+          res.status(400).json({ error: 'Could not determine the PR\'s source branch.' });
+          return;
+        }
+        const request = createPrReviewRequest({ taskId, repoName, branchName: pr.fromRefDisplayId });
+        res.json({ started: true, requestId: request.id });
+
+        // Progress line, persisted (so reopening the window mid-run still
+        // shows history-so-far) and broadcast live — the whole run is one
+        // long await with no other visible signal otherwise, and it was
+        // reported as looking "stuck" without this.
+        const log = (message: string) => {
+          appendPrReviewLog(request.id, message);
+          this.broadcast({ type: 'pr-review-log', taskId, requestId: request.id, message });
+        };
+
+        (async () => {
+          let worktreePath: string | null = null;
+          try {
+            log(`Fetched PR details — source branch "${pr.fromRefDisplayId}".`);
+            log('Checking linked Jira ticket(s) and related Confluence docs…');
+            const context = await gatherReviewContext(pr);
+            setPrReviewContext(request.id, {
+              jiraIssues: context.jiraIssues.map((i) => ({ key: i.key, summary: i.summary, status: i.status })),
+              confluencePages: context.confluencePages.map((p) => ({ title: p.title })),
+            });
+            log(
+              context.jiraIssues.length || context.confluencePages.length
+                ? `Found ${context.jiraIssues.length} Jira ticket(s) and ${context.confluencePages.length} Confluence page(s).`
+                : 'No linked Jira ticket or related Confluence docs found.'
+            );
+            log(`Checking out ${pr.fromRefDisplayId} into an isolated worktree…`);
+            worktreePath = await createWorktreeForBranch(repoPath, pr.fromRefDisplayId!);
+            log('Worktree ready — running the Claude Code review (this can take a few minutes)…');
+            const prompt = buildReviewPrompt(pr, context);
+            const result = await runClaudeCodeReview(prompt, worktreePath, { jsonSchema: REVIEW_JSON_SCHEMA, onProgress: log });
+            if (result.isError || !result.structuredOutput) {
+              log('Review failed.');
+              markPrReviewFailed(request.id, result.isError ? result.resultText || 'Claude Code returned an error.' : 'Claude Code did not return a structured result.');
+              this.broadcast({ type: 'pr-review-failed', taskId, requestId: request.id });
+            } else {
+              log('Review complete.');
+              markPrReviewReady(request.id, result.structuredOutput);
+              this.broadcast({ type: 'pr-review-ready', taskId, requestId: request.id });
+            }
+          } catch (err: any) {
+            console.error('[pr-review] failed:', err.message);
+            log(`Failed: ${err.message}`);
+            markPrReviewFailed(request.id, err.message);
+            this.broadcast({ type: 'pr-review-failed', taskId, requestId: request.id });
+          } finally {
+            if (worktreePath) {
+              log('Cleaning up worktree…');
+              try {
+                await removeWorktree(worktreePath, repoPath);
+              } catch (err: any) {
+                console.error('[pr-review] failed to remove worktree:', err.message);
+              }
+            }
+          }
+        })();
+      } catch (err: any) {
+        console.error('[pr-review] failed to start:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/plate/:id/review', (req, res) => {
+      const taskId = Number(req.params.id);
+      const request = getLatestPrReviewRequestForTask(taskId);
+      res.json(request ?? null);
+    });
+
+    // Idempotent: re-POSTing an already-staged review returns the existing
+    // drafts rather than creating duplicates, unless ?force=1 — each of the
+    // review's findings becomes its own bitbucket_pr_comment draft, gated
+    // through the normal generic draft routes (/api/drafts/:id/refine|approve|discard|redo).
+    app.post('/api/pr-reviews/:id/stage', async (req, res) => {
+      const requestId = Number(req.params.id);
+      const request = getPrReviewRequest(requestId);
+      if (!request || !request.review) {
+        res.status(400).json({ error: 'This review has no findings to stage yet.' });
+        return;
+      }
+      const force = req.query.force === '1';
+      const existing = getDraftsForSubjectPrefix('pr_review_request', `${requestId}:`, 'bitbucket_pr_comment');
+      if (existing.length && !force) {
+        res.json(existing);
+        return;
+      }
+      try {
+        const drafts = [];
+        for (let findingIndex = 0; findingIndex < request.review.findings.length; findingIndex++) {
+          drafts.push(await startDraft({ kind: 'bitbucket_pr_comment', subjectId: prCommentSubjectId(requestId, findingIndex) }));
+        }
+        res.json(drafts);
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/pr-reviews/:id/comment-drafts', (req, res) => {
+      const requestId = Number(req.params.id);
+      res.json(getDraftsForSubjectPrefix('pr_review_request', `${requestId}:`, 'bitbucket_pr_comment'));
+    });
+
     app.post('/api/code-change-requests/:id/approve', async (req, res) => {
       const id = Number(req.params.id);
       const request = getCodeChangeRequest(id);
@@ -1354,11 +1639,12 @@ export class InterfaceServer {
         return;
       }
       try {
-        const actionItem = getActionItem(request.actionItemId);
-        const commitMessage = `Implement: ${(actionItem?.description ?? 'action item').slice(0, 200)}`;
+        const actionItem = request.actionItemId ? getActionItem(request.actionItemId) : undefined;
+        const task = request.taskId ? getTaskById(request.taskId) : undefined;
+        const commitMessage = `Implement: ${(actionItem?.description ?? task?.title ?? 'action item').slice(0, 200)}`;
         await applyCodeChangeToRepo(request.diff ?? '', request.repoPath, commitMessage);
         markCodeChangeApplied(id);
-        this.broadcast({ type: 'code-change-applied', actionItemId: request.actionItemId, requestId: id });
+        this.broadcast({ type: 'code-change-applied', actionItemId: request.actionItemId, taskId: request.taskId, requestId: id });
         res.json(getCodeChangeRequest(id));
       } catch (err: any) {
         console.error('[claude-code] approve failed:', err.message);
@@ -1382,7 +1668,7 @@ export class InterfaceServer {
       try {
         await pushRepoChanges(request.repoPath);
         markCodeChangePushed(id);
-        this.broadcast({ type: 'code-change-pushed', actionItemId: request.actionItemId, requestId: id });
+        this.broadcast({ type: 'code-change-pushed', actionItemId: request.actionItemId, taskId: request.taskId, requestId: id });
         res.json(getCodeChangeRequest(id));
       } catch (err: any) {
         console.error('[claude-code] push failed:', err.message);
@@ -1409,7 +1695,7 @@ export class InterfaceServer {
         }
         if (worktreePath) await discardCodeChangeTask(request.cliSessionId, worktreePath, request.repoPath);
         markCodeChangeDiscarded(id);
-        this.broadcast({ type: 'code-change-discarded', actionItemId: request.actionItemId, requestId: id });
+        this.broadcast({ type: 'code-change-discarded', actionItemId: request.actionItemId, taskId: request.taskId, requestId: id });
         res.json(getCodeChangeRequest(id));
       } catch (err: any) {
         console.error('[claude-code] discard failed:', err.message);
@@ -1584,7 +1870,7 @@ export class InterfaceServer {
         res.json(query);
       } catch (err: any) {
         console.error('[live-qa] failed:', err.message);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: cleanGeminiErrorMessage(err) });
       }
     });
 
@@ -1602,8 +1888,14 @@ export class InterfaceServer {
       }
     });
 
+    this.registerDraftRoutes(app);
+    this.registerDevCycleRoutes(app);
+
     this.httpServer = http.createServer(app);
     this.wss = new WebSocketServer({ server: this.httpServer });
+
+    setDraftBroadcast((event) => this.broadcast(event));
+    reconcileStuckDrafts().catch((err: any) => console.error('[drafts] failed to reconcile stuck drafts on startup:', err.message));
 
     this.wss.on('connection', (client) => {
       client.send(JSON.stringify({ type: 'status', recording: !!this.currentSessionId, sessionId: this.currentSessionId, paused: this.paused }));
@@ -1642,6 +1934,7 @@ export class InterfaceServer {
             activeTools: Array.isArray(msg.activeTools)
               ? msg.activeTools.filter((t: unknown): t is string => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
               : undefined,
+            resumeSessionId: typeof msg.resumeSessionId === 'string' ? msg.resumeSessionId : undefined,
           };
           this.startVoiceSession(client, msg.mode, msg.sourceSessionId, chatOptions).catch((err: any) => {
             console.error('[voice] failed to start session:', err.message);
@@ -1652,8 +1945,14 @@ export class InterfaceServer {
         } else if (msg.type === 'voice-text' && typeof msg.text === 'string' && msg.text.trim()) {
           const state = this.voiceSessions.get(client);
           if (state) {
-            state.session.sendText(msg.text.trim());
+            const text = msg.text.trim();
+            state.session.sendText(text);
             state.lastActivityAt = Date.now();
+            // Typed text never generates an inputTranscript event (that's
+            // audio-transcription-only) — persist it directly instead of
+            // relying on the debounced spoken-turn buffer, since it's
+            // already a complete, ready turn with nothing to accumulate.
+            state.persistTurn?.('You', text);
           }
         }
       });
@@ -1672,10 +1971,18 @@ export class InterfaceServer {
     client: WebSocket,
     mode: 'chat' | 'practice',
     sourceSessionId?: string,
-    chatOptions?: { name?: string; languageCode?: string; activeTools?: string[] }
+    chatOptions?: { name?: string; languageCode?: string; activeTools?: string[]; resumeSessionId?: string }
   ): Promise<void> {
     if (this.voiceSessions.has(client)) return;
     if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+
+    // Resuming an already-started (now ended) chat/practice session — a
+    // distinct concept from sourceSessionId (practice's *originating
+    // meeting*, only relevant for a first run). Reuses that session's own
+    // stored tool selection rather than chatOptions.activeTools, which the
+    // "click Resume" UI has no fresh tool-picker to populate.
+    const resumeSession_ = chatOptions?.resumeSessionId ? getSession(chatOptions.resumeSessionId) : undefined;
+    if (chatOptions?.resumeSessionId && !resumeSession_) throw new Error('Unknown session to resume.');
 
     // A chat session created via the New Session modal's "Chat with AI"
     // button carries its own explicit tool selection (chatOptions.activeTools,
@@ -1684,7 +1991,9 @@ export class InterfaceServer {
     // Settings > Voice chat tools default, same as always. Either way,
     // still filtered down to whichever are actually configured — picking a
     // tool here does nothing on its own if it has no real credentials/path.
-    const requestedTools: string[] = (mode === 'chat' ? chatOptions?.activeTools : undefined) ?? config.voiceToolKeys;
+    const requestedTools: string[] = resumeSession_
+      ? resumeSession_.activeTools ?? config.voiceToolKeys
+      : (mode === 'chat' ? chatOptions?.activeTools : undefined) ?? config.voiceToolKeys;
     const configuredTools = requestedTools.filter((tool): tool is ToolKey => {
       if (!VOICE_TOOL_KEYS.includes(tool as ToolKey)) return false; // ignore anything outside the eligible ceiling (stale setting, manual edit, non-voice-eligible tool picked in the modal)
       switch (tool) {
@@ -1711,7 +2020,18 @@ export class InterfaceServer {
     let persistedSessionId: string | undefined;
     let persistedSessionKind: 'practice' | 'chat' | undefined;
 
-    if (mode === 'practice') {
+    if (resumeSession_) {
+      // Gemini Live has no cross-connection memory of its own — "resuming"
+      // means a brand-new Live connection, seeded with the prior transcript,
+      // reusing the same session id/row so new turns keep appending to it
+      // (same "new pipeline, same persisted row" pattern meeting resume
+      // already uses via resumeSession() clearing ended_at).
+      persistedSessionId = resumeSession_.id;
+      persistedSessionKind = resumeSession_.sessionKind === 'practice' ? 'practice' : 'chat';
+      resumeSession(persistedSessionId);
+      const priorTranscript = toPlainText(getSegmentsForSession(persistedSessionId));
+      systemInstruction = buildResumeInstruction(priorTranscript);
+    } else if (mode === 'practice') {
       if (!sourceSessionId) throw new Error('Practice mode requires sourceSessionId.');
       const source = getSession(sourceSessionId);
       if (!source) throw new Error('Unknown source session.');
@@ -1776,12 +2096,24 @@ export class InterfaceServer {
     });
 
     let flushTranscript: (() => void) | undefined;
+    let persistTurn: ((speaker: string, text: string) => void) | undefined;
 
     if (persistedSessionId) {
       const finalSessionId = persistedSessionId;
       const assistantLabel = persistedSessionKind === 'practice' ? 'Practice Partner' : 'Assistant';
       const sessionStart = Date.now();
-      let lastEndMs = 0;
+      // Resuming continues the timeline rather than restarting it at 0 —
+      // otherwise a resumed round's segments would sort before the prior
+      // round's later ones once displayed (getSegmentsForSession orders by
+      // start_ms), scrambling the transcript's actual chronology. baseOffsetMs
+      // (not just lastEndMs) has to carry forward too, since `now` below is
+      // computed relative to *this* connection's own sessionStart — without
+      // adding it back in, a resumed round's endMs would be smaller than its
+      // own startMs (this round's tiny elapsed-so-far vs. the prior round's
+      // already-large lastEndMs).
+      const priorSegments = resumeSession_ ? getSegmentsForSession(finalSessionId) : [];
+      const baseOffsetMs = priorSegments.length ? Math.max(...priorSegments.map((s) => s.endMs)) : 0;
+      let lastEndMs = baseOffsetMs;
       // Confirmed via real Live API traffic: transcription deltas never carry
       // finished:true (despite the field existing in the type), and
       // generationComplete can fire before every trailing transcript/audio
@@ -1794,10 +2126,15 @@ export class InterfaceServer {
       let outputBuffer = '';
       let flushTimer: NodeJS.Timeout | null = null;
 
-      const persistTurn = (speaker: string, text: string) => {
+      // Broadcasting the same 'segment' shape/message a live meeting's
+      // transcript uses lets the main panel render chat/practice turns via
+      // the exact same renderSegment() path — no separate rendering model.
+      persistTurn = (speaker: string, text: string) => {
         if (!text.trim()) return;
-        const now = Date.now() - sessionStart;
-        insertFinalSegment({ sessionId: finalSessionId, speaker, startMs: lastEndMs, endMs: now, text: text.trim(), isFinal: true });
+        const now = baseOffsetMs + (Date.now() - sessionStart);
+        const segment = { sessionId: finalSessionId, speaker, startMs: lastEndMs, endMs: now, text: text.trim(), isFinal: true };
+        insertFinalSegment(segment);
+        this.broadcast({ type: 'segment', segment });
         lastEndMs = now;
       };
       flushTranscript = () => {
@@ -1805,8 +2142,8 @@ export class InterfaceServer {
           clearTimeout(flushTimer);
           flushTimer = null;
         }
-        persistTurn('You', inputBuffer);
-        persistTurn(assistantLabel, outputBuffer);
+        persistTurn!('You', inputBuffer);
+        persistTurn!(assistantLabel, outputBuffer);
         inputBuffer = '';
         outputBuffer = '';
       };
@@ -1858,7 +2195,7 @@ export class InterfaceServer {
       connected.catch(() => {}); // the abort rejects `connected` too — already handled above, don't crash on an unhandled rejection
       throw err;
     }
-    this.voiceSessions.set(client, { session: liveSession, persistedSessionId, persistedSessionKind, flushTranscript, lastActivityAt: Date.now() });
+    this.voiceSessions.set(client, { session: liveSession, persistedSessionId, persistedSessionKind, flushTranscript, persistTurn, lastActivityAt: Date.now() });
 
     if (client.readyState === WebSocket.OPEN) {
       client.send(
@@ -1923,19 +2260,24 @@ export class InterfaceServer {
       this.checkScheduledSessions();
       this.checkScheduledEndSessions();
       this.checkReminders();
+      this.checkMorningBriefing();
     }, 20_000);
     this.voiceIdleCheckTimer = setInterval(() => this.checkIdleVoiceSessions(), 30_000);
-    this.msGraphSyncTimer = setInterval(() => this.runMsGraphSync(), config.msGraphPollMinutes * 60_000);
+    this.emailSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runEmailSync(); }, config.emailSyncPollMinutes * 60_000);
     this.calendarImportTimer = setInterval(() => this.runCalendarImport(), config.calendarImportPollMinutes * 60_000);
-    this.orchestratorSyncTimer = setInterval(() => this.runOrchestratorSync(), config.orchestratorPollMinutes * 60_000);
+    this.orchestratorSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runOrchestratorSync(); }, config.orchestratorPollMinutes * 60_000);
+    this.jenkinsSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runJenkinsSync(); }, config.jenkinsPollMinutes * 60_000);
+    this.teamsSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runTeamsSync(); }, config.teamsSyncPollMinutes * 60_000);
   }
 
   stop(): void {
     if (this.scheduleTimer) clearInterval(this.scheduleTimer);
     if (this.voiceIdleCheckTimer) clearInterval(this.voiceIdleCheckTimer);
-    if (this.msGraphSyncTimer) clearInterval(this.msGraphSyncTimer);
+    if (this.emailSyncTimer) clearInterval(this.emailSyncTimer);
     if (this.calendarImportTimer) clearInterval(this.calendarImportTimer);
     if (this.orchestratorSyncTimer) clearInterval(this.orchestratorSyncTimer);
+    if (this.jenkinsSyncTimer) clearInterval(this.jenkinsSyncTimer);
+    if (this.teamsSyncTimer) clearInterval(this.teamsSyncTimer);
     for (const [client] of this.voiceSessions) this.stopVoiceSession(client);
     this.wss.close();
     this.httpServer.close();
@@ -1943,41 +2285,44 @@ export class InterfaceServer {
 
   /**
    * Fire-and-forget — called both by the poll timer and the manual "Sync
-   * now" route. Skipped silently (not an error) when unconfigured, same as
-   * the calendar poller's rationale elsewhere: most installs won't have this
-   * set up, and a 15-minute timer logging "not configured" every tick would
-   * be noise.
+   * now" route. Pulls Outlook mail via the Microsoft 365 Claude connector
+   * (outlookMailSync.ts) — no "is this configured" check the way the old
+   * direct-Graph integration needed, since the connector is a machine-level
+   * `claude mcp` registration outside Speako's own config surface; a genuine
+   * dispatch failure just surfaces as a caught error below.
    */
-  private runMsGraphSync(): void {
-    if (this.msGraphSyncInProgress || !isMsGraphConfigured()) return;
-    this.msGraphSyncInProgress = true;
-    syncOutlookAndTeams()
-      .then((result) => {
-        this.msGraphLastSyncAt = new Date().toISOString();
-        this.msGraphLastError = null;
-        console.log(`[msgraph] synced ${result.emailCount} email(s), ${result.chatMessageCount} chat message(s)`);
+  private runEmailSync(): void {
+    if (this.emailSyncInProgress) return;
+    this.emailSyncInProgress = true;
+    syncOutlookMail()
+      .then(async (result) => {
+        this.emailSyncLastSyncAt = new Date().toISOString();
+        this.emailSyncLastError = null;
+        console.log(`[email-sync] synced ${result.emailCount} email(s)`);
+        // Chain email triage + task reflection onto the sync that just ran —
+        // same "don't wait for the next orchestrator tick" convention as
+        // runTeamsSync().
+        await runEmailTriage();
+        await syncTasks();
+        this.broadcast({ type: 'plate-updated' });
       })
       .catch((err: any) => {
-        this.msGraphLastError = err.message;
-        console.error('[msgraph] sync failed:', err.message);
+        this.emailSyncLastError = err.message;
+        console.error('[email-sync] sync failed:', err.message);
       })
       .finally(() => {
-        this.msGraphSyncInProgress = false;
+        this.emailSyncInProgress = false;
       });
   }
 
   /**
    * Fire-and-forget, called both by the poll timer and the manual "Sync
-   * calendar" route. Runs on a timer despite the same Outlook Object Model
-   * Guard risk documented on /api/outlook-desktop/sync above — a deliberate,
-   * explicitly-requested exception to that precedent for this feature (see
-   * NOTES.md); the underlying export script's 60s timeout at least keeps a
-   * stuck run from hanging the poll loop forever. Broadcasts one
-   * 'calendar-session-created' event per newly-imported session so the
-   * sidebar and calendar view can refresh without a manual reload.
+   * calendar" route. Broadcasts one 'calendar-session-created' event per
+   * newly-imported session so the sidebar and calendar view can refresh
+   * without a manual reload.
    */
   private runCalendarImport(): void {
-    if (this.calendarImportInProgress || !isOutlookDesktopConfigured() || !config.calendarImportEnabled) return;
+    if (this.calendarImportInProgress || !config.calendarImportEnabled) return;
     this.calendarImportInProgress = true;
     importUpcomingEventsThisWeek((sessionId, event) => {
       this.broadcast({ type: 'calendar-session-created', sessionId, eventId: event.id, name: event.title });
@@ -1997,9 +2342,41 @@ export class InterfaceServer {
   }
 
   /**
+   * Fire-and-forget, called both by the poll timer (config.teamsSyncPollMinutes)
+   * and the manual "Sync now" route/button — same dual-trigger shape as
+   * runEmailSync/runCalendarImport above. Pulls new messages via the
+   * Microsoft 365 Claude connector (teamsConnectorSync.ts), triages them
+   * (draft a reply if directed at you, otherwise just summarize —
+   * src/communications/teamsMessageTriage.ts), then reflects them into the
+   * unified tasks board immediately rather than waiting for the next
+   * orchestrator tick.
+   */
+  private runTeamsSync(): void {
+    if (this.teamsSyncInProgress) return;
+    this.teamsSyncInProgress = true;
+    syncTeamsMessages()
+      .then(async (result) => {
+        console.log(`[teams-sync] synced ${result.messageCount} message(s)`);
+        const triageResult = await runTeamsMessageTriage();
+        console.log(`[teams-sync] triaged ${triageResult.triaged} message(s)`);
+        await syncTasks();
+        this.teamsSyncLastSyncAt = new Date().toISOString();
+        this.teamsSyncLastError = null;
+        this.broadcast({ type: 'plate-updated' });
+      })
+      .catch((err: any) => {
+        this.teamsSyncLastError = err.message;
+        console.error('[teams-sync] sync failed:', err.message);
+      })
+      .finally(() => {
+        this.teamsSyncInProgress = false;
+      });
+  }
+
+  /**
    * Fire-and-forget, called both by the poll timer and the manual "Sync
    * now" route (POST /api/plate/sync) — same shape as runCalendarImport/
-   * runMsGraphSync above. syncTasks() already isolates per-source failures
+   * runEmailSync above. syncTasks() already isolates per-source failures
    * (Promise.allSettled), so this outer catch only ever fires on something
    * syncTasks() itself couldn't recover from (it shouldn't, in practice).
    */
@@ -2022,69 +2399,29 @@ export class InterfaceServer {
   }
 
   /**
-   * Polls `claude agents --json` (see claudeCodeCli.ts's getTaskInfo) every
-   * 10s until the background agent reaches a terminal state, capped at 20
-   * minutes so a runaway/stuck task can't poll forever.
-   *
-   * 'blocked' is NOT a reliable failure signal on its own — confirmed via a
-   * real smoke test: an agent that finishes editing and then tries the
-   * (intentionally denied) `git commit` also ends up in state 'blocked',
-   * even though the edit itself succeeded and is exactly the diff we want
-   * to offer for approval. So 'done' and 'blocked' are both treated as
-   * "may have produced a usable diff" — the actual failure test is whether
-   * getWorktreeDiff() comes back empty, not the state string itself.
-   * 'stopped'/'failed'/'error' still fail immediately since there is
-   * nothing to double-check a diff against there.
+   * Fire-and-forget — same dual-trigger shape (poll timer + manual route) as
+   * runOrchestratorSync/runEmailSync. Skipped silently when Jenkins isn't
+   * configured (pollJenkinsBuilds itself no-ops in that case) — a poller
+   * ticking every few minutes logging "not configured" would be noise for
+   * the majority of installs without a Jenkins instance set up. Re-syncs My
+   * Plate immediately after so a freshly-observed red build doesn't wait for
+   * the separate, independently-scheduled orchestrator poll to show up.
    */
-  private async pollCodeChangeRequest(requestId: number): Promise<void> {
-    const POLL_INTERVAL_MS = 10_000;
-    const MAX_ATTEMPTS = 120; // 20 minutes
-    const MAYBE_DONE_STATES = ['done', 'blocked'];
-    const FAILURE_STATES = ['stopped', 'failed', 'error'];
+  private runJenkinsSync(): void {
+    if (this.jenkinsSyncInProgress) return;
+    this.jenkinsSyncInProgress = true;
+    pollJenkinsBuilds((event) => this.broadcast(event))
+      .then(() => syncTasks())
+      .then(() => this.broadcast({ type: 'plate-updated' }))
+      .catch((err: any) => console.error('[jenkins] poll failed:', err.message))
+      .finally(() => {
+        this.jenkinsSyncInProgress = false;
+      });
+  }
 
-    const request = getCodeChangeRequest(requestId);
-    if (!request) return;
-
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      let info;
-      try {
-        info = await getTaskInfo(request.cliSessionId);
-      } catch (err: any) {
-        console.error(`[claude-code] status check failed for request ${requestId}:`, err.message);
-        continue; // transient CLI hiccup — keep trying rather than failing the whole task on one bad poll
-      }
-      if (!info) continue; // not registered yet, or briefly missing — keep polling
-
-      if (MAYBE_DONE_STATES.includes(info.state)) {
-        try {
-          const diff = await getWorktreeDiff(info.cwd);
-          if (!diff.trim()) {
-            const error = `Claude Code agent ended in state "${info.state}" with no file changes — check \`claude logs ${request.cliSessionId}\` for details.`;
-            markCodeChangeFailed(requestId, error);
-            this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error });
-            return;
-          }
-          markCodeChangeReady(requestId, info.cwd, diff);
-          this.broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, requestId });
-        } catch (err: any) {
-          markCodeChangeFailed(requestId, err.message);
-          this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error: err.message });
-        }
-        return;
-      }
-      if (FAILURE_STATES.includes(info.state)) {
-        const error = `Claude Code agent ended in state "${info.state}" — check \`claude logs ${request.cliSessionId}\` for details.`;
-        markCodeChangeFailed(requestId, error);
-        this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error });
-        return;
-      }
-      // else: still running (or an unrecognized-but-non-terminal status) — keep polling
-    }
-
-    const timeoutError = 'Timed out waiting for the Claude Code agent after 20 minutes.';
-    markCodeChangeFailed(requestId, timeoutError);
-    this.broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, requestId, error: timeoutError });
+  /** Thin wrapper so existing call sites keep working unchanged — the actual polling loop now lives in src/integrations/codeChangePoller.ts, extracted so a draft kind's execute() (src/drafts/kinds/devPlanDraft.ts) can trigger the same loop without needing access to this instance. */
+  private pollCodeChangeRequest(requestId: number): Promise<void> {
+    return pollCodeChangeRequest(requestId, (event) => this.broadcast(event));
   }
 
   /** Safety net, not a UX feature — see config.voiceSessionIdleTimeoutMs. */
@@ -2132,6 +2469,28 @@ export class InterfaceServer {
     this.onStopHandler();
     this.currentSessionId = null;
     this.broadcast({ type: 'session-stop', sessionId: stoppedId });
+  }
+
+  /**
+   * Generates the morning digest at most once per calendar day — folded into
+   * the existing 20s scheduleTimer tick rather than its own timer, since
+   * checking "does today's row exist yet" is a single cheap indexed SELECT
+   * (getTodaysBriefing). Gated on business hours the same way every other
+   * automatic-only (not manual-route) poller is, so it doesn't fire at 2am
+   * the first time the server happens to tick after midnight.
+   */
+  private checkMorningBriefing(): void {
+    if (this.morningBriefingInProgress || !isWithinBusinessHours() || getTodaysBriefing()) return;
+    this.morningBriefingInProgress = true;
+    buildMorningBriefing()
+      .then((content) => {
+        saveTodaysBriefing(content);
+        this.broadcast({ type: 'plate-updated' });
+      })
+      .catch((err: any) => console.error('[morning-briefing] failed to generate:', err.message))
+      .finally(() => {
+        this.morningBriefingInProgress = false;
+      });
   }
 
   /**
@@ -2268,6 +2627,194 @@ export class InterfaceServer {
 
   broadcastTranscriptionError(sessionId: string, message: string): void {
     this.broadcast({ type: 'transcription-error', sessionId, message });
+  }
+
+  /**
+   * The generic draft -> refine -> approve -> execute -> redo gate (src/drafts/)
+   * — every write-surface migrated onto it (see draftService.ts's header
+   * comment) shares these same eight routes rather than each growing its
+   * own approve/refine/redo endpoints. Kind-specific behavior lives entirely
+   * in each kind's DraftHandler (src/drafts/kinds/), never here.
+   */
+  private registerDraftRoutes(app: express.Express): void {
+    const handleDraftError = (err: any, res: express.Response) => {
+      if (err instanceof DraftConflictError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      console.error('[drafts] request failed:', err.message);
+      res.status(500).json({ error: cleanGeminiErrorMessage(err) });
+    };
+
+    app.post('/api/drafts', async (req, res) => {
+      const kind = typeof req.body?.kind === 'string' ? req.body.kind : '';
+      const subjectId = req.body?.subjectId;
+      if (!kind || subjectId === undefined || subjectId === null) {
+        res.status(400).json({ error: 'kind and subjectId are required.' });
+        return;
+      }
+      try {
+        const draft = await startDraft({ kind, subjectId });
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+
+    app.get('/api/drafts/:id', (req, res) => {
+      const draft = getDraft(Number(req.params.id));
+      if (!draft) {
+        res.status(404).json({ error: 'Unknown draft.' });
+        return;
+      }
+      res.json(draft);
+    });
+
+    app.get('/api/drafts/:id/revisions', (req, res) => {
+      res.json(getDraftRevisions(Number(req.params.id)));
+    });
+
+    // Returns null (not 404) when absent — mirrors GET /api/plate/:id/code-change's
+    // convention, since "no draft yet" is a normal, expected state here.
+    app.get('/api/drafts/for/:subjectKind/:subjectId', (req, res) => {
+      const subjectKind = req.params.subjectKind as DraftSubjectKind;
+      const kind = typeof req.query.kind === 'string' ? req.query.kind : undefined;
+      if (kind) {
+        res.json(getLatestDraftForSubject(subjectKind, req.params.subjectId, kind) ?? null);
+        return;
+      }
+      res.json(getDraftsForSubject(subjectKind, req.params.subjectId));
+    });
+
+    app.post('/api/drafts/:id/refine', async (req, res) => {
+      const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : '';
+      if (!instruction) {
+        res.status(400).json({ error: 'An instruction is required.' });
+        return;
+      }
+      try {
+        const draft = await refineDraft(Number(req.params.id), instruction);
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+
+    app.patch('/api/drafts/:id/content', (req, res) => {
+      if (req.body?.content === undefined) {
+        res.status(400).json({ error: 'content is required.' });
+        return;
+      }
+      try {
+        const draft = editDraftContent(Number(req.params.id), req.body.content);
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+
+    app.post('/api/drafts/:id/approve', async (req, res) => {
+      const gate = typeof req.body?.gate === 'string' ? req.body.gate : undefined;
+      try {
+        const draft = await approveDraftGate(Number(req.params.id), gate);
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+
+    app.post('/api/drafts/:id/discard', async (req, res) => {
+      try {
+        const draft = await discardDraft(Number(req.params.id));
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+
+    app.post('/api/drafts/:id/redo', async (req, res) => {
+      const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : undefined;
+      try {
+        const draft = await redoDraft(Number(req.params.id), instruction);
+        res.json(draft);
+      } catch (err: any) {
+        handleDraftError(err, res);
+      }
+    });
+  }
+
+  /**
+   * The Jira -> branch -> plan -> implement dev cycle (src/dev/). Branch
+   * creation and the plan-before-code step themselves are generic draft
+   * kinds (git_branch_create/dev_plan, src/drafts/kinds/) reachable through
+   * the routes registered above — these two routes are just for creating a
+   * cycle in the first place and reading its current state back for the UI.
+   */
+  private registerDevCycleRoutes(app: express.Express): void {
+    app.post('/api/dev-cycles', async (req, res) => {
+      const ticketKey = typeof req.body?.ticketKey === 'string' ? req.body.ticketKey.trim() : '';
+      const taskId = typeof req.body?.taskId === 'number' ? req.body.taskId : undefined;
+      const branchType: BranchType = (['feature', 'bugfix', 'hotfix', 'chore'] as const).includes(req.body?.branchType) ? req.body.branchType : 'feature';
+      if (!ticketKey) {
+        res.status(400).json({ error: 'ticketKey is required.' });
+        return;
+      }
+      const configuredRepos = config.codebaseLocalPaths;
+      const repoName =
+        typeof req.body?.repoName === 'string' && req.body.repoName
+          ? req.body.repoName
+          : configuredRepos.length === 1
+            ? configuredRepos[0].name
+            : null;
+      if (!repoName) {
+        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
+        return;
+      }
+      const existing = getActiveDevCycleForTicket(ticketKey);
+      if (existing) {
+        res.json(existing);
+        return;
+      }
+      if (!isJiraConfigured()) {
+        res.status(400).json({ error: 'Jira is not configured — see NOTES.md.' });
+        return;
+      }
+      let repoPath: string;
+      try {
+        repoPath = resolveLocalRepoPath(repoName);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      try {
+        const ticket = await getJiraIssueDetail(ticketKey);
+        if (!ticket) {
+          res.status(404).json({ error: `Jira issue ${ticketKey} was not found.` });
+          return;
+        }
+        // A cycle only ever gets created to start work on a ticket — the
+        // real lifecycle-state enforcement (validating this against the
+        // ticket's actual live status/transitions) is the Jira lifecycle
+        // engine's job (src/dev/lifecycle.ts).
+        const cycle = createDevCycle({ ticketKey, taskId, repoName, repoPath, branchType, baseBranch: config.devTrunkBranch, lifecycleState: 'Dev Ready' });
+        res.json(cycle);
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/dev-cycles/:id', (req, res) => {
+      const cycle = getDevCycle(Number(req.params.id));
+      if (!cycle) {
+        res.status(404).json({ error: 'Unknown dev cycle.' });
+        return;
+      }
+      res.json(cycle);
+    });
+
+    app.get('/api/dev-cycles/for-ticket/:ticketKey', (req, res) => {
+      res.json(getActiveDevCycleForTicket(req.params.ticketKey) ?? null);
+    });
   }
 
   private broadcast(payload: unknown): void {
