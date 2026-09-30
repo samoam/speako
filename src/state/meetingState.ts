@@ -3,8 +3,7 @@ import { toPlainText } from '../transcriptFormat';
 import { TranscriptSegment } from '../types';
 import { getMeetingState, upsertMeetingState, OpenItem } from '../storage/meetingStateRepository';
 import { countSegmentsForSession, getSegmentsForSessionSince } from '../storage/segmentRepository';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateJson } from '../ai/aiRouter';
 
 const MEETING_STATE_PROMPT = `You maintain running state for a live meeting so later reasoning steps don't have to re-read the whole transcript.
 You'll get the PREVIOUS SUMMARY, the PREVIOUS OPEN ITEMS (each with a stable id), and the NEW TRANSCRIPT said since the last update.
@@ -68,8 +67,16 @@ export function seedMeetingState(sessionId: string, prepBriefText: string): void
  * detection's cooldown/rate-limit. Never throws; logs and gives up on
  * failure so a state-update hiccup can't affect live transcription/triggers.
  */
+const updatesInFlight = new Set<string>();
+
 export async function updateMeetingState(sessionId: string): Promise<void> {
-  if (!config.meetingStateEnabled || !config.geminiApiKey) return;
+  if (!config.meetingStateEnabled) return;
+  // Claude (the preferred route) takes ~5s, long enough for the next cadence
+  // tick to land mid-update; a second concurrent run would read the same
+  // lastUpdatedSegmentCount and race the first one's write. The skipped
+  // segments are simply picked up by the next update.
+  if (updatesInFlight.has(sessionId)) return;
+  updatesInFlight.add(sessionId);
 
   try {
     const existing = getMeetingState(sessionId);
@@ -83,22 +90,14 @@ export async function updateMeetingState(sessionId: string): Promise<void> {
     const newText = toPlainText(newSegments as TranscriptSegment[]);
     const prompt = `${MEETING_STATE_PROMPT}\n\nPREVIOUS SUMMARY:\n${previousSummary || '(none yet)'}\n\nPREVIOUS OPEN ITEMS:\n${JSON.stringify(previousOpenItems)}\n\nNEW TRANSCRIPT:\n${newText}`;
 
-    const response = await getGeminiClient().models.generateContent({
-      // Fires every config.meetingStateUpdateEverySegments segments for the
-      // whole meeting — mechanical merge/extraction task, not creative
-      // reasoning, so the cheaper tier + disabled thinking cost nothing in
-      // quality here. See docs/gemini-cost-optimization.
-      model: config.geminiFastModel,
-      contents: prompt,
-      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest/fast tier — 1 is the smallest accepted budget.
-      config: { responseMimeType: 'application/json', responseSchema: MEETING_STATE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage('updateMeetingState', response);
-
-    const parsed = JSON.parse(response.text ?? '{}');
+    // Was the biggest Gemini output-token line item (gemini_usage, Aug–Sep 2026) —
+    // a background merge nobody waits on, so the subscription route's latency is free.
+    const parsed = await generateJson<Partial<MeetingStateSnapshot>>('meetingState', 'updateMeetingState', prompt, MEETING_STATE_SCHEMA);
     const totalCount = countSegmentsForSession(sessionId);
     upsertMeetingState(sessionId, parsed.rollingSummary ?? previousSummary, parsed.openItems ?? previousOpenItems, totalCount);
   } catch (err: any) {
     console.error(`[meeting-state] update failed for session ${sessionId}:`, err.message);
+  } finally {
+    updatesInFlight.delete(sessionId);
   }
 }

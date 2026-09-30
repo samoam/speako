@@ -1,6 +1,4 @@
-import { config } from '../../config';
-import { getGeminiClient } from '../../gemini/geminiClient';
-import { logGeminiUsage } from '../../gemini/logUsage';
+import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { createConfluencePage, updateConfluencePage } from '../../integrations/confluenceMcp';
 import { Draft } from '../../storage/draftRepository';
 import { buildRefinementBlock } from '../refinePrompt';
@@ -74,7 +72,7 @@ export async function generateConfluencePageDraft<TSubject>(
   }
 
   if (input.instruction) {
-    if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+    if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
     const priorContent = input.priorContent as ConfluencePageDraftContent;
     const refinementBlock = buildRefinementBlock(input.history, priorContent);
     const prompt = `You are helping refine a drafted Confluence page create/update (seeded from ${opts.sourceLabel}) through a chat-style conversation.
@@ -84,13 +82,7 @@ ${refinementBlock}
 The user's newest instruction: ${JSON.stringify(input.instruction)}
 
 If they're asking for a CHANGE, return the full revised draft object (every field, not just the one that changed) under "draft" — keep "mode" as-is unless they explicitly ask to switch between creating a new page and updating an existing one. If they're asking a QUESTION about the draft or your reasoning, answer it directly and leave the draft alone.`;
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiFastModel,
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: CONFLUENCE_REFINE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage(opts.logLabel, response);
-    const parsed = JSON.parse(response.text ?? '{}');
+    const parsed = await generateJson<any>('draft', opts.logLabel, prompt, CONFLUENCE_REFINE_SCHEMA);
     if (parsed.action === 'answer') {
       return { mode: 'answer', text: parsed.answer || "I don't have anything more specific to add." };
     }

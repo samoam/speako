@@ -2,6 +2,7 @@ import { config } from '../config';
 import { getGeminiClient } from '../gemini/geminiClient';
 import { logGeminiUsage } from '../gemini/logUsage';
 import { pcmToWav } from '../audio-capture/wavHeader';
+import { generateText } from '../ai/aiRouter';
 
 const SCRIPT_PROMPT = `You are writing a short, natural two-host podcast-style discussion (hosts named
 "HostA" and "HostB") for someone to listen to instead of reading. Cover the material below in a
@@ -15,19 +16,11 @@ material below.
 Format strictly as alternating lines, each starting with "HostA:" or "HostB:" and nothing else on the
 line (no scene directions, no headers).`;
 
-/** Turns a block of gathered context (a session's summary, or RAG-retrieved excerpts) into a two-host dialogue script. Creative writing, not extraction — stays on config.geminiModel, not the fast tier. */
+/** Turns a block of gathered context (a session's summary, or RAG-retrieved excerpts) into a two-host dialogue script. Creative writing, not extraction — the stronger tier of the AI router. The TTS step below has no non-Gemini equivalent and stays on Gemini. */
 export async function generateAudioOverviewScript(subjectLabel: string, contextBlock: string): Promise<string> {
-  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
-
   const prompt = `${SCRIPT_PROMPT}\n\nSubject: ${subjectLabel}\n\nMaterial:\n${contextBlock}`;
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: prompt,
-  });
-  logGeminiUsage('generateAudioOverviewScript', response);
-
-  const script = (response.text ?? '').trim();
-  if (!script) throw new Error('Gemini returned an empty script.');
+  const script = await generateText('audioScript', 'generateAudioOverviewScript', prompt);
+  if (!script) throw new Error('The AI returned an empty script.');
   return script;
 }
 

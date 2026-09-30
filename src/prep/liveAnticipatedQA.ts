@@ -2,6 +2,7 @@ import { config } from '../config';
 import { embedText, cosineSimilarity } from '../rag/rag';
 import { getGeminiClient } from '../gemini/geminiClient';
 import { logGeminiUsage } from '../gemini/logUsage';
+import { askJev, isJevConfigured } from '../integrations/typesafeJev';
 import { LikelyQuestion, QuestionToAsk } from './anticipateQA';
 
 export interface EmbeddedLikelyQuestion {
@@ -76,8 +77,40 @@ const ASK_NOW_SCHEMA = {
  * Never throws; returns [] on failure so a hiccup here can't affect the rest
  * of the live pipeline.
  */
+/**
+ * The prompt above asks Gemini to be conservative; with Jev each candidate is
+ * a 0-1 truth value, so "conservative" becomes a bar above the 0.5 midpoint.
+ */
+const JEV_ASK_NOW_THRESHOLD = 0.7;
+
+async function checkWithJev(rollingSummary: string, remaining: QuestionToAsk[]): Promise<QuestionToAsk[] | null> {
+  if (!isJevConfigured()) return null;
+  try {
+    const answers = await askJev(
+      `Live meeting summary so far:\n${rollingSummary || '(nothing yet)'}`,
+      Object.fromEntries(
+        remaining.map((q, i) => [
+          `q${i}`,
+          { type: 'noul' as const, instructions: `Right now is clearly the moment to ask this prepared question, because its topic just came up: ${JSON.stringify(q.question)}` },
+        ])
+      ),
+      'checkQuestionsToAskRelevance'
+    );
+    return remaining.filter((_q, i) => {
+      const answer = answers[`q${i}`];
+      return answer?.type === 'noul' && answer.noul >= JEV_ASK_NOW_THRESHOLD;
+    });
+  } catch (err: any) {
+    console.error('[prep] Jev questions-to-ask check failed, falling back to Gemini:', err.message);
+    return null;
+  }
+}
+
 export async function checkQuestionsToAskRelevance(rollingSummary: string, remaining: QuestionToAsk[]): Promise<QuestionToAsk[]> {
-  if (remaining.length === 0 || !config.geminiApiKey) return [];
+  if (remaining.length === 0) return [];
+  const viaJev = await checkWithJev(rollingSummary, remaining);
+  if (viaJev) return viaJev;
+  if (!config.geminiApiKey) return [];
 
   try {
     const prompt = `${ASK_NOW_PROMPT}\n\nMeeting so far:\n${rollingSummary || '(nothing yet)'}\n\nCandidate questions:\n${JSON.stringify(remaining.map((q) => q.question))}`;

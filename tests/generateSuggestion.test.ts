@@ -4,6 +4,7 @@ import { generateSuggestion } from '../src/suggestions/generate';
 import * as codebaseIndexModule from '../src/codebase/indexCodebase';
 import * as searchCodeModule from '../src/codebase/searchCode';
 import * as geminiClientModule from '../src/gemini/geminiClient';
+import { updateSettings } from '../src/settingsStore';
 import { TriggerEvent } from '../src/storage/triggerRepository';
 
 function codeTrigger(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
@@ -21,9 +22,19 @@ function codeTrigger(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
 }
 
 function mockGemini(text: string) {
-  return mock.method(geminiClientModule, 'getGeminiClient', () => ({
+  // The AI router skips its Gemini route entirely without a key, so a mocked client still needs one set.
+  updateSettings({ geminiApiKey: 'fake-key-for-test' });
+  const spy = mock.method(geminiClientModule, 'getGeminiClient', () => ({
     models: { generateContent: async () => ({ text }) },
   }));
+  return {
+    mock: {
+      restore: () => {
+        spy.mock.restore();
+        updateSettings({ geminiApiKey: '' });
+      },
+    },
+  };
 }
 
 test('generateSuggestion: code_reference is suppressed outright when local codebase indexing is not configured', async () => {

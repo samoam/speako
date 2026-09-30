@@ -1,10 +1,7 @@
-import { config } from '../config';
 import { TranscriptSegment } from '../types';
 import { toPlainText } from '../transcriptFormat';
 import { NewActionItem, ActionItemType, ACTION_ITEM_TYPES } from '../storage/summaryRepository';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
-import { createSharedCache } from '../gemini/contextCache';
+import { generateJson, generateJsonWithModel } from '../ai/aiRouter';
 
 const SUMMARY_SYSTEM_PROMPT = `You are an expert meeting assistant. You will be given a speaker-labeled
 transcript of a recorded conversation or meeting. Produce a concise but comprehensive summary.
@@ -80,38 +77,13 @@ export interface GeneratedSummary {
   modelUsed: string;
 }
 
-/** transcriptOrCache: pass a cachedContent resource name (from createSharedCache) to avoid resending the transcript, or the raw transcript string to send it inline. */
-async function summarizeSessionFrom(transcriptOrCache: { transcript: string } | { cachedContent: string }): Promise<GeneratedSummary> {
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: 'cachedContent' in transcriptOrCache ? SUMMARY_SYSTEM_PROMPT : `${SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n${transcriptOrCache.transcript}`,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: SUMMARY_SCHEMA,
-      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
-      thinkingConfig: { thinkingBudget: 1 },
-      ...('cachedContent' in transcriptOrCache ? { cachedContent: transcriptOrCache.cachedContent } : {}),
-    },
-  });
-  logGeminiUsage('summarizeSession', response);
-  const parsed = JSON.parse(response.text ?? '{}');
-  return { ...parsed, topics: parsed.topics ?? [], modelUsed: config.geminiModel };
+async function summarizeTranscript(transcript: string): Promise<GeneratedSummary> {
+  const { value, model } = await generateJsonWithModel<any>('sessionSummary', 'summarizeSession', `${SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`, SUMMARY_SCHEMA);
+  return { ...value, topics: value.topics ?? [], modelUsed: model };
 }
 
-async function extractActionItemsFrom(transcriptOrCache: { transcript: string } | { cachedContent: string }): Promise<NewActionItem[]> {
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: 'cachedContent' in transcriptOrCache ? ACTION_ITEMS_SYSTEM_PROMPT : `${ACTION_ITEMS_SYSTEM_PROMPT}\n\nTranscript:\n${transcriptOrCache.transcript}`,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: ACTION_ITEMS_SCHEMA,
-      // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
-      thinkingConfig: { thinkingBudget: 1 },
-      ...('cachedContent' in transcriptOrCache ? { cachedContent: transcriptOrCache.cachedContent } : {}),
-    },
-  });
-  logGeminiUsage('extractActionItems', response);
-  const parsed = JSON.parse(response.text ?? '{}');
+async function extractActionItemsFromTranscript(transcript: string): Promise<NewActionItem[]> {
+  const parsed = await generateJson<any>('sessionSummary', 'extractActionItems', `${ACTION_ITEMS_SYSTEM_PROMPT}\n\nTranscript:\n${transcript}`, ACTION_ITEMS_SCHEMA);
   const items = (parsed.actionItems ?? []) as NewActionItem[];
   // Defensive even though the schema enum should already guarantee this —
   // never trust a model response as blindly as a schema-validated one.
@@ -122,34 +94,21 @@ async function extractActionItemsFrom(transcriptOrCache: { transcript: string } 
 }
 
 export async function summarizeSession(segments: TranscriptSegment[]): Promise<GeneratedSummary> {
-  if (!config.geminiApiKey) {
-    throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
-  }
-  return summarizeSessionFrom({ transcript: toPlainText(segments) });
+  return summarizeTranscript(toPlainText(segments));
 }
 
 export async function extractActionItems(segments: TranscriptSegment[]): Promise<NewActionItem[]> {
-  if (!config.geminiApiKey) {
-    throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
-  }
-  return extractActionItemsFrom({ transcript: toPlainText(segments) });
+  return extractActionItemsFromTranscript(toPlainText(segments));
 }
 
 /**
- * Runs summarizeSession + extractActionItems together, sharing one explicit
- * Gemini cache for the (potentially large) transcript both calls would
- * otherwise send in full — cached reads bill at ~10% of normal input price.
- * Falls back to sending the transcript inline to both (today's behavior) if
- * the transcript's too short to be worth caching or cache creation fails for
- * any reason. Preferred over calling summarizeSession/extractActionItems
- * separately when both are needed, which is every real call site today.
+ * Both calls in parallel. This used to share one explicit Gemini context
+ * cache for the transcript (cached reads bill at ~10% of input price); with
+ * the AI router sending these to the Claude Code subscription first, there's
+ * no per-token bill for a cache to cut, so each call just carries the
+ * transcript inline — including on the Gemini failover path.
  */
 export async function summarizeAndExtractActionItems(segments: TranscriptSegment[]): Promise<[GeneratedSummary, NewActionItem[]]> {
-  if (!config.geminiApiKey) {
-    throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
-  }
   const transcript = toPlainText(segments);
-  const cachedContent = await createSharedCache(config.geminiModel, transcript);
-  const source = cachedContent ? { cachedContent } : { transcript };
-  return Promise.all([summarizeSessionFrom(source), extractActionItemsFrom(source)]);
+  return Promise.all([summarizeTranscript(transcript), extractActionItemsFromTranscript(transcript)]);
 }

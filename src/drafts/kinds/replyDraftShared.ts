@@ -1,6 +1,4 @@
-import { config } from '../../config';
-import { getGeminiClient } from '../../gemini/geminiClient';
-import { logGeminiUsage } from '../../gemini/logUsage';
+import { generateJson, generateText, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { Task, TaskSource, getTaskById } from '../../storage/taskRepository';
 import { getExternalMessageById, ExternalMessage } from '../../storage/externalMessageRepository';
 import { DraftGenerateInput, DraftGenerateResult } from '../types';
@@ -52,7 +50,7 @@ const REPLY_ENVELOPE_SCHEMA = {
   required: ['action', 'draftText'],
 };
 
-function buildMessageBlock(task: Task, message: ExternalMessage | undefined): string {
+export function buildMessageBlock(task: Task, message: ExternalMessage | undefined): string {
   if (!message) return `Original message: ${task.description || task.title}`;
   const from = message.participants.length ? message.participants.join(', ') : 'unknown sender';
   return `Original message (from ${from}, ${message.occurredAt}):\n"""${message.bodyText}"""`;
@@ -70,7 +68,7 @@ function buildMessageBlock(task: Task, message: ExternalMessage | undefined): st
 export async function generateReplyDraft(input: DraftGenerateInput<Task>, opts: ReplyDraftPromptOptions): Promise<DraftGenerateResult> {
   if (input.redo) {
     const priorText = (input.redo.priorContent as ReplyDraftContent | undefined)?.text ?? '';
-    if (!config.geminiApiKey) {
+    if (!hasTextProvider()) {
       return { mode: 'draft', content: { text: priorText } };
     }
     const prompt = `You previously drafted this ${opts.channelLabel} reply, which was already sent:
@@ -82,19 +80,13 @@ ${input.redo.observed || '(nothing new observed)'}
 ${input.redo.instruction ? `The user now wants: ${input.redo.instruction}` : 'Draft a short follow-up/correction message given what happened since.'}
 
 Write ONLY the new follow-up message text (${opts.toneHint}) — do not repeat the whole original message, just the correction/follow-up.`;
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiFastModel,
-      contents: prompt,
-      config: { thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage(opts.logLabel, response);
-    return { mode: 'draft', content: { text: (response.text || '').trim() || priorText } };
+    return { mode: 'draft', content: { text: (await generateText('draft', opts.logLabel, prompt)) || priorText } };
   }
 
   const priorContent = input.priorContent as ReplyDraftContent | undefined;
 
-  if (!config.geminiApiKey) {
-    if (input.instruction) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+  if (!hasTextProvider()) {
+    if (input.instruction) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
     // First generation only: graceful degradation matching the pre-existing
     // convention elsewhere — no context gathering, no clarification, just
     // the triage pass's echo.
@@ -132,13 +124,7 @@ Write ONLY the new follow-up message text (${opts.toneHint}) — do not repeat t
     );
   }
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiFastModel,
-    contents: parts.join('\n\n'),
-    config: { responseMimeType: 'application/json', responseSchema: REPLY_ENVELOPE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-  });
-  logGeminiUsage(opts.logLabel, response);
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = await generateJson<any>('draft', opts.logLabel, parts.join('\n\n'), REPLY_ENVELOPE_SCHEMA);
 
   if (parsed.action === 'answer') {
     return { mode: 'answer', text: parsed.answer || "I don't have anything more specific to add." };

@@ -1,6 +1,4 @@
-import { config } from '../../config';
-import { getGeminiClient } from '../../gemini/geminiClient';
-import { logGeminiUsage } from '../../gemini/logUsage';
+import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { DevCycle, getDevCycle } from '../../storage/devCycleRepository';
 import { getLatestDraftForSubject } from '../../storage/draftRepository';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
@@ -18,7 +16,7 @@ const SEED_SCHEMA = {
 };
 
 async function suggestDevCycleConfluenceFields(cycle: DevCycle): Promise<ConfluenceDraftSeed> {
-  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+  if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
 
   const ticket = await getJiraIssueDetail(cycle.ticketKey);
   const planDraft = getLatestDraftForSubject('dev_cycle', cycle.id, 'dev_plan');
@@ -31,13 +29,7 @@ ${ticket?.description ? `Description:\n${ticket.description}` : ''}
 ${plan ? `Plan understanding:\n${plan.understanding}\n\nApproach:\n${plan.approach}` : ''}
 ${plan?.risks?.length ? `Risks:\n${plan.risks.map((r) => `- ${r.risk} (${r.severity}): ${r.mitigation}`).join('\n')}` : ''}`;
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiFastModel,
-    contents: prompt,
-    config: { responseMimeType: 'application/json', responseSchema: SEED_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-  });
-  logGeminiUsage('suggestDevCycleConfluenceFields', response);
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = await generateJson<any>('draft', 'suggestDevCycleConfluenceFields', prompt, SEED_SCHEMA);
   return {
     title: parsed.title || `${cycle.ticketKey}: documentation update`,
     content: parsed.content || plan?.understanding || '',

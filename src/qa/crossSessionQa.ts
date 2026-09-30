@@ -1,7 +1,5 @@
-import { config } from '../config';
 import { retrieve } from '../rag/rag';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateText } from '../ai/aiRouter';
 
 export interface CrossSessionAnswer {
   answerText: string;
@@ -31,11 +29,6 @@ Question: ${question}
 Retrieved context from past meetings:
 ${contextBlock}`;
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: prompt,
-  });
-  logGeminiUsage('answerAcrossAllMeetings', response);
-
-  return { answerText: (response.text ?? '').trim(), sourcesUsed: [...new Set(sourcesUsed)] };
+  const answerText = await generateText('knowledgeQa', 'answerAcrossAllMeetings', prompt);
+  return { answerText, sourcesUsed: [...new Set(sourcesUsed)] };
 }

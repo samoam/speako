@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { getGeminiClient } from '../gemini/geminiClient';
 import { logGeminiUsage } from '../gemini/logUsage';
+import { askJev, isJevConfigured } from '../integrations/typesafeJev';
 
 const CLASSIFY_PROMPT = `You are a fast filter watching a live meeting transcript for moments worth
 flagging. You'll be given the most recent one or two spoken lines (a small window, not the whole
@@ -58,7 +59,53 @@ export interface ClassificationResult {
  * prepped Jira ticket status, for instance, is easier to flag with that
  * context in view than without it.
  */
+const JEV_CATEGORIES = {
+  factualClaim: {
+    instructions: 'The window contains a specific, checkable number, date, name, or technical statement — not opinion or small talk.',
+    reason: 'Contains a specific, checkable factual statement.',
+  },
+  decisionPoint: {
+    instructions: 'The window shows a decision actively being made right now ("let\'s go with...", "we\'ll decide...").',
+    reason: 'A decision is being made right now.',
+  },
+  vagueness: {
+    instructions: 'The window states a commitment or requirement WITHOUT a clear owner, deadline, or specifics.',
+    reason: 'A commitment was stated without a clear owner, deadline, or specifics.',
+  },
+} as const;
+
+/**
+ * Jev answers each category as a 0-1 truth value; that value becomes
+ * `confidence`, so TriggerDetector's triggerConfidenceThreshold keeps
+ * working unchanged. Jev returns no free-text explanation, so `reason` is a
+ * fixed per-category sentence (it's shown in the Triggers tab and fed to
+ * generateSuggestion as "why this was flagged").
+ */
+async function classifyWithJev(text: string, meetingContext?: string): Promise<ClassificationResult | null> {
+  if (!isJevConfigured()) return null;
+  try {
+    const state = `${meetingContext ? `Meeting context so far:\n${meetingContext}\n\n` : ''}Most recent spoken window (classify ONLY this):\n${text}`;
+    const answers = await askJev(
+      state,
+      Object.fromEntries(Object.entries(JEV_CATEGORIES).map(([k, v]) => [k, { type: 'noul' as const, instructions: v.instructions }])),
+      'classifySegment'
+    );
+    const result = {} as ClassificationResult;
+    for (const [key, category] of Object.entries(JEV_CATEGORIES) as [keyof ClassificationResult, (typeof JEV_CATEGORIES)[keyof typeof JEV_CATEGORIES]][]) {
+      const answer = answers[key];
+      if (answer?.type !== 'noul') return null;
+      result[key] = { present: answer.noul >= 0.5, confidence: answer.noul, reason: category.reason };
+    }
+    return result;
+  } catch (err: any) {
+    console.error('[triggers] Jev classification failed, falling back to Gemini:', err.message);
+    return null;
+  }
+}
+
 export async function classifySegment(text: string, meetingContext?: string): Promise<ClassificationResult> {
+  const viaJev = await classifyWithJev(text, meetingContext);
+  if (viaJev) return viaJev;
   const contextBlock = meetingContext ? `Meeting context so far:\n${meetingContext}\n\n` : '';
   const response = await getGeminiClient().models.generateContent({
     // Highest-volume call in the app (fires per finalized live segment) — a

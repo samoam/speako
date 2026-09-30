@@ -1,20 +1,17 @@
-import { config } from '../config';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { ActionItem } from '../storage/summaryRepository';
 
 /**
- * Shared by every suggestXFields() below — each is a one-off Gemini call
- * that turns an action item's free-text description into fields for one
- * external tool's dialog, fired when that dialog opens (src/interface/
- * server.ts's /suggest routes). Same cost-tiering convention as chapters.ts/
- * analyzeConversation.ts (mechanical extraction from short text already in
- * hand → fast model, thinking mostly off). Only the prompt intro, schema,
- * and fallback-shaping differ per tool — pulled out once here instead of
- * repeating the guard/prompt-suffix/call/log/parse shape five times.
+ * Shared by every suggestXFields() below — each is a one-off AI call (the
+ * router's 'draft' task: Claude haiku, Gemini fast as failover) that turns an
+ * action item's free-text description into fields for one external tool's
+ * dialog, fired when that dialog opens (src/interface/server.ts's /suggest
+ * routes). Only the prompt intro, schema, and fallback-shaping differ per
+ * tool — pulled out once here instead of repeating the guard/prompt-suffix/
+ * call/parse shape five times.
  */
 async function draftFields<T>(logLabel: string, promptIntro: string, item: ActionItem, schema: object, shape: (parsed: any) => T): Promise<T> {
-  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+  if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
 
   const prompt = `${promptIntro}
 
@@ -22,14 +19,7 @@ Action item: ${JSON.stringify(item.description)}
 Owner: ${item.owner ?? 'unspecified'}
 Due date: ${item.dueDate ?? 'unspecified'}`;
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiFastModel,
-    contents: prompt,
-    config: { responseMimeType: 'application/json', responseSchema: schema, thinkingConfig: { thinkingBudget: 1 } },
-  });
-  logGeminiUsage(logLabel, response);
-
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = await generateJson<any>('draft', logLabel, prompt, schema);
   return shape(parsed);
 }
 

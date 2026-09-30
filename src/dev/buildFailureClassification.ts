@@ -1,6 +1,4 @@
-import { config } from '../config';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateJson, hasTextProvider } from '../ai/aiRouter';
 import { JenkinsTestReport, JenkinsStage } from '../integrations/jenkinsClient';
 
 export type FailureCategory = 'compile_error' | 'lint_error' | 'test_regression' | 'flaky_test' | 'infra_failure' | 'unknown';
@@ -165,7 +163,7 @@ export async function classifyBuildFailure(input: {
   const fallback: BuildFailureAnalysis = {
     category: heuristicCategory,
     confidence: 0.4,
-    summary: `Build on branch ${input.branch} failed, classified as ${heuristicCategory} from log patterns alone (Gemini unavailable).`,
+    summary: `Build on branch ${input.branch} failed, classified as ${heuristicCategory} from log patterns alone (no AI classification available).`,
     suspectFiles: [],
     suspectTests: input.signals.newlyFailingTests,
     fixable: ['compile_error', 'lint_error', 'test_regression'].includes(heuristicCategory),
@@ -173,7 +171,7 @@ export async function classifyBuildFailure(input: {
     evidence: input.signals.matched.map((m) => m.excerpt),
   };
 
-  if (!config.geminiApiKey) return fallback;
+  if (!hasTextProvider()) return fallback;
 
   try {
     const prompt = `You are classifying why a Jenkins build failed on branch "${input.branch}"${input.ticketKey ? ` (ticket ${input.ticketKey})` : ''}.
@@ -191,13 +189,11 @@ ${input.log.slice(-8000)}
 
 Prefer "infra_failure" when the failure clearly happened outside the test/compile stages (timeouts, connection loss, agent offline). Never call a test "test_regression" if it's already in the historically-flaky list — call it "flaky_test" instead. Only list suspectFiles you can actually see referenced in the log. Set fixable=true only for compile_error/lint_error/test_regression — infra_failure and flaky_test are never something a code fix should attempt.`;
 
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiFastModel,
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage('classifyBuildFailure', response);
-    const parsed = JSON.parse(response.text ?? '{}');
+    // Not a Jev task despite the name: besides the category it writes a
+    // summary, extracts suspect files/tests and evidence lines, and drafts a
+    // fix — text Jev can't produce. Runs in the background poller, so the
+    // Claude route's latency costs nothing.
+    const parsed = await generateJson<any>('buildTriage', 'classifyBuildFailure', prompt, CLASSIFY_SCHEMA);
     if (!parsed.category) return fallback;
     return {
       category: parsed.category,

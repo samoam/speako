@@ -1,7 +1,5 @@
-import { config } from '../config';
+import { generateJson, hasTextProvider } from '../ai/aiRouter';
 import { toPlainText } from '../transcriptFormat';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
 import { getSegmentsForSession } from '../storage/segmentRepository';
 import { FeedbackPoint } from '../storage/coachingRepository';
 import { TranscriptSegment } from '../types';
@@ -117,23 +115,13 @@ export async function analyzeConversation(sessionId: string): Promise<AnalyzedCo
 
   const { youInterruptedOthersCount, othersInterruptedYouCount } = countInterruptions(segments);
 
-  if (!config.geminiApiKey) {
+  if (!hasTextProvider()) {
     return { talkTimeRatio, fillerWordCount, fillerWordExamples, youInterruptedOthersCount, othersInterruptedYouCount, feedbackPoints: [] };
   }
 
   try {
     const transcript = toPlainText(segments);
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiModel,
-      contents: `${COACHING_PROMPT}\n\nTranscript:\n${transcript}`,
-      // thinkingBudget: 0 (fully disabled) is currently rejected with a 400 by
-      // gemini-flash-latest — confirmed via direct API testing; 1 is the
-      // smallest budget this model still accepts, so it's the closest
-      // available approximation of "disabled" until that changes.
-      config: { responseMimeType: 'application/json', responseSchema: COACHING_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage('analyzeConversation', response);
-    const parsed = JSON.parse(response.text ?? '{}');
+    const parsed = await generateJson<any>('coaching', 'analyzeConversation', `${COACHING_PROMPT}\n\nTranscript:\n${transcript}`, COACHING_SCHEMA);
     return {
       talkTimeRatio,
       fillerWordCount,

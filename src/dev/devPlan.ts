@@ -1,6 +1,7 @@
 import { JiraIssueDetail, getJiraIssueDetail, isJiraConfigured } from '../integrations/jiraMcp';
 import { ConfluencePage, searchConfluence, getConfluencePage, isConfluenceConfigured } from '../integrations/confluenceMcp';
 import { searchCode, CodeMatch } from '../codebase/searchCode';
+import { generateJson } from '../ai/aiRouter';
 
 export interface DevPlanFileChange {
   path: string;
@@ -135,4 +136,42 @@ export function buildPlanPrompt(ctx: DevPlanSeedContext, opts?: { previousPlan?:
 Do NOT write any code — this is a plan for a human to approve before any implementation starts. If the ticket is ambiguous or you can't determine something from the code, say so in openQuestions rather than guessing. Be specific about files, not just areas of the codebase.`,
   ];
   return sections.filter(Boolean).join('\n\n');
+}
+
+/**
+ * Combines Claude's structured plan (runClaudeCodeReview, schema-constrained
+ * to DEV_PLAN_JSON_SCHEMA) with the Antigravity second opinion's free-text
+ * one (antigravityCli.ts's runSecondOpinionReview, which has no equivalent
+ * schema-constraint flag) into a single StructuredDevPlan for the
+ * Jira-implement pipeline's Plan step to seek approval on — same "two
+ * independent agents, reconciled via the Gemini API afterward" shape as
+ * prReviewContext.ts's mergeReviews.
+ */
+export async function mergeDevPlans(claudePlan: StructuredDevPlan, geminiPlanText: string, feedback?: string): Promise<StructuredDevPlan> {
+  const prompt = `Two independent AI engineers each independently planned the implementation of the same Jira ticket, without seeing each other's plan. Merge their plans into a single plan a human can approve before implementation starts.
+
+Engineer A = "claude" (structured JSON):
+${JSON.stringify(claudePlan, null, 2)}
+
+Engineer B = "gemini" (free-form text):
+${geminiPlanText}
+${feedback ? `\nThe developer reviewed a previous merged plan and gave this feedback — incorporate it into the merged plan below:\n${feedback}\n` : ''}
+Merge rules:
+- Prefer the more specific/concrete approach when the two disagree, but call out the disagreement in openQuestions if it's a real fork in direction (not just wording).
+- Union the file lists — keep every file either engineer named, de-duplicated by path (if they disagree on the action for the same path, prefer 'modify' as the safer assumption unless one clearly identified it as new).
+- Union tests and risks, folding duplicates.
+- openQuestions: keep every distinct open question from either plan.
+- estimatedSize: use the larger of the two estimates (xs < s < m < l < xl) — safer to over- than under-estimate when merging two independent takes.
+- Write one combined understanding/approach in the same plain-language style as Engineer A's, synthesizing rather than concatenating.`;
+
+  const parsed = await generateJson<any>('reviewMerge', 'mergeDevPlans', prompt, DEV_PLAN_JSON_SCHEMA);
+  return {
+    understanding: parsed.understanding || claudePlan.understanding,
+    approach: parsed.approach || claudePlan.approach,
+    files: Array.isArray(parsed.files) ? parsed.files : claudePlan.files,
+    tests: Array.isArray(parsed.tests) ? parsed.tests : claudePlan.tests,
+    risks: Array.isArray(parsed.risks) ? parsed.risks : claudePlan.risks,
+    openQuestions: Array.isArray(parsed.openQuestions) ? parsed.openQuestions : claudePlan.openQuestions,
+    estimatedSize: parsed.estimatedSize || claudePlan.estimatedSize,
+  };
 }

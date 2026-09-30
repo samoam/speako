@@ -313,6 +313,20 @@ db.exec(`
     PRIMARY KEY (feature, date)
   );
 
+  -- Same daily shape for the non-Gemini providers (claude = subscription CLI,
+  -- jev = TypeSafe per-call). Kept apart from gemini_usage so that table stays
+  -- a pure record of metered Gemini spend; a feature appearing here AND there
+  -- on the same day means its preferred route failed over to Gemini.
+  CREATE TABLE IF NOT EXISTS ai_usage (
+    provider TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    date TEXT NOT NULL,
+    call_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (provider, feature, date)
+  );
+
   -- On-demand meeting chapters (timestamped topic breakpoints) — same
   -- compute-once-cache-in-a-row shape as coaching_feedback/summaries, one
   -- Gemini call per session via POST /api/sessions/:id/chapters.
@@ -456,6 +470,43 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_draft_revisions_draft ON draft_revisions(draft_id, turn);
 
+  -- Free-form "discuss this task" chat (src/qa/taskChat.ts), shown as a
+  -- right-hand panel in Task Detail (index.html's renderTaskDetail) —
+  -- deliberately separate from draft_revisions, which is a single draft's
+  -- refine chat gated by that draft's approve/execute status machine. This
+  -- is a permanently-open, no-status-machine thread scoped directly to the
+  -- task, not to any one drafted artifact.
+  CREATE TABLE IF NOT EXISTS task_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    turn INTEGER NOT NULL,
+    role TEXT NOT NULL, -- 'user' | 'assistant'
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_chat_messages_task ON task_chat_messages(task_id, turn);
+
+  -- A personal directory of people the user works with (src/storage/
+  -- peopleRepository.ts) — name/role/position/team, manually maintained
+  -- (see src/people/suggestPeople.ts for name-only auto-suggestions from
+  -- already-synced Teams/email/Jira/Bitbucket activity). Deliberately NOT
+  -- linked to VIP_SENDERS/priority scoring — a communication/reference
+  -- aid only, per the user's explicit choice to keep the two separate.
+  CREATE TABLE IF NOT EXISTS people (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    email TEXT,
+    role TEXT,
+    position TEXT,
+    team TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_people_display_name ON people(display_name COLLATE NOCASE);
+
   -- One row per ticket-driven development cycle (Jira -> branch -> plan ->
   -- implement -> pre-PR check -> PR -> QA Ready), the spine the dev-cycle
   -- engine (src/dev/) hangs everything else off of. Only one active cycle per
@@ -552,6 +603,60 @@ if (!taskColumns.some((c) => c.name === 'code_review')) {
   // concepts for future readers.
   db.exec('ALTER TABLE tasks ADD COLUMN code_review TEXT');
 }
+if (!taskColumns.some((c) => c.name === 'snoozed_until')) {
+  // Never touched by upsertTask's ON CONFLICT (same as board_status) — a
+  // re-sync must never clear a user's postpone. getOpenTasks()/
+  // getTasksCreatedSince() filter this out until it's in the past.
+  db.exec('ALTER TABLE tasks ADD COLUMN snoozed_until TEXT');
+}
+if (!taskColumns.some((c) => c.name === 'priority_override')) {
+  // When set, IS the task's priority_score (see upsertStmt's CASE guard
+  // below) regardless of what urgency_score * importance_score computes to.
+  db.exec('ALTER TABLE tasks ADD COLUMN priority_override INTEGER');
+}
+if (!taskColumns.some((c) => c.name === 'due_date_is_manual')) {
+  // Guards due_date the same way priority_override guards priority_score —
+  // when 1, a re-sync's source-provided due date is ignored so a
+  // user-entered date on e.g. a Teams/email message (which has no source
+  // due date at all) survives.
+  db.exec("ALTER TABLE tasks ADD COLUMN due_date_is_manual INTEGER NOT NULL DEFAULT 0");
+}
+if (!taskColumns.some((c) => c.name === 'manually_added')) {
+  // Set once by addManualTask() (src/orchestrator/manualTask.ts) for a Jira
+  // issue/Bitbucket PR the user typed in directly rather than one the
+  // automatic sync discovered (assigned-to-me / review-requested-of-me).
+  // pruneTasksForSource() skips these — they're not in that sync's `refs`
+  // list (the user isn't necessarily the assignee/reviewer), so without this
+  // guard the very next sync of that source would delete them.
+  db.exec('ALTER TABLE tasks ADD COLUMN manually_added INTEGER NOT NULL DEFAULT 0');
+}
+if (!taskColumns.some((c) => c.name === 'my_review_status')) {
+  // The user's review state on a bitbucket_pr review task
+  // (NEW/NEEDS_WORK/REWORKED, taskSync.ts's deriveReviewState) — kept on the
+  // row because REWORKED depends on the previous sync's value.
+  db.exec('ALTER TABLE tasks ADD COLUMN my_review_status TEXT');
+}
+if (!taskColumns.some((c) => c.name === 'urgency_signal')) {
+  // Jev's none/soon/urgent read of a Jira/Bitbucket comment mention's text
+  // (taskSync.ts's commentUrgencySignal) — cached because a comment's text
+  // never changes, so it's asked once per comment rather than every sync.
+  db.exec('ALTER TABLE tasks ADD COLUMN urgency_signal TEXT');
+}
+
+const teamsMessageTriageColumns = db.prepare('PRAGMA table_info(teams_message_triage)').all() as { name: string }[];
+if (!teamsMessageTriageColumns.some((c) => c.name === 'urgency_signal')) {
+  // A raw classification fact ('none'|'soon'|'urgent'), same status as
+  // directed_at_me — NOT a computed score. taskSync.ts's teamsMessageUrgency
+  // combines this with message recency live on every sync, matching this
+  // table's existing "never store a priority score, only the facts behind
+  // it" convention.
+  db.exec("ALTER TABLE teams_message_triage ADD COLUMN urgency_signal TEXT NOT NULL DEFAULT 'none'");
+}
+
+const emailMessageTriageColumns = db.prepare('PRAGMA table_info(email_message_triage)').all() as { name: string }[];
+if (!emailMessageTriageColumns.some((c) => c.name === 'urgency_signal')) {
+  db.exec("ALTER TABLE email_message_triage ADD COLUMN urgency_signal TEXT NOT NULL DEFAULT 'none'");
+}
 
 const prReviewRequestColumns = db.prepare('PRAGMA table_info(pr_review_requests)').all() as { name: string }[];
 if (!prReviewRequestColumns.some((c) => c.name === 'log')) {
@@ -560,6 +665,12 @@ if (!prReviewRequestColumns.some((c) => c.name === 'log')) {
   // already shipped in a real DB this session, hence the guarded ALTER
   // rather than just adding the column to the CREATE TABLE above.
   db.exec('ALTER TABLE pr_review_requests ADD COLUMN log TEXT');
+}
+if (!prReviewRequestColumns.some((c) => c.name === 'phases')) {
+  // Coarse-grained step tracker (src/storage/prReviewRequestRepository.ts's
+  // PrReviewPhase) shown alongside the fine-grained `log` above — same
+  // guarded-ALTER reasoning as `log`.
+  db.exec('ALTER TABLE pr_review_requests ADD COLUMN phases TEXT');
 }
 
 // code_change_requests originally only supported the meeting-action-item
@@ -628,6 +739,15 @@ if (!codeChangeRequestColumns2.some((c) => c.name === 'origin')) {
   db.exec("ALTER TABLE code_change_requests ADD COLUMN origin TEXT NOT NULL DEFAULT 'action_item'");
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_code_change_requests_dev_cycle ON code_change_requests(dev_cycle_id)');
+
+if (!codeChangeRequestColumns2.some((c) => c.name === 'log')) {
+  // Live progress lines for the background Claude Code agent — same
+  // JSON-array-in-a-TEXT-column, read-modify-write shape as
+  // pr_review_requests.log (src/storage/prReviewRequestRepository.ts's
+  // appendPrReviewLog), just on this table instead, so the task detail view
+  // can show a "Running…" agent's progress the same way a PR review does.
+  db.exec('ALTER TABLE code_change_requests ADD COLUMN log TEXT');
+}
 
 // Voice-emotion (Imentiv AI) support was removed — drop the table for anyone
 // who had it created by a previous version rather than leaving an orphaned
@@ -718,3 +838,68 @@ if (!actionItemColumns.some((c) => c.name === 'external_ref')) {
   // isn't left wondering whether clicking the button did anything.
   db.exec('ALTER TABLE action_items ADD COLUMN external_ref TEXT');
 }
+
+// The unified Jira-implement tab (src/interface/server.ts's
+// registerJiraImplementRoutes) drives a dev cycle through its own
+// phases/log/current_step, the same shape pr_review_requests already uses —
+// these columns are additive/nullable so an in-flight cycle created before
+// this shipped simply has current_step IS NULL, which the UI reads as "this
+// cycle predates the new pipeline" and falls back to the legacy
+// draft-panel-per-step flow for that one row only (see openJiraImplementTab).
+const devCycleColumns = db.prepare('PRAGMA table_info(dev_cycles)').all() as { name: string }[];
+if (!devCycleColumns.some((c) => c.name === 'phases')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN phases TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'log')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN log TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'current_step')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN current_step TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'analysis_context')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN analysis_context TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'plan_claude')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN plan_claude TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'plan_gemini')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN plan_gemini TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'plan_merged')) {
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN plan_merged TEXT');
+}
+if (!devCycleColumns.some((c) => c.name === 'worktree_path_gemini')) {
+  // dev_cycles.worktree_path (pre-existing) becomes "Claude's worktree" (worktree
+  // A) once this pipeline runs two agents side by side; this is worktree B.
+  db.exec('ALTER TABLE dev_cycles ADD COLUMN worktree_path_gemini TEXT');
+}
+
+// One row per (dev cycle, round, variant) implementation attempt — tracks the
+// two parallel Claude/Antigravity implementations of the same approved plan
+// so the merge step can diff and reconcile them. Kept separate from
+// code_change_requests: the claude variant still creates its own
+// code_change_requests row (origin 'dev_cycle_implement') and is polled by the
+// existing pollCodeChangeRequest unmodified; this table is what lets the UI
+// and the merge step reason about "both attempts for this cycle" as one unit,
+// including the 'gemini' variant (Antigravity — see antigravityCli.ts) which
+// has no code_change_requests row at all: it's a plain synchronous await, not
+// a background task with anything to poll.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS dev_cycle_implementations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_cycle_id INTEGER NOT NULL REFERENCES dev_cycles(id),
+    round INTEGER NOT NULL,
+    variant TEXT NOT NULL,
+    worktree_path TEXT NOT NULL,
+    code_change_request_id INTEGER REFERENCES code_change_requests(id),
+    cli_session_id TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    diff TEXT,
+    error TEXT,
+    log TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_dev_cycle_implementations_cycle ON dev_cycle_implementations(dev_cycle_id);
+`);

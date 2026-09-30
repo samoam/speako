@@ -4,8 +4,7 @@ import { searchCode } from '../codebase/searchCode';
 import { isLocalCodebaseConfigured } from '../codebase/indexCodebase';
 import { TriggerEvent } from '../storage/triggerRepository';
 import { getMeetingStateSnapshot } from '../state/meetingState';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateText } from '../ai/aiRouter';
 
 // Category-specific prompts (spec §7.2) — each asks for exactly one thing, matching
 // how differently each trigger category should be handled rather than one generic prompt.
@@ -86,13 +85,10 @@ export async function generateSuggestion(trigger: TriggerEvent, segmentText: str
   const contextLabel = trigger.category === 'code_reference' ? 'Retrieved code from your local codebase' : 'Retrieved context from past sessions';
   const prompt = `${promptInstruction}\n${suppressionInstruction}\n\nCurrent moment: "${segmentText}"\nWhy this was flagged: ${trigger.reason}\n\nMeeting summary so far:\n${state.rollingSummary || '(nothing yet)'}\n\nOpen items already tracked this meeting:\n${openItemsBlock}\n\n${contextLabel}:\n${contextBlock}`;
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiModel,
-    contents: prompt,
-  });
-  logGeminiUsage('generateSuggestion', response);
-
-  const text = (response.text ?? '').trim();
+  // Was the largest Gemini cost (main model + thinking, one call per fired
+  // trigger). A suggestion card showing ~5s after the trigger instead of ~2s
+  // was judged an acceptable trade for moving it onto the subscription route.
+  const text = await generateText('liveSuggestion', 'generateSuggestion', prompt);
   if (!text || text.toUpperCase() === 'SKIP') return null;
 
   return { text, citation };

@@ -1,8 +1,6 @@
-import { config } from '../config';
+import { generateJson } from '../ai/aiRouter';
 import { TranscriptSegment } from '../types';
 import { toPlainText } from '../transcriptFormat';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
 
 const CHAPTERS_PROMPT = `You are splitting a speaker-labeled, timestamped ([mm:ss]) meeting transcript into
 chapters — logical topic sections a listener could jump between. Aim for 3-8 chapters for a typical meeting;
@@ -58,18 +56,8 @@ function parseTimestamp(value: string): number | null {
  * cheaper model tier with thinking disabled (see docs/gemini-cost-optimization).
  */
 export async function detectChapters(segments: TranscriptSegment[]): Promise<Chapter[]> {
-  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
-
   const transcript = toPlainText(segments);
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiFastModel,
-    contents: `${CHAPTERS_PROMPT}\n\nTranscript:\n${transcript}`,
-    // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
-    config: { responseMimeType: 'application/json', responseSchema: CHAPTERS_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-  });
-  logGeminiUsage('detectChapters', response);
-
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = await generateJson<any>('chapters', 'detectChapters', `${CHAPTERS_PROMPT}\n\nTranscript:\n${transcript}`, CHAPTERS_SCHEMA);
   const rawChapters: { startTime: string; title: string; summary: string }[] = parsed.chapters ?? [];
 
   return rawChapters

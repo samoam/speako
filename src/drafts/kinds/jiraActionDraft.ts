@@ -1,6 +1,4 @@
-import { config } from '../../config';
-import { getGeminiClient } from '../../gemini/geminiClient';
-import { logGeminiUsage } from '../../gemini/logUsage';
+import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { getActionItem, setActionItemExternalRef, ActionItem } from '../../storage/summaryRepository';
 import { createJiraIssue, updateJiraIssue, extractIssueKeys } from '../../integrations/jiraMcp';
 import { suggestJiraFields } from '../../summarization/actionItemDrafts';
@@ -70,7 +68,7 @@ export const jiraActionDraft: DraftHandler<ActionItem> = {
     }
 
     if (input.instruction) {
-      if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+      if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
       const priorContent = input.priorContent as JiraActionDraftContent;
       const refinementBlock = buildRefinementBlock(input.history, priorContent);
       const prompt = `You are helping refine a drafted Jira issue create/update through a chat-style conversation.
@@ -80,13 +78,7 @@ ${refinementBlock}
 The user's newest instruction: ${JSON.stringify(input.instruction)}
 
 If they're asking for a CHANGE, return the full revised draft object (every field, not just the one that changed) under "draft" — keep "mode" as-is unless they explicitly ask to switch between creating a new issue and updating an existing one. If they're asking a QUESTION about the draft or your reasoning, answer it directly and leave the draft alone.`;
-      const response = await getGeminiClient().models.generateContent({
-        model: config.geminiFastModel,
-        contents: prompt,
-        config: { responseMimeType: 'application/json', responseSchema: JIRA_REFINE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-      });
-      logGeminiUsage('refineJiraActionDraft', response);
-      const parsed = JSON.parse(response.text ?? '{}');
+      const parsed = await generateJson<any>('draft', 'refineJiraActionDraft', prompt, JIRA_REFINE_SCHEMA);
       if (parsed.action === 'answer') {
         return { mode: 'answer', text: parsed.answer || "I don't have anything more specific to add." };
       }

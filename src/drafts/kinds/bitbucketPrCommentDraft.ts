@@ -1,10 +1,8 @@
-import { config } from '../../config';
-import { getGeminiClient } from '../../gemini/geminiClient';
-import { logGeminiUsage } from '../../gemini/logUsage';
+import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { getPrReviewRequest, PrReviewRequest, PrReviewFinding } from '../../storage/prReviewRequestRepository';
 import { getTaskById } from '../../storage/taskRepository';
 import { getPullRequestChangedPaths, getPullRequestDiffAnchors, addPullRequestComment, BitbucketCommentAnchor } from '../../integrations/bitbucketServer';
-import { formatFindingComment, resolveFindingAnchor, formatRetractionComment } from '../../summarization/prReviewComments';
+import { resolveFindingAnchor, formatRetractionComment } from '../../summarization/prReviewComments';
 import { buildRefinementBlock, REFINE_ENVELOPE_SCHEMA } from '../refinePrompt';
 import { DraftHandler } from '../types';
 
@@ -36,7 +34,7 @@ export function prCommentSubjectId(prReviewRequestId: number, findingIndex: numb
   return `${prReviewRequestId}:${findingIndex}`;
 }
 
-const PR_REF_PATTERN = /^([^/]+)\/([^#]+)#(\d+)/;
+export const PR_REF_PATTERN = /^([^/]+)\/([^#]+)#(\d+)/;
 
 /**
  * Bitbucket PR review comments — findings from an already-completed
@@ -76,7 +74,7 @@ export const bitbucketPrCommentDraft: DraftHandler<PrCommentSubject> = {
     }
 
     if (input.instruction) {
-      if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+      if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
       const priorContent = input.priorContent as PrCommentContent;
       const refinementBlock = buildRefinementBlock(input.history, priorContent.text);
       const prompt = `You are helping refine a drafted Bitbucket pull-request review comment through a chat-style conversation with the reviewer about to post it.
@@ -85,14 +83,8 @@ ${refinementBlock}
 
 The user's newest instruction: ${JSON.stringify(input.instruction)}
 
-If they're asking for a CHANGE, return the full revised comment text (keep the "Drafted by Speako..." attribution line at the end). If they're asking a QUESTION about the comment or why it was flagged, answer it directly and leave the comment as-is.`;
-      const response = await getGeminiClient().models.generateContent({
-        model: config.geminiFastModel,
-        contents: prompt,
-        config: { responseMimeType: 'application/json', responseSchema: REFINE_ENVELOPE_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-      });
-      logGeminiUsage('refinePrComment', response);
-      const parsed = JSON.parse(response.text ?? '{}');
+If they're asking for a CHANGE, return the full revised comment text. If they're asking a QUESTION about the comment or why it was flagged, answer it directly and leave the comment as-is.`;
+      const parsed = await generateJson<any>('draft', 'refinePrComment', prompt, REFINE_ENVELOPE_SCHEMA);
       if (parsed.action === 'answer') {
         return { mode: 'answer', text: parsed.answer || "I don't have anything more specific to add." };
       }
@@ -105,13 +97,15 @@ If they're asking for a CHANGE, return the full revised comment text (keep the "
     const changedPaths = await getPullRequestChangedPaths(pr);
     const anchors = changedPaths.includes(finding.file) ? await getPullRequestDiffAnchors(pr, finding.file) : [];
     const { mode, anchor, warning } = resolveFindingAnchor(finding, changedPaths, anchors);
-    const body = formatFindingComment(finding);
-    const text = mode === 'general' ? `\`${finding.file}${finding.line != null ? ':' + finding.line : ''}\` — ${body}` : body;
+    const text = mode === 'general' ? `\`${finding.file}${finding.line != null ? ':' + finding.line : ''}\` — ${finding.comment}` : finding.comment;
     return { mode: 'draft', content: { text, mode, anchor, anchorWarning: warning } };
   },
   async execute(_gateKey, ctx) {
     const { pr } = ctx.subject;
     const content = ctx.content as PrCommentContent;
+    // Posted exactly as drafted — no AI-disclosure trailer appended (see
+    // SPEAKO_COMMENT_MARKER's comment in prReviewComments.ts for why that
+    // existed before and why it's gone now).
     const posted = await addPullRequestComment(pr, { text: content.text, anchor: content.anchor ?? undefined });
     return { commentId: posted.id, version: posted.version, mode: content.mode };
   },

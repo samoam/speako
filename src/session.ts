@@ -159,7 +159,7 @@ export class Session {
           this.checkAnticipatedAnswer(segment);
         }
       }
-      if (config.meetingStateEnabled && config.geminiApiKey && isFeatureActive(this.activeFeatures, 'meetingState')) {
+      if (config.meetingStateEnabled && isFeatureActive(this.activeFeatures, 'meetingState')) {
         this.segmentsSinceStateUpdate++;
         if (this.segmentsSinceStateUpdate >= config.meetingStateUpdateEverySegments) {
           this.segmentsSinceStateUpdate = 0;

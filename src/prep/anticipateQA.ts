@@ -1,8 +1,6 @@
-import { config } from '../config';
+import { generateJson, hasTextProvider } from '../ai/aiRouter';
 import { MEETING_TYPE_LABELS, MeetingType } from './meetingTypes';
 import { WorkflowSource } from './workflows/types';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
 import { buildRawContextBlock } from './rawContext';
 
 export interface LikelyQuestion {
@@ -79,42 +77,17 @@ const SCHEMA = {
  * failure, so the UI can cleanly hide the section rather than show an empty
  * shell — same "skip rather than hallucinate" reasoning as trySource's
  * empty-content handling elsewhere in this feature.
- *
- * `cachedRawContent`: pass a Gemini context-cache resource name (from
- * createSharedCache, built from buildRawContextBlock(sources)) to avoid
- * resending the raw sources block — PrepService.ts shares one cache between
- * this and synthesizeBrief.ts, which both send the identical block. Omit to
- * build and send it inline as before.
  */
-export async function anticipateQA(
-  meetingType: MeetingType,
-  sessionName: string | undefined,
-  sources: WorkflowSource[],
-  userNotes?: string,
-  cachedRawContent?: string
-): Promise<AnticipatedQA | null> {
+export async function anticipateQA(meetingType: MeetingType, sessionName: string | undefined, sources: WorkflowSource[], userNotes?: string): Promise<AnticipatedQA | null> {
   const notes = userNotes?.trim();
   if (sources.length === 0 && !notes) return null;
-  if (!config.geminiApiKey) return null;
+  if (!hasTextProvider()) return null;
 
   try {
     const rawBlock = buildRawContextBlock(sources);
     const notesInstruction = notes ? `\n\nThe user's own notes for this session: ${notes}` : '';
     const header = `${ANTICIPATE_PROMPT}\n\nMeeting type: ${MEETING_TYPE_LABELS[meetingType]}\nAngle for this type: ${TYPE_EMPHASIS[meetingType]}\nSession name: ${sessionName || '(unnamed)'}${notesInstruction}`;
-    const prompt = cachedRawContent ? header : `${header}\n\nRaw context:\n${rawBlock || '(none)'}`;
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiModel,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: SCHEMA,
-        // thinkingBudget: 0 is currently rejected (400) by gemini-flash-latest — 1 is the smallest accepted budget.
-        thinkingConfig: { thinkingBudget: 1 },
-        ...(cachedRawContent ? { cachedContent: cachedRawContent } : {}),
-      },
-    });
-    logGeminiUsage('anticipateQA', response);
-    const parsed = JSON.parse(response.text ?? '{}');
+    const parsed = await generateJson<any>('prep', 'anticipateQA', `${header}\n\nRaw context:\n${rawBlock || '(none)'}`, SCHEMA);
     return {
       likelyQuestions: parsed.likelyQuestions ?? [],
       questionsToAsk: parsed.questionsToAsk ?? [],

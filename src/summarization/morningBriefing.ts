@@ -1,6 +1,4 @@
-import { config } from '../config';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
+import { generateJson, hasTextProvider } from '../ai/aiRouter';
 import { getTasksCreatedSince, Task, TaskSource } from '../storage/taskRepository';
 
 const SOURCE_LABELS: Record<TaskSource, string> = {
@@ -56,7 +54,7 @@ const BRIEFING_SCHEMA = {
 export async function buildMorningBriefing(): Promise<string> {
   const tasks = getTasksCreatedSince(startOfTodayIso());
   if (!tasks.length) return NOTHING_NEW;
-  if (!config.geminiApiKey) return plainSummary(tasks);
+  if (!hasTextProvider()) return plainSummary(tasks);
 
   const lines = tasks.slice(0, 30).map((t) => `- [${SOURCE_LABELS[t.source]}] ${t.title} (priority ${t.priorityScore})`);
   const prompt = `You are writing a short morning briefing for a developer, summarizing what's new in their work queue since yesterday.
@@ -66,12 +64,6 @@ ${lines.join('\n')}
 
 Write a few sentences highlighting counts by category and calling out the most urgent/important items by name. Be concise — this is read at a glance, not a report.`;
 
-  const response = await getGeminiClient().models.generateContent({
-    model: config.geminiFastModel,
-    contents: prompt,
-    config: { responseMimeType: 'application/json', responseSchema: BRIEFING_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-  });
-  logGeminiUsage('buildMorningBriefing', response);
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = await generateJson<{ briefing?: string }>('briefing', 'buildMorningBriefing', prompt, BRIEFING_SCHEMA);
   return parsed.briefing || plainSummary(tasks);
 }
