@@ -1,8 +1,7 @@
-import { config } from '../config';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
 import { db } from '../storage/db';
+import { generateJson } from '../ai/aiRouter';
 import { ExternalMessage } from '../storage/externalMessageRepository';
+import { askJev, isJevConfigured, jevChoice, jevTrue, URGENCY_QUESTION, URGENCY_SIGNALS } from '../integrations/typesafeJev';
 
 /**
  * Untriaged inbox email — unlike Teams (a multi-person chat log where "is
@@ -29,10 +28,13 @@ export function getUntriagedEmailMessages(): ExternalMessage[] {
   }));
 }
 
+export type MessageUrgencySignal = 'none' | 'soon' | 'urgent';
+
 export interface EmailMessageClassification {
   needsReply: boolean;
   summary: string;
   draftReply: string | null;
+  urgencySignal: MessageUrgencySignal;
 }
 
 const CLASSIFY_SCHEMA = {
@@ -48,8 +50,14 @@ const CLASSIFY_SCHEMA = {
       nullable: true,
       description: 'Only when needsReply is true: a short, professional draft reply. Null otherwise.',
     },
+    urgencySignal: {
+      type: 'string',
+      enum: ['none', 'soon', 'urgent'],
+      description:
+        '"urgent" if the email explicitly demands fast action (words like ASAP/urgent/blocking, or a same-day deadline/escalation tone). "soon" if there is a clear but not-immediate deadline or expectation (e.g. "by end of week"). "none" otherwise.',
+    },
   },
-  required: ['needsReply', 'summary'],
+  required: ['needsReply', 'summary', 'urgencySignal'],
 };
 
 /**
@@ -57,10 +65,35 @@ const CLASSIFY_SCHEMA = {
  * actionItemDrafts.ts's draftFields() and teamsMessageTriage.ts's
  * classifyMessage() (fast model, thinking mostly off, structured JSON).
  */
-export async function classifyMessage(message: ExternalMessage): Promise<EmailMessageClassification> {
+export async function classifyWithJev(message: ExternalMessage): Promise<{ needsReply: boolean; urgencySignal: MessageUrgencySignal } | null> {
+  if (!isJevConfigured()) return null;
   try {
-    if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+    const answers = await askJev(`Subject: ${message.title ?? 'No subject'}\nFrom: ${message.participants[0] ?? 'Unknown'}\n\n${message.bodyText}`, {
+      needsReply: {
+        type: 'noul',
+        instructions: 'This email asks the reader something or otherwise expects a response from them (not an FYI, newsletter, notification, or automated alert).',
+      },
+      urgency: URGENCY_QUESTION,
+    }, 'classifyEmailMessage');
+    const needsReply = jevTrue(answers.needsReply);
+    const urgencySignal = jevChoice(answers.urgency, URGENCY_SIGNALS);
+    if (needsReply === null || urgencySignal === null) return null;
+    return { needsReply, urgencySignal };
+  } catch (err: any) {
+    console.error('[email-triage] Jev classification failed, falling back to Gemini:', err.message);
+    return null;
+  }
+}
 
+export async function classifyMessage(message: ExternalMessage): Promise<EmailMessageClassification> {
+  // Jev owns the two decisions when it answers; the prose (summary, draft) Jev
+  // can't write goes through the AI router (Claude first, Gemini failover),
+  // which also decides alone when Jev is unavailable.
+  const jev = await classifyWithJev(message);
+  try {
+    const decided = jev
+      ? `\n\nIt has already been decided that this email ${jev.needsReply ? 'DOES' : 'does NOT'} need a reply — use that as needsReply.`
+      : '';
     const prompt = `You are triaging an inbox email.
 
 Subject: ${message.title ?? 'No subject'}
@@ -69,36 +102,32 @@ Body: ${JSON.stringify(message.bodyText)}
 
 Decide whether this email needs a reply (a question, request, or anything expecting a response) versus is purely
 informational (a notification, newsletter, automated alert, FYI). Summarize what the reader needs to know, and if
-it needs a reply, draft a short, professional response.`;
+it needs a reply, draft a short, professional response.${decided}`;
 
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiFastModel,
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage('classifyEmailMessage', response);
-
-    const parsed = JSON.parse(response.text ?? '{}');
-    const needsReply = !!parsed.needsReply;
+    const parsed = await generateJson<any>('triageProse', 'classifyEmailMessage', prompt, CLASSIFY_SCHEMA);
+    const needsReply = jev?.needsReply ?? !!parsed.needsReply;
+    const urgencySignal: MessageUrgencySignal = jev?.urgencySignal ?? (['none', 'soon', 'urgent'].includes(parsed.urgencySignal) ? parsed.urgencySignal : 'none');
     return {
       needsReply,
       summary: parsed.summary || message.bodyText.slice(0, 200),
       draftReply: needsReply ? parsed.draftReply || null : null,
+      urgencySignal,
     };
   } catch {
     // Never let a bad/missing LLM response block the rest of the batch —
     // same convention as actionItemDrafts.ts/teamsMessageTriage.ts.
-    return { needsReply: false, summary: message.bodyText.slice(0, 200), draftReply: null };
+    return { needsReply: jev?.needsReply ?? false, summary: message.bodyText.slice(0, 200), draftReply: null, urgencySignal: jev?.urgencySignal ?? 'none' };
   }
 }
 
 const insertTriageStmt = db.prepare(`
-  INSERT INTO email_message_triage (message_id, needs_reply, summary, draft_reply)
-  VALUES (@messageId, @needsReply, @summary, @draftReply)
+  INSERT INTO email_message_triage (message_id, needs_reply, summary, draft_reply, urgency_signal)
+  VALUES (@messageId, @needsReply, @summary, @draftReply, @urgencySignal)
   ON CONFLICT(message_id) DO UPDATE SET
     needs_reply = excluded.needs_reply,
     summary = excluded.summary,
-    draft_reply = excluded.draft_reply
+    draft_reply = excluded.draft_reply,
+    urgency_signal = excluded.urgency_signal
 `);
 
 /**
@@ -119,6 +148,7 @@ export async function runEmailTriage(): Promise<{ triaged: number }> {
         needsReply: result.needsReply ? 1 : 0,
         summary: result.summary,
         draftReply: result.draftReply,
+        urgencySignal: result.urgencySignal,
       });
       triaged++;
     } catch (err: any) {

@@ -1,11 +1,16 @@
-import { isJiraConfigured, getMyOpenJiraIssues, JiraTaskMatch } from '../integrations/jiraMcp';
+import { isJiraConfigured, getMyOpenJiraIssues, getJiraCommentMentions, JiraTaskMatch } from '../integrations/jiraMcp';
+import { config } from '../config';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
 import { getPullRequestActivity } from '../integrations/bitbucketReviews';
 import { getAllOpenActionItems, ActionItemWithSession } from '../storage/summaryRepository';
-import { upsertTask, pruneTasksForSource, UpsertTaskInput } from '../storage/taskRepository';
+import { upsertTask, pruneTasksForSource, getTaskByExternalRef, UpsertTaskInput, TaskSource } from '../storage/taskRepository';
+import { askJev, isJevConfigured, jevChoice, URGENCY_QUESTION, URGENCY_SIGNALS, UrgencySignal } from '../integrations/typesafeJev';
+import type { BitbucketPullRequest } from '../integrations/bitbucketServer';
 import { getCurrentFailingBuilds } from '../storage/jenkinsBuildRepository';
 import { isJenkinsConfigured } from '../integrations/jenkinsClient';
 import { db } from '../storage/db';
+import type { MessageUrgencySignal } from '../communications/teamsMessageTriage';
+// emailTriage.ts declares its own identical MessageUrgencySignal type alias — structurally the same union, reused here rather than importing twice.
 
 /** 1 (lowest) - 5 (highest) — days-until-due buckets shared by every source that has a real due date. */
 function urgencyFromDueDate(dueDate: string | null | undefined): number {
@@ -37,7 +42,18 @@ function jiraImportance(priorityName: string | null): number {
   return JIRA_PRIORITY_SCORE[priorityName.toLowerCase()] ?? 3;
 }
 
-function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
+/** Case-insensitive membership check against config.vipSenders — shared across all four message sources (Teams/email sender, Jira/Bitbucket commenter) rather than four bespoke checks. */
+function isVip(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return config.vipSenders.includes(name.toLowerCase());
+}
+
+/** Applies the VIP importance bump (+1, capped at 5) uniformly wherever a sender/commenter name is available. */
+function withVipBump(importance: number, name: string | null | undefined): number {
+  return isVip(name) ? Math.min(5, importance + 1) : importance;
+}
+
+export function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
   return {
     source: 'jira',
     externalRef: issue.key,
@@ -51,7 +67,7 @@ function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
 }
 
 /** 1 (fresh) - 5 (stale) — a review request sitting unreviewed longer is more urgent, not less. */
-function reviewRequestUrgency(createdDate: string | null): number {
+export function reviewRequestUrgency(createdDate: string | null): number {
   if (!createdDate) return 3;
   const ageMs = Date.now() - new Date(createdDate).getTime();
   const ageDays = ageMs / (24 * 60 * 60 * 1000);
@@ -64,37 +80,126 @@ function actionItemImportance(confidence: ActionItemWithSession['confidence']): 
   return confidence === 'inferred' ? 3 : 4; // explicit/manual were both deliberate; inferred is a guess
 }
 
-/** 2 (old) - 5 (fresh) — unlike a due date, a Teams message has no deadline; recency itself is the urgency signal (a DM from an hour ago is more pressing to answer than one from three days ago). Recomputed live every sync, not frozen at classification time. */
-function teamsMessageUrgency(occurredAt: string): number {
+/**
+ * 2 (old) - 5 (fresh) recency baseline — unlike a due date, a Teams message
+ * has no deadline; message age itself is the fallback urgency signal (a DM
+ * from an hour ago is more pressing to answer than one from three days
+ * ago). `urgencySignal` (teamsMessageTriage.ts's LLM-assessed classification
+ * of the message TEXT itself) overrides/boosts that recency baseline:
+ * 'urgent' forces the max regardless of age, 'soon' guarantees at least a
+ * 4. Recomputed live every sync, not frozen at classification time.
+ */
+function teamsMessageUrgency(occurredAt: string, urgencySignal: MessageUrgencySignal): number {
+  if (urgencySignal === 'urgent') return 5;
   const ageMs = Date.now() - new Date(occurredAt).getTime();
   const ageHours = ageMs / (60 * 60 * 1000);
-  if (ageHours < 1) return 5;
-  if (ageHours < 6) return 4;
-  if (ageHours < 24) return 3;
-  return 2;
+  const recency = ageHours < 1 ? 5 : ageHours < 6 ? 4 : ageHours < 24 ? 3 : 2;
+  return urgencySignal === 'soon' ? Math.max(recency, 4) : recency;
 }
 
-/** Same recency bucketing as teamsMessageUrgency — kept separate rather than a shared helper to match this file's existing one-function-per-source style. */
-function emailMessageUrgency(occurredAt: string): number {
+/** Same recency+urgencySignal combination as teamsMessageUrgency — kept separate rather than a shared helper to match this file's existing one-function-per-source style. */
+function emailMessageUrgency(occurredAt: string, urgencySignal: MessageUrgencySignal): number {
+  if (urgencySignal === 'urgent') return 5;
   const ageMs = Date.now() - new Date(occurredAt).getTime();
   const ageHours = ageMs / (60 * 60 * 1000);
-  if (ageHours < 1) return 5;
-  if (ageHours < 6) return 4;
-  if (ageHours < 24) return 3;
-  return 2;
+  const recency = ageHours < 1 ? 5 : ageHours < 6 ? 4 : ageHours < 24 ? 3 : 2;
+  return urgencySignal === 'soon' ? Math.max(recency, 4) : recency;
 }
 
+/** 3 (fresh) - 5 (stale) — a comment sitting unread longer is more urgent, not less; deliberately narrower than teamsMessageUrgency/emailMessageUrgency's 2-5 range since a Jira comment is inherently lower-urgency than a direct chat/email. */
+function jiraCommentUrgency(createdDate: string): number {
+  const ageMs = Date.now() - new Date(createdDate).getTime();
+  const ageDays = ageMs / (24 * 60 * 60 * 1000);
+  if (ageDays >= 2) return 5;
+  if (ageDays >= 1) return 4;
+  return 3;
+}
+
+/** Jev's read of a comment mention's own text — the cached value when this ref was classified before, a fresh Jev call otherwise, null if Jev isn't configured or fails (retried on the next sync). */
+async function commentUrgencySignal(source: TaskSource, ref: string, text: string): Promise<UrgencySignal | null> {
+  const cached = getTaskByExternalRef(source, ref)?.urgencySignal;
+  if (cached) return cached as UrgencySignal;
+  if (!isJevConfigured()) return null;
+  try {
+    const answers = await askJev(text, { urgency: URGENCY_QUESTION }, 'commentUrgency');
+    return jevChoice(answers.urgency, URGENCY_SIGNALS);
+  } catch (err: any) {
+    console.error(`[task-sync] Jev urgency failed for ${ref}:`, err.message);
+    return null;
+  }
+}
+
+/** Same override rule teamsMessageUrgency applies to its recency baseline: 'urgent' forces the max, 'soon' guarantees at least a 4. */
+function withUrgencySignal(base: number, signal: UrgencySignal | null): number {
+  if (signal === 'urgent') return 5;
+  if (signal === 'soon') return Math.max(base, 4);
+  return base;
+}
+
+/**
+ * Fans out to both "issues assigned to me" (getMyOpenJiraIssues) and — when
+ * config.jiraUserIdentifier is set — "new comments on issues I'm
+ * assigned to/watching" (getJiraCommentMentions), the same combined-refs
+ * pattern syncBitbucket() below already uses for its own two comment/PR
+ * shapes. Both must share ONE `refs` array and ONE pruneTasksForSource
+ * call — a second, separate prune call scoped to only one of the two ref
+ * shapes would delete the other's tasks as collateral on every sync.
+ */
 async function syncJira(): Promise<void> {
   if (!isJiraConfigured()) return;
+  const refs: string[] = [];
+
   const issues = await getMyOpenJiraIssues();
-  for (const issue of issues) upsertTask(jiraIssueToTask(issue));
-  pruneTasksForSource('jira', issues.map((i) => i.key));
+  for (const issue of issues) {
+    refs.push(issue.key);
+    upsertTask(jiraIssueToTask(issue));
+  }
+
+  if (config.jiraUserIdentifier) {
+    const mentions = await getJiraCommentMentions();
+    for (const mention of mentions) {
+      const ref = `${mention.issueKey}:comment:${mention.commentId}`;
+      refs.push(ref);
+      const urgencySignal = await commentUrgencySignal('jira', ref, mention.text);
+      upsertTask({
+        source: 'jira',
+        externalRef: ref,
+        title: `Comment on ${mention.issueKey}: ${mention.issueSummary}`,
+        description: `${mention.authorName}: ${mention.text.slice(0, 300)}`,
+        url: mention.url,
+        dueDate: null,
+        importanceScore: withVipBump(jiraImportance(mention.priorityName), mention.authorName),
+        urgencyScore: withUrgencySignal(jiraCommentUrgency(mention.createdDate), urgencySignal),
+        urgencySignal,
+      });
+    }
+  }
+
+  pruneTasksForSource('jira', refs);
+}
+
+export type ReviewState = 'NEW' | 'NEEDS_WORK' | 'REWORKED';
+
+/**
+ * Bitbucket's own NEEDS_WORK/UNAPPROVED, plus REWORKED: you requested
+ * changes and the author has pushed since (lastReviewedCommit no longer the
+ * branch head). `previous` covers Bitbucket clearing NEEDS_WORK back to
+ * UNAPPROVED on push, if the repo resets reviewer status on source updates —
+ * not observed live yet, so without the remembered prior state that PR would
+ * silently fall back to NEW.
+ */
+export function deriveReviewState(pr: Pick<BitbucketPullRequest, 'myApprovalStatus' | 'myLastReviewedCommit' | 'fromLatestCommit'>, previous: string | null | undefined): ReviewState {
+  const pushedSinceReview = !!pr.myLastReviewedCommit && !!pr.fromLatestCommit && pr.myLastReviewedCommit !== pr.fromLatestCommit;
+  if (pr.myApprovalStatus === 'NEEDS_WORK') return pushedSinceReview ? 'REWORKED' : 'NEEDS_WORK';
+  if ((previous === 'NEEDS_WORK' || previous === 'REWORKED') && pushedSinceReview) return 'REWORKED';
+  return 'NEW';
 }
 
 async function syncBitbucket(): Promise<void> {
   if (!isBitbucketConfigured()) return;
   const activity = await getPullRequestActivity();
   const refs: string[] = [];
+  const reviewStateByPr = new Map<string, ReviewState>();
 
   for (const pr of activity.reviewRequests) {
     // Already approved by you — nothing left for you to do, so it shouldn't
@@ -104,6 +209,8 @@ async function syncBitbucket(): Promise<void> {
     if (pr.myApprovalStatus === 'APPROVED') continue;
     const ref = `${pr.projectKey}/${pr.repoSlug}#${pr.id}`;
     refs.push(ref);
+    const reviewState = deriveReviewState(pr, getTaskByExternalRef('bitbucket_pr', ref)?.myReviewStatus);
+    reviewStateByPr.set(ref, reviewState);
     upsertTask({
       source: 'bitbucket_pr',
       externalRef: ref,
@@ -113,12 +220,14 @@ async function syncBitbucket(): Promise<void> {
       dueDate: null,
       importanceScore: 4,
       urgencyScore: reviewRequestUrgency(pr.createdDate),
+      myReviewStatus: reviewState,
     });
   }
 
   for (const comment of activity.mentionsOfMe) {
-    const ref = `${comment.projectKey}/${comment.repoSlug}#${comment.prId}:${comment.createdDate}:${comment.authorName}`;
+    const ref = `${comment.projectKey}/${comment.repoSlug}#${comment.prId}:comment:${comment.commentId}`;
     refs.push(ref);
+    const urgencySignal = await commentUrgencySignal('bitbucket_pr', ref, comment.text);
     upsertTask({
       source: 'bitbucket_pr',
       externalRef: ref,
@@ -126,8 +235,12 @@ async function syncBitbucket(): Promise<void> {
       description: `${comment.authorName}: ${comment.text.slice(0, 300)}`,
       url: null,
       dueDate: null,
-      importanceScore: 3,
-      urgencyScore: 3,
+      importanceScore: withVipBump(3, comment.authorName),
+      urgencyScore: withUrgencySignal(3, urgencySignal),
+      urgencySignal,
+      // A mention card shows its PR's review state too — null only when that
+      // PR isn't one of your open review requests (e.g. your own PR).
+      myReviewStatus: reviewStateByPr.get(`${comment.projectKey}/${comment.repoSlug}#${comment.prId}`) ?? null,
     });
   }
 
@@ -165,13 +278,16 @@ interface TriagedTeamsMessageRow {
   directedAtMe: number;
   summary: string;
   draftReply: string | null;
+  urgencySignal: MessageUrgencySignal;
+  participants: string | null;
 }
 
 async function syncTeamsMessages(): Promise<void> {
   const rows = db
     .prepare(
       `SELECT t.message_id AS messageId, em.title AS chatTitle, em.occurred_at AS occurredAt,
-              t.directed_at_me AS directedAtMe, t.summary AS summary, t.draft_reply AS draftReply
+              t.directed_at_me AS directedAtMe, t.summary AS summary, t.draft_reply AS draftReply,
+              t.urgency_signal AS urgencySignal, em.participants AS participants
        FROM teams_message_triage t
        JOIN external_messages em ON em.id = t.message_id`
     )
@@ -182,6 +298,7 @@ async function syncTeamsMessages(): Promise<void> {
     refs.push(row.messageId);
     const directedAtMe = !!row.directedAtMe;
     const chatTitle = row.chatTitle ?? 'Unknown chat';
+    const sender: string | undefined = row.participants ? JSON.parse(row.participants)[0] : undefined;
     upsertTask({
       source: 'teams_message',
       externalRef: row.messageId,
@@ -189,8 +306,8 @@ async function syncTeamsMessages(): Promise<void> {
       description: row.summary,
       url: null,
       dueDate: null,
-      importanceScore: directedAtMe ? 4 : 2,
-      urgencyScore: teamsMessageUrgency(row.occurredAt),
+      importanceScore: withVipBump(directedAtMe ? 4 : 2, sender),
+      urgencyScore: teamsMessageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
     });
   }
@@ -204,13 +321,16 @@ interface TriagedEmailMessageRow {
   needsReply: number;
   summary: string;
   draftReply: string | null;
+  urgencySignal: MessageUrgencySignal;
+  participants: string | null;
 }
 
 async function syncEmailMessages(): Promise<void> {
   const rows = db
     .prepare(
       `SELECT t.message_id AS messageId, em.title AS subject, em.occurred_at AS occurredAt,
-              t.needs_reply AS needsReply, t.summary AS summary, t.draft_reply AS draftReply
+              t.needs_reply AS needsReply, t.summary AS summary, t.draft_reply AS draftReply,
+              t.urgency_signal AS urgencySignal, em.participants AS participants
        FROM email_message_triage t
        JOIN external_messages em ON em.id = t.message_id`
     )
@@ -221,6 +341,7 @@ async function syncEmailMessages(): Promise<void> {
     refs.push(row.messageId);
     const needsReply = !!row.needsReply;
     const subject = row.subject ?? 'No subject';
+    const sender: string | undefined = row.participants ? JSON.parse(row.participants)[0] : undefined;
     upsertTask({
       source: 'email_message',
       externalRef: row.messageId,
@@ -228,8 +349,8 @@ async function syncEmailMessages(): Promise<void> {
       description: row.summary,
       url: null,
       dueDate: null,
-      importanceScore: needsReply ? 4 : 2,
-      urgencyScore: emailMessageUrgency(row.occurredAt),
+      importanceScore: withVipBump(needsReply ? 4 : 2, sender),
+      urgencyScore: emailMessageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
     });
   }

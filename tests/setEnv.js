@@ -29,6 +29,10 @@ for (const key of [
   'JENKINS_URL',
   'JENKINS_USER',
   'JENKINS_API_TOKEN',
+  'GEMINI_CLI_REVIEW_ENABLED',
+  'TYPESAFE_API_KEY',
 ]) {
   process.env[key] = '';
 }
+// config.bool() treats '' as "use the default" (true here), so this one needs an explicit 'false'.
+process.env.CLAUDE_TEXT_ROUTING = 'false';

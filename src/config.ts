@@ -36,7 +36,15 @@ function num(key: string, envVar: string, fallback: number): number {
 
 function bool(key: string, envVar: string, fallback: boolean): boolean {
   const raw = overrides[key] ?? process.env[envVar];
-  return raw === undefined ? fallback : raw !== 'false' && raw !== '0';
+  // '' is treated the same as undefined (falls through to fallback), not as
+  // an explicit true — matching str()'s "empty means not configured"
+  // convention that tests/setEnv.js relies on to force every optional
+  // integration off regardless of what a developer's real .env has set,
+  // confirmed live this was silently NOT happening for bool() before: an
+  // empty-string override fell through the "raw !== 'false' && raw !== '0'"
+  // check as true, the opposite of what setEnv.js's blanket '' meant for
+  // every other config type.
+  return !raw ? fallback : raw !== 'false' && raw !== '0';
 }
 
 function parseCodebaseLocalPaths(raw: string): { name: string; path: string }[] {
@@ -95,6 +103,14 @@ export const config = {
   },
   get geminiModel(): string {
     return str('geminiModel', 'GEMINI_MODEL', 'gemini-flash-latest');
+  },
+  /** Lets src/ai/aiRouter.ts send prose tasks to the Claude Code CLI subscription before metered Gemini. tests/setEnv.js turns it off so the suite never spawns a real `claude`. */
+  get claudeTextRouting(): boolean {
+    return bool('claudeTextRouting', 'CLAUDE_TEXT_ROUTING', true);
+  },
+  /** TypeSafe's Jev (docs.typesafe.ai) — takes over the classification-only decisions (triage, comment urgency, PR recommendation) when set; those fall back to Gemini/heuristics if unset. */
+  get typesafeApiKey(): string {
+    return str('typesafeApiKey', 'TYPESAFE_API_KEY', '');
   },
   /** Distinct from geminiModel — the Live API (voice chat/practice) requires a model that supports bidiGenerateContent, not a plain generateContent model. Confirmed available via ai.models.list() at the time this was set; if Google retires it, list models filtered on supportedActions.includes('bidiGenerateContent') to find the current name. */
   get geminiLiveModel(): string {
@@ -227,6 +243,18 @@ export const config = {
   },
   get jiraPersonalToken(): string {
     return str('jiraPersonalToken', 'JIRA_PERSONAL_TOKEN', '');
+  },
+  /** Email/username/accountId identifying "me" in Jira — unlike `assignee = currentUser()` (resolved server-side by the JQL search itself), filtering OUT my own comments when scanning issues for new comment activity needs a local identity to compare `comment.author` against. Comment-mention surfacing (src/orchestrator/taskSync.ts's syncJira) is skipped if unset. */
+  get jiraUserIdentifier(): string {
+    return str('jiraUserIdentifier', 'JIRA_USER_IDENTIFIER', '');
+  },
+
+  /** Names/emails whose messages/comments get a priority bump across all four message sources (Teams, email, Jira comments, Bitbucket PR comments) — see src/orchestrator/taskSync.ts's isVip(). Empty (no boost applied anywhere) if unset. */
+  get vipSenders(): string[] {
+    return str('vipSenders', 'VIP_SENDERS', '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
   },
 
   /** Confluence (fact-check/Q&A source), also via `mcp-atlassian`. Feature is skipped if url/username/token are unset. */
@@ -447,7 +475,7 @@ export const config = {
 
   /** Trunk branch every ticket branch is cut from and merged back into (src/dev/ — trunk-based, short-lived branches). */
   get devTrunkBranch(): string {
-    return str('devTrunkBranch', 'DEV_TRUNK_BRANCH', 'main');
+    return str('devTrunkBranch', 'DEV_TRUNK_BRANCH', 'master');
   },
   /** Pre-PR self-review checklist thresholds (src/dev/prePrChecks.ts) — above either, the PR-size check warns and suggests a split. */
   get prePrMaxChangedFiles(): number {

@@ -1,8 +1,7 @@
-import { config } from '../config';
-import { getGeminiClient } from '../gemini/geminiClient';
-import { logGeminiUsage } from '../gemini/logUsage';
 import { db } from '../storage/db';
+import { generateJson } from '../ai/aiRouter';
 import { ExternalMessage } from '../storage/externalMessageRepository';
+import { askJev, isJevConfigured, jevChoice, jevTrue, URGENCY_QUESTION, URGENCY_SIGNALS } from '../integrations/typesafeJev';
 
 /**
  * Who "me" is, inferred from data already collected rather than a config
@@ -56,10 +55,13 @@ export function getUntriagedTeamsMessages(myName: string): ExternalMessage[] {
     .filter((m) => m.participants[0] !== myName);
 }
 
+export type MessageUrgencySignal = 'none' | 'soon' | 'urgent';
+
 export interface TeamsMessageClassification {
   directedAtMe: boolean;
   summary: string;
   draftReply: string | null;
+  urgencySignal: MessageUrgencySignal;
 }
 
 const CLASSIFY_SCHEMA = {
@@ -76,8 +78,14 @@ const CLASSIFY_SCHEMA = {
       nullable: true,
       description: 'Only when directedAtMe is true: a short, casual draft reply (a sentence or two, the way a real Teams message reads). Null otherwise.',
     },
+    urgencySignal: {
+      type: 'string',
+      enum: ['none', 'soon', 'urgent'],
+      description:
+        '"urgent" if the message explicitly demands fast action (words like ASAP/urgent/blocking, or a same-day deadline/escalation tone). "soon" if there is a clear but not-immediate deadline or expectation. "none" otherwise.',
+    },
   },
-  required: ['directedAtMe', 'summary'],
+  required: ['directedAtMe', 'summary', 'urgencySignal'],
 };
 
 /**
@@ -86,10 +94,30 @@ const CLASSIFY_SCHEMA = {
  * structured JSON output), since this is the same kind of mechanical
  * extraction from short text already in hand.
  */
-export async function classifyMessage(message: ExternalMessage, myName: string): Promise<TeamsMessageClassification> {
+export async function classifyWithJev(message: ExternalMessage, myName: string): Promise<{ directedAtMe: boolean; urgencySignal: MessageUrgencySignal } | null> {
+  if (!isJevConfigured()) return null;
   try {
-    if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not configured — see NOTES.md.');
+    const answers = await askJev(`Reader: ${myName}\nChat: ${message.title ?? 'Unknown chat'}\nSender: ${message.participants[0] ?? 'Unknown'}\n\n${message.bodyText}`, {
+      directedAtMe: {
+        type: 'noul',
+        instructions: `This message is aimed at ${myName} specifically: a 1:1 direct message to them, a question asked of them, or an @mention of them — not general group chatter.`,
+      },
+      urgency: URGENCY_QUESTION,
+    }, 'classifyTeamsMessage');
+    const directedAtMe = jevTrue(answers.directedAtMe);
+    const urgencySignal = jevChoice(answers.urgency, URGENCY_SIGNALS);
+    if (directedAtMe === null || urgencySignal === null) return null;
+    return { directedAtMe, urgencySignal };
+  } catch (err: any) {
+    console.error('[teams-triage] Jev classification failed, falling back to Gemini:', err.message);
+    return null;
+  }
+}
 
+export async function classifyMessage(message: ExternalMessage, myName: string): Promise<TeamsMessageClassification> {
+  // Same split as emailTriage.ts's classifyMessage: Jev decides, the AI router writes.
+  const jev = await classifyWithJev(message, myName);
+  try {
     const prompt = `You are triaging a Microsoft Teams message for "${myName}", who is reading it.
 
 Chat: ${message.title ?? 'Unknown chat'}
@@ -98,37 +126,35 @@ Message: ${JSON.stringify(message.bodyText)}
 
 Decide whether this message is directed at ${myName} specifically (a 1:1 DM, a direct question, or an @mention of them)
 versus general group/channel chatter they should just be aware of. Summarize what they need to know, and if it's
-directed at them, draft a short reply they could send back.`;
+directed at them, draft a short reply they could send back.${
+      jev ? `\n\nIt has already been decided that this message ${jev.directedAtMe ? 'IS' : 'is NOT'} directed at ${myName} — use that as directedAtMe.` : ''
+    }`;
 
-    const response = await getGeminiClient().models.generateContent({
-      model: config.geminiFastModel,
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA, thinkingConfig: { thinkingBudget: 1 } },
-    });
-    logGeminiUsage('classifyTeamsMessage', response);
-
-    const parsed = JSON.parse(response.text ?? '{}');
-    const directedAtMe = !!parsed.directedAtMe;
+    const parsed = await generateJson<any>('triageProse', 'classifyTeamsMessage', prompt, CLASSIFY_SCHEMA);
+    const directedAtMe = jev?.directedAtMe ?? !!parsed.directedAtMe;
+    const urgencySignal: MessageUrgencySignal = jev?.urgencySignal ?? (['none', 'soon', 'urgent'].includes(parsed.urgencySignal) ? parsed.urgencySignal : 'none');
     return {
       directedAtMe,
       summary: parsed.summary || message.bodyText.slice(0, 200),
       draftReply: directedAtMe ? parsed.draftReply || null : null,
+      urgencySignal,
     };
   } catch {
     // Never let a bad/missing LLM response block the rest of the batch —
     // same "never crash on a malformed response" convention as
     // actionItemDrafts.ts's fallback-shaping.
-    return { directedAtMe: false, summary: message.bodyText.slice(0, 200), draftReply: null };
+    return { directedAtMe: jev?.directedAtMe ?? false, summary: message.bodyText.slice(0, 200), draftReply: null, urgencySignal: jev?.urgencySignal ?? 'none' };
   }
 }
 
 const insertTriageStmt = db.prepare(`
-  INSERT INTO teams_message_triage (message_id, directed_at_me, summary, draft_reply)
-  VALUES (@messageId, @directedAtMe, @summary, @draftReply)
+  INSERT INTO teams_message_triage (message_id, directed_at_me, summary, draft_reply, urgency_signal)
+  VALUES (@messageId, @directedAtMe, @summary, @draftReply, @urgencySignal)
   ON CONFLICT(message_id) DO UPDATE SET
     directed_at_me = excluded.directed_at_me,
     summary = excluded.summary,
-    draft_reply = excluded.draft_reply
+    draft_reply = excluded.draft_reply,
+    urgency_signal = excluded.urgency_signal
 `);
 
 /**
@@ -152,6 +178,7 @@ export async function runTeamsMessageTriage(): Promise<{ triaged: number }> {
         directedAtMe: result.directedAtMe ? 1 : 0,
         summary: result.summary,
         draftReply: result.draftReply,
+        urgencySignal: result.urgencySignal,
       });
       triaged++;
     } catch (err: any) {
