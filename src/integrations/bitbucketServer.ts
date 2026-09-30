@@ -85,6 +85,9 @@ export interface BitbucketPullRequest {
   link: string;
   /** Only present when this PR was fetched with role=REVIEWER and the caller's own review status could be identified. */
   myApprovalStatus?: string;
+  /** Source-branch commit the user last reviewed, vs. the branch's current head below — confirmed live that /dashboard/pull-requests returns both (reviewers[].lastReviewedCommit, fromRef.latestCommit). They differ once the author pushes after your review. */
+  myLastReviewedCommit?: string;
+  fromLatestCommit?: string | null;
   /** Epoch-derived ISO timestamp, same conversion as BitbucketPullRequestComment.createdDate — used by the orchestrator's task scoring to age a still-open review request. Null if Bitbucket's response omits it (shouldn't happen in practice, defensive only). */
   createdDate: string | null;
   /** PR description body — used by the PR-review flow to find linked Jira keys, alongside the title. */
@@ -107,6 +110,8 @@ function mapPullRequest(raw: any): BitbucketPullRequest {
     authorName: raw.author?.user?.displayName ?? raw.author?.user?.name ?? 'unknown',
     link: raw.links?.self?.[0]?.href ?? '',
     myApprovalStatus: myReviewer?.status,
+    myLastReviewedCommit: myReviewer?.lastReviewedCommit,
+    fromLatestCommit: raw.fromRef?.latestCommit ?? null,
     createdDate: raw.createdDate ? new Date(raw.createdDate).toISOString() : null,
     description: raw.description ?? null,
     fromRefDisplayId: raw.fromRef?.displayId ?? null,
@@ -138,14 +143,56 @@ export async function getPullRequestsForRole(role: 'REVIEWER' | 'AUTHOR', state:
   return raw.map(mapPullRequest);
 }
 
+export interface BitbucketCommentAnchorInfo {
+  path: string;
+  line: number | null;
+  lineType: 'ADDED' | 'CONTEXT' | 'REMOVED' | null;
+  fileType: 'FROM' | 'TO' | null;
+}
+
 export interface BitbucketPullRequestComment {
   prId: number;
   prTitle: string;
   projectKey: string;
   repoSlug: string;
+  commentId: number;
   authorName: string;
   text: string;
   createdDate: string;
+  /** Set only for inline/file comments — Bitbucket's activity feed carries this as `commentAnchor` on the activity, not on the comment itself. Null for general PR-level comments. Used to overlay existing human comments onto the diff viewer. */
+  anchor: BitbucketCommentAnchorInfo | null;
+}
+
+function mapCommentAnchor(raw: any): BitbucketCommentAnchorInfo | null {
+  if (!raw?.path) return null;
+  return {
+    path: raw.path,
+    line: raw.line ?? null,
+    lineType: raw.lineType ?? null,
+    fileType: raw.fileType ?? null,
+  };
+}
+
+/** Flattens one comment plus its threaded replies (Bitbucket nests replies under `.comments[]`) — replies inherit the parent's anchor since Bitbucket doesn't repeat it per-reply. */
+function flattenComment(comment: any, pr: Pick<BitbucketPullRequest, 'id' | 'title' | 'projectKey' | 'repoSlug'>, anchor: BitbucketCommentAnchorInfo | null): BitbucketPullRequestComment[] {
+  const out: BitbucketPullRequestComment[] = [];
+  if (comment?.text) {
+    out.push({
+      prId: pr.id,
+      prTitle: pr.title,
+      projectKey: pr.projectKey,
+      repoSlug: pr.repoSlug,
+      commentId: comment.id,
+      authorName: comment.author?.displayName ?? comment.author?.name ?? 'unknown',
+      text: comment.text,
+      createdDate: new Date(comment.createdDate).toISOString(),
+      anchor,
+    });
+  }
+  for (const reply of comment?.comments ?? []) {
+    out.push(...flattenComment(reply, pr, anchor));
+  }
+  return out;
 }
 
 /** activities includes comments, approvals, merges, etc. — filtered to COMMENTED here since that's the only action type with free-text worth surfacing. */
@@ -156,15 +203,7 @@ export async function getPullRequestComments(pr: Pick<BitbucketPullRequest, 'id'
   );
   return raw
     .filter((a) => a.action === 'COMMENTED' && a.comment?.text)
-    .map((a) => ({
-      prId: pr.id,
-      prTitle: pr.title,
-      projectKey: pr.projectKey,
-      repoSlug: pr.repoSlug,
-      authorName: a.comment.author?.displayName ?? a.comment.author?.name ?? 'unknown',
-      text: a.comment.text,
-      createdDate: new Date(a.createdDate).toISOString(),
-    }));
+    .flatMap((a) => flattenComment(a.comment, pr, mapCommentAnchor(a.commentAnchor)));
 }
 
 /** Matches a "path/like/this.ext" style token in free text, if the query names a specific file. */
@@ -228,7 +267,7 @@ export async function searchBitbucketServer(query: string, limit = 5): Promise<B
   return matches.slice(0, limit);
 }
 
-type PrRef = Pick<BitbucketPullRequest, 'id' | 'projectKey' | 'repoSlug'>;
+export type PrRef = Pick<BitbucketPullRequest, 'id' | 'projectKey' | 'repoSlug'>;
 
 /** Every file path touched by a PR, via the /changes endpoint — used to stage review comments (a finding whose file isn't in this list can't be an inline/file-level comment). NOT yet confirmed live against a real Bitbucket Server instance (none configured in this dev environment) — verify the `path` shape (`path.toString`/`path.name`) against one real response before relying on this. */
 export async function getPullRequestChangedPaths(pr: PrRef): Promise<string[]> {
@@ -283,6 +322,85 @@ export async function getPullRequestDiffAnchors(pr: PrRef, path: string): Promis
   return anchors;
 }
 
+export interface DiffLine {
+  text: string;
+  sourceLine: number | null;
+  destinationLine: number | null;
+  type: 'ADDED' | 'REMOVED' | 'CONTEXT';
+}
+
+export interface DiffHunk {
+  sourceLine: number;
+  sourceSpan: number;
+  destinationLine: number;
+  destinationSpan: number;
+  lines: DiffLine[];
+}
+
+export type FileChangeType = 'ADD' | 'MODIFY' | 'DELETE' | 'RENAME' | 'UNKNOWN';
+
+export interface FileDiff {
+  path: string;
+  srcPath: string | null;
+  changeType: FileChangeType;
+  hunks: DiffHunk[];
+}
+
+function diffFileChangeType(diff: any): FileChangeType {
+  const hasSource = !!diff.source;
+  const hasDestination = !!diff.destination;
+  if (!hasSource && hasDestination) return 'ADD';
+  if (hasSource && !hasDestination) return 'DELETE';
+  if (hasSource && hasDestination && diff.source.toString !== diff.destination.toString) return 'RENAME';
+  if (hasSource && hasDestination) return 'MODIFY';
+  return 'UNKNOWN';
+}
+
+/**
+ * Fetches the whole PR's diff in one call (every changed file), unlike
+ * getPullRequestDiffAnchors above which only pulls one named file's diff and
+ * only line numbers (for anchor validation). This keeps the actual line text
+ * too, since it's meant to be rendered, not just matched against. NOT yet
+ * confirmed live against a real Bitbucket Server instance — same caveat as
+ * getPullRequestChangedPaths/getPullRequestDiffAnchors above; verify the
+ * `diffs[].source`/`.destination`/`hunks[].segments[].lines[].line` shape
+ * against a real response before relying on the changeType inference here.
+ */
+export async function getPullRequestDiff(pr: PrRef): Promise<FileDiff[]> {
+  if (!isBitbucketConfigured()) {
+    throw new Error('Bitbucket Server is not configured — see NOTES.md.');
+  }
+  const raw = await apiGet(
+    `/rest/api/1.0/projects/${encodeURIComponent(pr.projectKey)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/diff?contextLines=10&withComments=false`
+  );
+  return (raw?.diffs ?? []).map((diff: any): FileDiff => {
+    const path = diff.destination?.toString ?? diff.source?.toString ?? '';
+    const srcPath = diff.source?.toString && diff.source.toString !== path ? diff.source.toString : null;
+    const hunks: DiffHunk[] = (diff.hunks ?? []).map((hunk: any): DiffHunk => {
+      const lines: DiffLine[] = [];
+      for (const segment of hunk.segments ?? []) {
+        const type = segment.type as 'ADDED' | 'REMOVED' | 'CONTEXT';
+        for (const line of segment.lines ?? []) {
+          lines.push({
+            text: line.line ?? '',
+            sourceLine: line.source ?? null,
+            destinationLine: line.destination ?? null,
+            type,
+          });
+        }
+      }
+      return {
+        sourceLine: hunk.sourceLine,
+        sourceSpan: hunk.sourceSpan,
+        destinationLine: hunk.destinationLine,
+        destinationSpan: hunk.destinationSpan,
+        lines,
+      };
+    });
+    return { path, srcPath, changeType: diffFileChangeType(diff), hunks };
+  });
+}
+
 export interface BitbucketCommentAnchor {
   path: string;
   srcPath?: string;
@@ -325,6 +443,33 @@ export async function addPullRequestComment(pr: PrRef, input: BitbucketCommentIn
     body
   );
   return { id: raw.id, version: raw.version };
+}
+
+export type PullRequestParticipantStatus = 'APPROVED' | 'UNAPPROVED' | 'NEEDS_WORK';
+
+/**
+ * Real write — sets the authenticated account's own review decision on a PR
+ * (mapPullRequest's myApprovalStatus above is this same field, read-side).
+ * Bitbucket Server's PUT .../participants/{userSlug} expects the full
+ * participant object it would otherwise return, not a partial patch — same
+ * "send status alongside the fields Bitbucket already ties to it" shape its
+ * own responses use. userSlug is always config.bitbucketServerUsername (the
+ * credential's own account) — this app never acts as a reviewer other than
+ * itself. NOT yet confirmed live against a real Bitbucket Server instance
+ * (none configured in this dev environment) — verify the request body shape
+ * against one real call before relying on it, same caveat as
+ * getPullRequestChangedPaths/getPullRequestDiffAnchors above.
+ */
+export async function setPullRequestParticipantStatus(pr: PrRef, status: PullRequestParticipantStatus): Promise<void> {
+  if (!isBitbucketConfigured()) {
+    throw new Error('Bitbucket Server is not configured — see NOTES.md.');
+  }
+  const userSlug = config.bitbucketServerUsername;
+  await apiSend(
+    `/rest/api/1.0/projects/${encodeURIComponent(pr.projectKey)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/participants/${encodeURIComponent(userSlug)}`,
+    'PUT',
+    { user: { name: userSlug }, approved: status === 'APPROVED', status }
+  );
 }
 
 export interface CreatePullRequestInput {

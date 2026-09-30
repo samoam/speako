@@ -6,7 +6,7 @@ import * as bitbucketReviews from '../src/integrations/bitbucketReviews';
 import * as summaryRepository from '../src/storage/summaryRepository';
 import * as jenkinsClientModule from '../src/integrations/jenkinsClient';
 import * as jenkinsBuildRepositoryModule from '../src/storage/jenkinsBuildRepository';
-import { syncTasks } from '../src/orchestrator/taskSync';
+import { syncTasks, deriveReviewState } from '../src/orchestrator/taskSync';
 import { getOpenTasks } from '../src/storage/taskRepository';
 import { db } from '../src/storage/db';
 
@@ -261,6 +261,101 @@ test('syncTasks: one source failing does not prevent the others from syncing', a
   }
 });
 
+test('syncTasks: a Teams message with urgencySignal "urgent" scores urgency 5 even though it is old', async () => {
+  const spies = mockAllUnconfigured();
+  db.prepare(`
+    INSERT INTO external_messages (id, source, title, participants, occurred_at, body_text)
+    VALUES (@id, 'teams', @title, @participants, @occurredAt, @bodyText)
+  `).run({
+    id: 'teams-test:urgent-old',
+    title: 'Incident channel',
+    participants: JSON.stringify(['Alice']),
+    occurredAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(), // 2 days old -> recency alone would be urgency 2
+    bodyText: 'This is blocking the release, need this ASAP.',
+  });
+  db.prepare(`
+    INSERT INTO teams_message_triage (message_id, directed_at_me, summary, draft_reply, urgency_signal)
+    VALUES (@messageId, @directedAtMe, @summary, @draftReply, @urgencySignal)
+  `).run({ messageId: 'teams-test:urgent-old', directedAtMe: 1, summary: 'Blocking issue, needs immediate attention.', draftReply: null, urgencySignal: 'urgent' });
+
+  try {
+    await syncTasks();
+    const task = getOpenTasks().find((t) => t.externalRef === 'teams-test:urgent-old');
+    assert.ok(task);
+    assert.equal(task!.urgencyScore, 5);
+  } finally {
+    spies.forEach((s) => s.mock.restore());
+    db.prepare(`DELETE FROM teams_message_triage WHERE message_id = 'teams-test:urgent-old'`).run();
+    db.prepare(`DELETE FROM external_messages WHERE id = 'teams-test:urgent-old'`).run();
+  }
+});
+
+test('syncTasks: a VIP sender bumps a Teams message importance by 1, capped at 5', async () => {
+  const spies = mockAllUnconfigured();
+  const prevVip = process.env.VIP_SENDERS;
+  process.env.VIP_SENDERS = 'Alice';
+  db.prepare(`
+    INSERT INTO external_messages (id, source, title, participants, occurred_at, body_text)
+    VALUES (@id, 'teams', @title, @participants, @occurredAt, @bodyText)
+  `).run({
+    id: 'teams-test:vip',
+    title: 'Design meeting',
+    participants: JSON.stringify(['Alice']),
+    occurredAt: new Date().toISOString(),
+    bodyText: 'Can you take a look?',
+  });
+  db.prepare(`
+    INSERT INTO teams_message_triage (message_id, directed_at_me, summary, draft_reply)
+    VALUES (@messageId, @directedAtMe, @summary, @draftReply)
+  `).run({ messageId: 'teams-test:vip', directedAtMe: 1, summary: 'Alice wants a look.', draftReply: null });
+
+  try {
+    await syncTasks();
+    const task = getOpenTasks().find((t) => t.externalRef === 'teams-test:vip');
+    assert.ok(task);
+    assert.equal(task!.importanceScore, 5); // base 4 (directedAtMe) + 1 VIP bump
+  } finally {
+    if (prevVip === undefined) delete process.env.VIP_SENDERS;
+    else process.env.VIP_SENDERS = prevVip;
+    spies.forEach((s) => s.mock.restore());
+    db.prepare(`DELETE FROM teams_message_triage WHERE message_id = 'teams-test:vip'`).run();
+    db.prepare(`DELETE FROM external_messages WHERE id = 'teams-test:vip'`).run();
+  }
+});
+
+test('syncTasks: a Jira comment mention inherits the issue\'s own priority instead of a flat importance', async () => {
+  const prevJiraUser = process.env.JIRA_USER_IDENTIFIER;
+  process.env.JIRA_USER_IDENTIFIER = 'me@example.com';
+  const spies = [
+    mock.method(jiraMcp, 'isJiraConfigured', () => true),
+    mock.method(jiraMcp, 'getMyOpenJiraIssues', async () => []),
+    mock.method(jiraMcp, 'getJiraCommentMentions', async () => [
+      {
+        issueKey: 'ETICK-2',
+        issueSummary: 'Production outage',
+        priorityName: 'Blocker',
+        commentId: '555',
+        authorName: 'bob',
+        text: 'Any update on this?',
+        createdDate: new Date().toISOString(),
+        url: 'https://jira.example/browse/ETICK-2',
+      },
+    ]),
+    mock.method(bitbucketServer, 'isBitbucketConfigured', () => false),
+    mock.method(summaryRepository, 'getAllOpenActionItems', () => []),
+  ];
+  try {
+    await syncTasks();
+    const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-2:comment:555');
+    assert.ok(task);
+    assert.equal(task!.importanceScore, 5); // Blocker, not the old flat 3
+  } finally {
+    if (prevJiraUser === undefined) delete process.env.JIRA_USER_IDENTIFIER;
+    else process.env.JIRA_USER_IDENTIFIER = prevJiraUser;
+    spies.forEach((s) => s.mock.restore());
+  }
+});
+
 test('syncTasks: a currently-failing Jenkins build becomes a jenkins_build task, pruned once it goes green', async () => {
   const spies = mockAllUnconfigured();
   const jenkinsSpy = mock.method(jenkinsClientModule, 'isJenkinsConfigured', () => true);
@@ -283,4 +378,26 @@ test('syncTasks: a currently-failing Jenkins build becomes a jenkins_build task,
     jenkinsSpy.mock.restore();
     failingSpy.mock.restore();
   }
+});
+
+test('deriveReviewState: NEEDS_WORK with no push since your review stays NEEDS_WORK', () => {
+  assert.equal(deriveReviewState({ myApprovalStatus: 'NEEDS_WORK', myLastReviewedCommit: 'abc', fromLatestCommit: 'abc' }, null), 'NEEDS_WORK');
+});
+
+test('deriveReviewState: NEEDS_WORK with a push since your review is REWORKED', () => {
+  assert.equal(deriveReviewState({ myApprovalStatus: 'NEEDS_WORK', myLastReviewedCommit: 'abc', fromLatestCommit: 'def' }, 'NEEDS_WORK'), 'REWORKED');
+});
+
+test('deriveReviewState: Bitbucket resetting NEEDS_WORK to UNAPPROVED on push still reads as REWORKED', () => {
+  assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED', myLastReviewedCommit: 'abc', fromLatestCommit: 'def' }, 'NEEDS_WORK'), 'REWORKED');
+  assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED', myLastReviewedCommit: 'abc', fromLatestCommit: 'def' }, 'REWORKED'), 'REWORKED');
+});
+
+test('deriveReviewState: UNAPPROVED with no prior change request is NEW, even if the branch moved', () => {
+  assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED', myLastReviewedCommit: 'abc', fromLatestCommit: 'def' }, null), 'NEW');
+  assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED' }, 'NEW'), 'NEW');
+});
+
+test('deriveReviewState: clearing your own NEEDS_WORK with no push goes back to NEW', () => {
+  assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED', myLastReviewedCommit: 'abc', fromLatestCommit: 'abc' }, 'NEEDS_WORK'), 'NEW');
 });
