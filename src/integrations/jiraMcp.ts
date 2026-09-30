@@ -218,6 +218,150 @@ export async function getMyOpenJiraIssues(limit = 20): Promise<JiraTaskMatch[]> 
   }));
 }
 
+/**
+ * Fetches one issue by key, shaped as a JiraTaskMatch so it can go straight
+ * into taskSync.ts's jiraIssueToTask() — the single-issue counterpart to
+ * getMyOpenJiraIssues() above, used by addManualTask() (src/orchestrator/
+ * manualTask.ts) when the user types in a ticket that isn't assigned to
+ * them (so the bulk "my open issues" JQL would never surface it). Unlike
+ * getMyOpenJiraIssues's jira_search response, a single jira_get_issue
+ * response is the REST API's nested `fields: {...}` shape (same as
+ * getJiraIssueDetail above), not the flatter jira_search shape — read
+ * accordingly. Returns null (not a throw) for "no such issue"/malformed
+ * response, so the caller can turn that into a 404.
+ */
+export async function getJiraIssueByKey(issueKey: string): Promise<JiraTaskMatch | null> {
+  if (!isJiraConfigured()) {
+    throw new Error('Jira is not configured — see NOTES.md.');
+  }
+  const result = await getClient().callTool('jira_get_issue', {
+    issue_key: issueKey,
+    fields: 'summary,status,assignee,updated,issuetype,priority,duedate',
+  });
+
+  const text = extractResultText(result);
+  if (!text || result?.isError) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  const summary = parsed.fields?.summary ?? parsed.summary ?? '';
+  if (!parsed.key && !summary) return null;
+
+  return {
+    key: parsed.key ?? issueKey,
+    summary,
+    url: issueUrl(parsed.key ?? issueKey),
+    priorityName: parsed.fields?.priority?.name ?? parsed.priority?.name ?? null,
+    statusName: parsed.fields?.status?.name ?? parsed.status?.name ?? null,
+    dueDate: parsed.fields?.duedate ?? parsed.duedate ?? null,
+    updated: parsed.fields?.updated ?? parsed.updated ?? null,
+  };
+}
+
+export interface JiraCommentMention {
+  issueKey: string;
+  issueSummary: string;
+  /** The issue's own priority name (e.g. "Blocker", "Medium") — lets taskSync.ts score a comment on a Blocker ticket higher than one on a Trivial ticket via the same jiraImportance() mapping the issue itself uses. Null if Jira omitted the field. */
+  priorityName: string | null;
+  commentId: string;
+  authorName: string;
+  text: string;
+  createdDate: string;
+  url: string;
+}
+
+/** Best-effort plain-text extraction from a Jira comment body — Jira Server/DC returns wiki markup (a plain string) for `comment_limit`-included comments in mcp-atlassian's normalized JSON, but this is defensive against an ADF/ProseMirror object shape too (Jira Cloud), same "never assume the exact shape" caution as getJiraIssueDetail's description parsing. */
+function commentBodyText(comment: any): string {
+  const raw = comment?.body ?? comment?.text ?? comment?.content ?? '';
+  if (typeof raw === 'string') return raw;
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * New comments (not authored by config.jiraUserIdentifier) on issues the
+ * current user is assigned to or watching — the "jira comments" message
+ * source for the orchestrator's tasks board (src/orchestrator/taskSync.ts),
+ * filling the gap getMyOpenJiraIssues() leaves (issues, not activity on
+ * them). Unlike getMyOpenJiraIssues, there's no single JQL that can filter
+ * by comment content/author, so this is a two-step fetch: a JQL candidate
+ * search (same jira_search shape as getMyOpenJiraIssues), then one
+ * jira_get_issue({include: 'comments'}) per candidate. NOT yet confirmed
+ * live against a real mcp-atlassian instance — see NOTES.md/plan doc for
+ * what to check on the first real run.
+ */
+export async function getJiraCommentMentions(limit = 25): Promise<JiraCommentMention[]> {
+  if (!isJiraConfigured() || !config.jiraUserIdentifier) return [];
+
+  const jql = `(assignee = currentUser() OR watcher = currentUser()) AND updated >= -3d ORDER BY updated DESC`;
+  const searchResult = await getClient().callTool('jira_search', {
+    jql,
+    limit,
+    fields: 'summary',
+  });
+  const searchText = extractResultText(searchResult);
+  if (!searchText || searchResult?.isError) return [];
+
+  let parsedSearch: any;
+  try {
+    parsedSearch = JSON.parse(searchText);
+  } catch {
+    return [];
+  }
+  const candidates = Array.isArray(parsedSearch) ? parsedSearch : (parsedSearch.issues ?? parsedSearch.values ?? []);
+  const myIdentifier = config.jiraUserIdentifier.toLowerCase();
+
+  const mentions: JiraCommentMention[] = [];
+  for (const candidate of candidates) {
+    const issueKey = candidate.key;
+    if (!issueKey) continue;
+    try {
+      const result = await getClient().callTool('jira_get_issue', {
+        issue_key: issueKey,
+        fields: 'summary,priority',
+        include: 'comments',
+        comment_limit: 20,
+      });
+      const text = extractResultText(result);
+      if (!text || result?.isError) continue;
+
+      const parsed = JSON.parse(text);
+      const issueSummary: string = parsed.fields?.summary ?? parsed.summary ?? candidate.summary ?? '';
+      const priorityName: string | null = parsed.fields?.priority?.name ?? parsed.priority?.name ?? null;
+      const comments: any[] = parsed.comments ?? parsed.fields?.comment?.comments ?? [];
+
+      for (const comment of comments) {
+        const authorIdentifier: string = (comment.author?.emailAddress ?? comment.author?.name ?? comment.author?.accountId ?? comment.author?.displayName ?? '').toLowerCase();
+        if (!authorIdentifier || authorIdentifier === myIdentifier) continue;
+        const commentId = comment.id != null ? String(comment.id) : null;
+        if (!commentId) continue;
+        mentions.push({
+          issueKey,
+          issueSummary,
+          priorityName,
+          commentId,
+          authorName: comment.author?.displayName ?? comment.author?.name ?? 'unknown',
+          text: commentBodyText(comment),
+          createdDate: comment.created ?? new Date().toISOString(),
+          url: `${issueUrl(issueKey)}?focusedCommentId=${commentId}`,
+        });
+      }
+    } catch (err: any) {
+      console.error(`[jira] failed to fetch comments for ${issueKey}:`, err.message);
+    }
+  }
+
+  return mentions;
+}
+
 export interface CreateJiraIssueInput {
   projectKey: string;
   issueType: string;

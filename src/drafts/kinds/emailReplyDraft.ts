@@ -1,4 +1,4 @@
-import { Task } from '../../storage/taskRepository';
+import { Task, dismissTask } from '../../storage/taskRepository';
 import { Draft } from '../../storage/draftRepository';
 import { DraftHandler } from '../types';
 import { loadReplyTaskSubject, generateReplyDraft, ReplyDraftContent } from './replyDraftShared';
@@ -29,6 +29,10 @@ export const emailReplyDraft: DraftHandler<Task> = {
     }),
   async execute(_gateKey, ctx) {
     const content = ctx.content as ReplyDraftContent;
+    // Same reasoning as teamsReplyDraft.ts: the gate is labeled "Mark
+    // handled" — approving means the task is done, so it should drop out
+    // of the queue like an explicit Dismiss would.
+    dismissTask(ctx.subject.id);
     return { text: content.text, at: new Date().toISOString(), manual: true, channel: 'email' };
   },
   async observeSince() {

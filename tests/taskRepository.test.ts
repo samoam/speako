@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertTask, getOpenTasks, getTaskById, dismissTask, pruneTasksForSource, updateTaskBoardStatus, getTasksCreatedSince } from '../src/storage/taskRepository';
+import {
+  upsertTask,
+  getOpenTasks,
+  getTaskById,
+  dismissTask,
+  undismissTask,
+  getDismissedTasks,
+  pruneTasksForSource,
+  updateTaskBoardStatus,
+  getTasksCreatedSince,
+  snoozeTask,
+  clearSnooze,
+  setTaskPriorityOverride,
+  setTaskDueDate,
+} from '../src/storage/taskRepository';
+import { createDevCycle } from '../src/storage/devCycleRepository';
 
 function baseTask(overrides: Partial<Parameters<typeof upsertTask>[0]> = {}) {
   return {
@@ -75,6 +90,63 @@ test('taskRepository: pruneTasksForSource with an empty keep list removes every 
   assert.equal(getOpenTasks().filter((t) => t.source === 'action_item').length, 0);
 });
 
+test('taskRepository: pruneTasksForSource skips (rather than throws on) a task that a dev_cycle still points at', () => {
+  upsertTask(baseTask({ source: 'jira', externalRef: 'ETICK-9001' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-9001')!;
+  createDevCycle({
+    ticketKey: 'ETICK-9001',
+    taskId: task.id,
+    repoName: 'officercc',
+    repoPath: 'C:\\repos\\officercc',
+    branchType: 'feature',
+    lifecycleState: 'In Progress',
+  });
+
+  // The ticket no longer shows up in "my open issues" (e.g. it was
+  // transitioned/closed) — this used to throw "FOREIGN KEY constraint
+  // failed" and abort the whole prune for the source, per ETICK-10052.
+  assert.doesNotThrow(() => pruneTasksForSource('jira', []));
+
+  const survivor = getTaskById(task.id);
+  assert.ok(survivor, 'task referenced by a dev_cycle must survive pruning');
+  assert.equal(survivor!.externalRef, 'ETICK-9001');
+  // It can't be deleted, but it no longer qualifies — dismissed instead of
+  // left stuck 'open' forever (this used to just skip it silently).
+  assert.equal(survivor!.status, 'dismissed');
+});
+
+test('taskRepository: pruneTasksForSource dismisses (not deletes) a referenced task once it drops out of the keep list', () => {
+  upsertTask(baseTask({ source: 'bitbucket_pr', externalRef: 'PROJ/repo#9002' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'PROJ/repo#9002')!;
+  createDevCycle({
+    ticketKey: 'PROJ-9002',
+    taskId: task.id,
+    repoName: 'officercc',
+    repoPath: 'C:\\repos\\officercc',
+    branchType: 'feature',
+    lifecycleState: 'In Progress',
+  });
+
+  pruneTasksForSource('bitbucket_pr', ['PROJ/repo#other']);
+  assert.equal(getTaskById(task.id)?.status, 'dismissed');
+});
+
+test('taskRepository: pruneTasksForSource leaves a referenced task open while it is still in the keep list', () => {
+  upsertTask(baseTask({ source: 'bitbucket_pr', externalRef: 'PROJ/repo#9003' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'PROJ/repo#9003')!;
+  createDevCycle({
+    ticketKey: 'PROJ-9003',
+    taskId: task.id,
+    repoName: 'officercc',
+    repoPath: 'C:\\repos\\officercc',
+    branchType: 'feature',
+    lifecycleState: 'In Progress',
+  });
+
+  pruneTasksForSource('bitbucket_pr', ['PROJ/repo#9003']);
+  assert.equal(getTaskById(task.id)?.status, 'open');
+});
+
 test('taskRepository: a new task defaults to board_status "todo"', () => {
   upsertTask(baseTask({ externalRef: 'ETICK-600' }));
   const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-600');
@@ -120,5 +192,88 @@ test('taskRepository: getTasksCreatedSince excludes dismissed tasks', () => {
   dismissTask(task.id);
   const pastCutoff = new Date(Date.now() - 60_000).toISOString();
   assert.ok(!getTasksCreatedSince(pastCutoff).some((t) => t.externalRef === 'ETICK-1001'));
+});
+
+test('taskRepository: undismissTask returns a dismissed task to open, and it drops off getDismissedTasks', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1100' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1100')!;
+  dismissTask(task.id);
+  assert.ok(getDismissedTasks().some((t) => t.id === task.id));
+  undismissTask(task.id);
+  assert.equal(getTaskById(task.id)?.status, 'open');
+  assert.ok(getOpenTasks().some((t) => t.id === task.id));
+  assert.ok(!getDismissedTasks().some((t) => t.id === task.id));
+});
+
+test('taskRepository: a task snoozed into the future is hidden from getOpenTasks/getTasksCreatedSince', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1200' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1200')!;
+  snoozeTask(task.id, new Date(Date.now() + 60 * 60 * 1000).toISOString());
+  assert.ok(!getOpenTasks().some((t) => t.id === task.id));
+  const pastCutoff = new Date(Date.now() - 60_000).toISOString();
+  assert.ok(!getTasksCreatedSince(pastCutoff).some((t) => t.id === task.id));
+  // Still fetchable directly — snoozing hides it from the queue views only, doesn't dismiss it.
+  assert.equal(getTaskById(task.id)?.status, 'open');
+});
+
+test('taskRepository: a task snoozed into the past reappears in getOpenTasks', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1201' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1201')!;
+  snoozeTask(task.id, new Date(Date.now() - 60 * 60 * 1000).toISOString());
+  assert.ok(getOpenTasks().some((t) => t.id === task.id));
+});
+
+test('taskRepository: clearSnooze un-hides a still-future-snoozed task immediately', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1202' }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1202')!;
+  snoozeTask(task.id, new Date(Date.now() + 60 * 60 * 1000).toISOString());
+  assert.ok(!getOpenTasks().some((t) => t.id === task.id));
+  clearSnooze(task.id);
+  assert.ok(getOpenTasks().some((t) => t.id === task.id));
+});
+
+test('taskRepository: a priority override survives a re-sync with different urgency/importance', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1300', urgencyScore: 3, importanceScore: 3 })); // priority_score 9
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1300')!;
+  setTaskPriorityOverride(task.id, 25);
+  assert.equal(getTaskById(task.id)?.priorityScore, 25);
+
+  upsertTask(baseTask({ externalRef: 'ETICK-1300', urgencyScore: 1, importanceScore: 1 })); // would compute to 1
+  const resynced = getTaskById(task.id)!;
+  assert.equal(resynced.priorityScore, 25); // override still wins
+  assert.equal(resynced.priorityOverride, 25);
+});
+
+test('taskRepository: clearing a priority override (null) reverts to the computed score immediately', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1301', urgencyScore: 2, importanceScore: 3 })); // 6
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1301')!;
+  setTaskPriorityOverride(task.id, 25);
+  setTaskPriorityOverride(task.id, null);
+  const updated = getTaskById(task.id)!;
+  assert.equal(updated.priorityOverride, null);
+  assert.equal(updated.priorityScore, 6); // urgency * importance from the row's last upsert
+});
+
+test('taskRepository: a manual due date survives a re-sync from a source with no due date of its own', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1400', source: 'teams_message', dueDate: null }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1400')!;
+  setTaskDueDate(task.id, '2026-12-25');
+  assert.equal(getTaskById(task.id)?.dueDate, '2026-12-25');
+  assert.equal(getTaskById(task.id)?.dueDateIsManual, true);
+
+  upsertTask(baseTask({ externalRef: 'ETICK-1400', source: 'teams_message', dueDate: null }));
+  const resynced = getTaskById(task.id)!;
+  assert.equal(resynced.dueDate, '2026-12-25'); // manual date preserved, not overwritten with null
+});
+
+test('taskRepository: clearing a manual due date (null) lets the next sync repopulate it from the source', () => {
+  upsertTask(baseTask({ externalRef: 'ETICK-1401', dueDate: null }));
+  const task = getOpenTasks().find((t) => t.externalRef === 'ETICK-1401')!;
+  setTaskDueDate(task.id, '2026-12-25');
+  setTaskDueDate(task.id, null);
+  assert.equal(getTaskById(task.id)?.dueDateIsManual, false);
+
+  upsertTask(baseTask({ externalRef: 'ETICK-1401', dueDate: '2027-01-01' }));
+  assert.equal(getTaskById(task.id)?.dueDate, '2027-01-01');
 });
 

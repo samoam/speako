@@ -11,6 +11,13 @@ import {
   setDevCycleJenkinsJob,
   bumpDevCycleRound,
   closeDevCycle,
+  initDevCyclePhases,
+  setDevCyclePhase,
+  appendDevCycleLog,
+  setDevCycleCurrentStep,
+  setDevCycleAnalysisContext,
+  setDevCyclePlans,
+  setDevCycleWorktrees,
 } from '../src/storage/devCycleRepository';
 
 test('createDevCycle: defaults base_branch to "main" and round to 1, round-trips via getDevCycle', () => {
@@ -69,4 +76,56 @@ test('bumpDevCycleRound: increments round for the Return loop', () => {
   assert.equal(getDevCycle(cycle.id)?.round, 2);
   bumpDevCycleRound(cycle.id);
   assert.equal(getDevCycle(cycle.id)?.round, 3);
+});
+
+test('Jira-implement pipeline fields: phases/log/currentStep/analysisContext/plans/worktrees round-trip and default empty/null', () => {
+  const cycle = createDevCycle({ ticketKey: 'PROJ-7', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  assert.deepEqual(cycle.phases, []);
+  assert.deepEqual(cycle.log, []);
+  assert.equal(cycle.currentStep, null);
+  assert.equal(cycle.analysisContext, null);
+  assert.equal(cycle.planClaude, null);
+  assert.equal(cycle.worktreePathGemini, null);
+
+  const phases = [{ key: 'analyze', label: 'Gather ticket context', status: 'pending' as const, detail: null }];
+  initDevCyclePhases(cycle.id, phases);
+  assert.deepEqual(getDevCycle(cycle.id)?.phases, phases);
+
+  setDevCyclePhase(cycle.id, 'analyze', 'done', 'Found 2 docs.');
+  assert.deepEqual(getDevCycle(cycle.id)?.phases, [{ key: 'analyze', label: 'Gather ticket context', status: 'done', detail: 'Found 2 docs.' }]);
+
+  appendDevCycleLog(cycle.id, 'Starting…');
+  appendDevCycleLog(cycle.id, 'Done.');
+  assert.deepEqual(getDevCycle(cycle.id)?.log, ['Starting…', 'Done.']);
+
+  setDevCycleCurrentStep(cycle.id, 'plan');
+  assert.equal(getDevCycle(cycle.id)?.currentStep, 'plan');
+
+  const context = { ticket: { key: 'PROJ-7', summary: 's', status: 'Dev Ready', description: 'd' }, confluencePages: [], codeHits: [], relatedPrs: [] };
+  setDevCycleAnalysisContext(cycle.id, context);
+  assert.deepEqual(getDevCycle(cycle.id)?.analysisContext, context);
+
+  const plan = { understanding: 'u', approach: 'a', files: [], tests: [], risks: [], openQuestions: [], estimatedSize: 'm' as const };
+  setDevCyclePlans(cycle.id, { claude: plan });
+  let updated = getDevCycle(cycle.id)!;
+  assert.deepEqual(updated.planClaude, plan);
+  assert.equal(updated.planGemini, null);
+
+  setDevCyclePlans(cycle.id, { merged: plan });
+  updated = getDevCycle(cycle.id)!;
+  // A partial call preserves the field(s) not passed — planClaude survives a merged-only update.
+  assert.deepEqual(updated.planClaude, plan);
+  assert.deepEqual(updated.planMerged, plan);
+
+  setDevCycleWorktrees(cycle.id, { worktreePathGemini: 'C:\\wt\\gemini' });
+  updated = getDevCycle(cycle.id)!;
+  assert.equal(updated.worktreePathGemini, 'C:\\wt\\gemini');
+  assert.equal(updated.worktreePath, null);
+
+  setDevCycleBranch(cycle.id, { branchName: 'feature/PROJ-7', worktreePath: 'C:\\wt\\claude' });
+  setDevCycleWorktrees(cycle.id, { worktreePathGemini: 'C:\\wt\\gemini2' });
+  updated = getDevCycle(cycle.id)!;
+  // worktreePath (Claude's, set separately via setDevCycleBranch) survives a worktreePathGemini-only update.
+  assert.equal(updated.worktreePath, 'C:\\wt\\claude');
+  assert.equal(updated.worktreePathGemini, 'C:\\wt\\gemini2');
 });

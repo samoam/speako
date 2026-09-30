@@ -1,4 +1,4 @@
-import { PrReviewFinding, PrReviewSeverity } from '../storage/prReviewRequestRepository';
+import { PrReviewFinding, PrReviewFindingSource, PrReviewSeverity } from '../storage/prReviewRequestRepository';
 import { DiffAnchor, BitbucketCommentAnchor } from '../integrations/bitbucketServer';
 
 export interface StagedPrComment {
@@ -6,16 +6,23 @@ export interface StagedPrComment {
   file: string;
   line: number | null;
   severity: PrReviewSeverity;
+  source: PrReviewFindingSource;
   text: string;
   mode: 'inline' | 'file' | 'general';
   anchor: BitbucketCommentAnchor | null;
   anchorWarning: string | null;
 }
 
-/** The posted body — always carries a trailer identifying it as AI-drafted, never posted as if a human wrote it unaided. */
-export function formatFindingComment(finding: PrReviewFinding): string {
-  return `**${finding.severity}** — ${finding.comment}\n\n_Drafted by Speako from an automated review; reviewed and posted by a human._`;
-}
+/**
+ * No longer appended to posted comments (removed by request — comments now
+ * post as exactly what's in the draft text box, no AI-disclosure trailer).
+ * Kept only so buildReviewPrompt (prReviewContext.ts) can still recognize
+ * this exact phrase on comments posted BEFORE this change, labeling them
+ * "Speako (prior review)" instead of misattributing them to whatever
+ * Bitbucket account Speako posts under — a purely backward-compat read, not
+ * something new comments produce.
+ */
+export const SPEAKO_COMMENT_MARKER = 'Drafted by Speako from an automated review';
 
 export interface ResolvedAnchor {
   mode: 'inline' | 'file' | 'general';
@@ -53,9 +60,8 @@ export function resolveFindingAnchor(finding: PrReviewFinding, changedPaths: str
 export function stagePrReviewComments(findings: PrReviewFinding[], changedPaths: string[], anchorsByPath: Map<string, DiffAnchor[]>): StagedPrComment[] {
   return findings.map((finding, findingIndex) => {
     const { mode, anchor, warning } = resolveFindingAnchor(finding, changedPaths, anchorsByPath.get(finding.file) ?? []);
-    const body = formatFindingComment(finding);
-    const text = mode === 'general' ? `\`${finding.file}${finding.line != null ? ':' + finding.line : ''}\` — ${body}` : body;
-    return { findingIndex, file: finding.file, line: finding.line, severity: finding.severity, text, mode, anchor, anchorWarning: warning };
+    const text = mode === 'general' ? `\`${finding.file}${finding.line != null ? ':' + finding.line : ''}\` — ${finding.comment}` : finding.comment;
+    return { findingIndex, file: finding.file, line: finding.line, severity: finding.severity, source: finding.source ?? 'claude', text, mode, anchor, anchorWarning: warning };
   });
 }
 

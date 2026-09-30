@@ -1,7 +1,7 @@
 import { db } from './db';
 
 export type CodeChangeStatus = 'running' | 'ready' | 'applied' | 'pushed' | 'discarded' | 'failed';
-export type CodeChangeOrigin = 'action_item' | 'task' | 'dev_plan' | 'jenkins_fix';
+export type CodeChangeOrigin = 'action_item' | 'task' | 'dev_plan' | 'jenkins_fix' | 'dev_cycle_implement' | 'dev_cycle_merge';
 
 export interface CodeChangeRequest {
   id: number;
@@ -17,6 +17,8 @@ export interface CodeChangeRequest {
   status: CodeChangeStatus;
   diff: string | null;
   error: string | null;
+  /** Timestamped progress lines ("Starting Claude Code agent...", "Still working (2m elapsed)...") — persisted so reopening the task detail view mid-run still shows history-so-far, same shape as pr_review_requests.log (src/storage/prReviewRequestRepository.ts). */
+  log: string[];
   createdAt: string;
   resolvedAt: string | null;
 }
@@ -36,6 +38,7 @@ function mapRow(row: any): CodeChangeRequest {
     status: row.status,
     diff: row.diff,
     error: row.error,
+    log: row.log ? JSON.parse(row.log) : [],
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
   };
@@ -84,6 +87,14 @@ export function getCodeChangeRequestsForDevCycle(devCycleId: number): CodeChange
   return rows.map(mapRow);
 }
 
+/** Latest request for a dev cycle with a specific origin — e.g. the 'dev_cycle_merge' row holding the Jira-implement pipeline's final merged diff, distinct from the 'dev_cycle_implement' row(s) it was built from. */
+export function getLatestCodeChangeRequestForDevCycleOrigin(devCycleId: number, origin: CodeChangeOrigin): CodeChangeRequest | undefined {
+  const row = db
+    .prepare("SELECT * FROM code_change_requests WHERE dev_cycle_id = ? AND origin = ? ORDER BY id DESC LIMIT 1")
+    .get(devCycleId, origin) as any;
+  return row ? mapRow(row) : undefined;
+}
+
 export function getCodeChangeRequest(id: number): CodeChangeRequest | undefined {
   const row = db.prepare('SELECT * FROM code_change_requests WHERE id = ?').get(id) as any;
   return row ? mapRow(row) : undefined;
@@ -111,8 +122,20 @@ export function getRunningCodeChangeRequests(): CodeChangeRequest[] {
   return rows.map(mapRow);
 }
 
+/** Appends one progress line — read-modify-write on the small JSON array, same convention as prReviewRequestRepository.ts's appendPrReviewLog. */
+export function appendCodeChangeLog(id: number, message: string): void {
+  const existing = getCodeChangeRequest(id)?.log ?? [];
+  const updated = [...existing, message];
+  db.prepare('UPDATE code_change_requests SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
+}
+
 export function markCodeChangeReady(id: number, worktreePath: string, diff: string): void {
   db.prepare("UPDATE code_change_requests SET status = 'ready', worktree_path = ?, diff = ? WHERE id = ?").run(worktreePath, diff, id);
+}
+
+/** Overwrites a still-'ready' request's diff in place — used by the Jira-implement pipeline's merge/refine step to update the merged diff after a chat-refine pass, without creating a whole new code_change_requests row for what's still the same review-before-apply artifact. */
+export function updateCodeChangeDiff(id: number, diff: string): void {
+  db.prepare("UPDATE code_change_requests SET diff = ? WHERE id = ?").run(diff, id);
 }
 
 export function markCodeChangeFailed(id: number, error: string): void {

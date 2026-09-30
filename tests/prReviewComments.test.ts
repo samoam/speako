@@ -2,18 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PrReviewFinding } from '../src/storage/prReviewRequestRepository';
 import { DiffAnchor } from '../src/integrations/bitbucketServer';
-import { resolveFindingAnchor, formatFindingComment, stagePrReviewComments, formatRetractionComment } from '../src/summarization/prReviewComments';
+import { resolveFindingAnchor, stagePrReviewComments, formatRetractionComment } from '../src/summarization/prReviewComments';
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return { file: 'src/foo.ts', line: 12, severity: 'major', comment: 'This could leak a resource.', ...overrides };
 }
-
-test('formatFindingComment: always includes the AI-drafted attribution trailer', () => {
-  const text = formatFindingComment(finding());
-  assert.match(text, /major/);
-  assert.match(text, /This could leak a resource\./);
-  assert.match(text, /Drafted by Speako/);
-});
 
 test('resolveFindingAnchor: exact (path, line) match in the diff -> inline comment', () => {
   const anchors: DiffAnchor[] = [{ line: 12, lineType: 'ADDED', fileType: 'TO' }];
@@ -53,10 +46,20 @@ test('stagePrReviewComments: maps every finding in order, prefixing general comm
   assert.equal(staged[0].findingIndex, 0);
   assert.equal(staged[0].mode, 'inline');
   assert.doesNotMatch(staged[0].text, /^`/); // inline comments aren't prefixed with a file path
+  // No severity marker baked into the staged text — it's already conveyed
+  // as its own badge wherever this is shown.
+  assert.doesNotMatch(staged[0].text, /major/);
 
   assert.equal(staged[1].findingIndex, 1);
   assert.equal(staged[1].mode, 'general');
   assert.match(staged[1].text, /^`src\/gone\.ts:5`/);
+});
+
+test('stagePrReviewComments: carries each finding\'s source through, defaulting to "claude" when absent', () => {
+  const findings = [finding({ source: 'gemini' }), finding({ source: undefined })];
+  const staged = stagePrReviewComments(findings, ['src/foo.ts'], new Map());
+  assert.equal(staged[0].source, 'gemini');
+  assert.equal(staged[1].source, 'claude');
 });
 
 test('formatRetractionComment: references the original file/line and states the reason', () => {

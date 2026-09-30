@@ -46,8 +46,68 @@ export function resolveLocalRepoPath(name: string): string {
   return entry.path;
 }
 
+/**
+ * Matches a Bitbucket repoSlug to one of the configured local codebases by
+ * checking each one's actual git remote — codebaseLocalPaths' `name` is an
+ * arbitrary label (see resolveLocalRepoPath above), not necessarily the
+ * Bitbucket repo slug, so guessing by name (e.g. "only one repo is
+ * configured, so it must be this one") can silently point a PR review at
+ * the wrong repository — confirmed live: a review picked the sole
+ * configured repo for a PR that actually belonged to a different repo in
+ * the same project, and failed minutes later with a confusing "couldn't
+ * find remote ref" instead of a clear "wrong repo" error. Returns null if
+ * no configured repo's origin matches.
+ */
+export async function findLocalRepoForBitbucketRepo(repoSlug: string): Promise<string | null> {
+  for (const { name, path: repoPath } of config.codebaseLocalPaths) {
+    try {
+      const url = (await git(['remote', 'get-url', 'origin'], repoPath, 10_000)).trim();
+      const slug = url.replace(/\.git$/, '').split(/[/:]/).pop();
+      if (slug && slug.toLowerCase() === repoSlug.toLowerCase()) return name;
+    } catch {
+      // Not a git repo, no "origin" remote, or git unavailable — just skip it.
+    }
+  }
+  return null;
+}
+
 export interface ClaudeCodeTaskHandle {
   cliSessionId: string;
+}
+
+/**
+ * `claude --help` documents that the one-time-per-directory workspace trust
+ * dialog is skipped automatically for `-p`/non-interactive output (which is
+ * why runClaudeCodeReview below never hits this) — but confirmed live that
+ * `--bg` is NOT covered by that same skip, and unlike geminiCli.ts's
+ * `--skip-trust` there is no equivalent flag for Claude CLI, so a `--bg` run
+ * against a freshly created worktree (always untrusted) fails outright with
+ * "Workspace not trusted... run claude once and accept the trust prompt" —
+ * fatal in headless mode with no TTY to answer it. Claude CLI persists
+ * acceptance in `~/.claude.json`'s `projects[<path>].hasTrustDialogAccepted`,
+ * keyed by the absolute path with backslashes normalized to forward slashes
+ * but drive-letter case preserved as-is (confirmed live by inspecting that
+ * file for paths this codebase's own os.tmpdir()-based worktrees produced,
+ * already-trusted entries under `C:/Users/...` — uppercase, not lowercased)
+ * — this writes that same flag directly so a background agent never hits
+ * the prompt in the first place, rather than needing a human to run `claude`
+ * interactively once in every fresh temp worktree Speako creates.
+ */
+function normalizeClaudeProjectPath(dirPath: string): string {
+  return dirPath.replace(/\\/g, '/');
+}
+
+function trustClaudeWorkspace(dirPath: string): void {
+  const configPath = path.join(os.homedir(), '.claude.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const key = normalizeClaudeProjectPath(dirPath);
+    data.projects = data.projects ?? {};
+    data.projects[key] = { ...(data.projects[key] ?? {}), hasTrustDialogAccepted: true };
+    fs.writeFileSync(configPath, JSON.stringify(data, null, 2));
+  } catch (err: any) {
+    console.error(`[claudeCodeCli] failed to pre-trust workspace ${dirPath} — claude --bg may hit the trust prompt:`, err.message);
+  }
 }
 
 /**
@@ -60,6 +120,7 @@ export interface ClaudeCodeTaskHandle {
  * however long the task takes.
  */
 export async function startClaudeCodeTask(prompt: string, repoPath: string): Promise<ClaudeCodeTaskHandle> {
+  trustClaudeWorkspace(repoPath);
   const { stdout } = await execFileAsync(
     'claude',
     [
@@ -75,6 +136,18 @@ export async function startClaudeCodeTask(prompt: string, repoPath: string): Pro
     throw new Error(`Could not parse a session id from Claude Code's output: ${stdout.slice(0, 300)}`);
   }
   return { cliSessionId: match[1] };
+}
+
+/** Strips ANSI escape/control sequences (cursor moves, color codes) from `claude logs`'s output below — that command prints the background session's actual terminal output, which is meant for a real terminal, not for appending as plain-text log lines. */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '');
+}
+
+/** `claude logs <id>` prints the background session's recent terminal output (confirmed via `claude logs --help`) — used by the Jira-implement pipeline to surface Claude's actual progress (tool calls, reasoning) in its own live log, the same way runClaudeCodeReview's onProgress does for the (streaming, foreground) review/plan path; `--bg` has no equivalent streaming callback, so this is polled instead. Returns the ANSI-stripped text; callers diff against what they've already seen to append only new lines. */
+export async function getBackgroundTaskLogs(cliSessionId: string): Promise<string> {
+  const { stdout } = await execFileAsync('claude', ['logs', cliSessionId], { timeout: SPAWN_TIMEOUT_MS, maxBuffer: 5 * 1024 * 1024 });
+  return stripAnsi(stdout);
 }
 
 export interface ClaudeCodeAgentInfo {
@@ -103,6 +176,21 @@ export async function git(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_M
 // push all operate on an already-checked-out worktree, not a fresh full copy).
 const WORKTREE_CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Confirmed live against a real officercc clone with a corrupted local object
+// database (git fsck showed missing trees/blobs unrelated to any specific PR
+// branch): `git worktree add` fails with "unable to read tree"/"unable to
+// read blob"/"unable to read sha1 file" in that case. A plain `git fetch`
+// doesn't repair it — git already believes it has everything for refs it's
+// already fetched — only `--refetch` forces re-downloading every object
+// regardless of what's already present locally, so it's reserved for this
+// repair retry rather than used on every worktree add.
+const REFETCH_REPAIR_TIMEOUT_MS = 10 * 60 * 1000;
+
+function isMissingObjectError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /unable to read (tree|blob|sha1 file)/i.test(message);
+}
+
 /**
  * Unlike startClaudeCodeTask's --worktree (which always creates a fresh
  * worktree off the repo's current HEAD, with no way to target an existing
@@ -113,7 +201,13 @@ const WORKTREE_CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
 export async function createWorktreeForBranch(repoPath: string, branch: string): Promise<string> {
   await git(['fetch', 'origin', branch], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
   const worktreePath = path.join(os.tmpdir(), `speako-pr-review-${Date.now()}`);
-  await git(['worktree', 'add', worktreePath, `origin/${branch}`], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+  try {
+    await git(['worktree', 'add', worktreePath, `origin/${branch}`], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+  } catch (err) {
+    if (!isMissingObjectError(err)) throw err;
+    await git(['fetch', 'origin', '--refetch'], repoPath, REFETCH_REPAIR_TIMEOUT_MS);
+    await git(['worktree', 'add', worktreePath, `origin/${branch}`], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
+  }
   return worktreePath;
 }
 
@@ -143,7 +237,14 @@ export async function removeWorktree(worktreePath: string, repoPath: string): Pr
   }
 }
 
-const REVIEW_TIMEOUT_MS = 15 * 60 * 1000; // real codebase exploration can take a while, unlike a trivial smoke-test prompt
+// 15 min was too tight in practice for the Jira-implement Plan step against
+// this codebase's actual monorepo layout (officercc-common, officercc4,
+// officercc4db(-gdsl/-qdsl), officercc5-service, officercc5-ai,
+// officercc5-lago-proxy, poc-qa, ...) — confirmed live a real ticket's plan
+// step repeatedly hit this timeout mid-investigation (dozens of distinct
+// grep/find/read tool calls still running, not stuck/looping) rather than
+// finishing over-budget just once.
+const REVIEW_TIMEOUT_MS = 30 * 60 * 1000; // real codebase exploration can take a while, unlike a trivial smoke-test prompt
 const REVIEW_DISALLOWED_TOOLS = [...DISALLOWED_TOOLS, 'Write', 'Edit'];
 
 export interface ClaudeCodeReviewResult {
@@ -250,6 +351,17 @@ export function runClaudeCodeReview(
         if (event.type === 'assistant' && onProgress) {
           for (const block of event.message?.content ?? []) {
             if (block.type === 'tool_use') onProgress(describeToolUse(block.name, block.input));
+            // Confirmed live: a real assistant turn interleaves short
+            // reasoning text ("This is read-only, I'll just read the file
+            // directly.") with its tool_use blocks, plus a final text block
+            // with its answer — surfacing these is what makes the progress
+            // log show the agent's actual chain of thought, not just which
+            // tools it called. Each 'assistant' event here is already a
+            // complete block (not a partial delta), despite
+            // --include-partial-messages also emitting separate
+            // 'stream_event' delta events this loop ignores.
+            else if (block.type === 'text' && block.text?.trim()) onProgress(`Claude: ${block.text.trim().slice(0, 500)}`);
+            else if (block.type === 'thinking' && block.thinking?.trim()) onProgress(`Claude (thinking): ${block.thinking.trim().slice(0, 500)}`);
           }
         } else if (event.type === 'result') {
           finalResult = {

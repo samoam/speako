@@ -68,4 +68,5 @@ test('classifyMessage: falls back to a truncated summary and no draft when Gemin
   assert.equal(result.directedAtMe, false);
   assert.equal(result.draftReply, null);
   assert.equal(result.summary, message.bodyText.slice(0, 200));
+  assert.equal(result.urgencySignal, 'none');
 });

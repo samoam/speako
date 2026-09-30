@@ -1,5 +1,5 @@
 import { getTaskInfo, getWorktreeDiff } from './claudeCodeCli';
-import { getCodeChangeRequest, markCodeChangeReady, markCodeChangeFailed } from '../storage/codeChangeRequestRepository';
+import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCodeChangeFailed } from '../storage/codeChangeRequestRepository';
 
 /**
  * Polls a background Claude Code agent until it settles, then captures its
@@ -8,6 +8,14 @@ import { getCodeChangeRequest, markCodeChangeReady, markCodeChangeFailed } from 
  * can kick off the same polling loop that action-item/task-triggered code
  * changes already use, without needing access to the server instance itself
  * — takes a plain broadcast callback instead, same convention as draftService.ts.
+ *
+ * `claude agents --json` (getTaskInfo) only ever reports a coarse state, not
+ * a transcript, so unlike runClaudeCodeReview's token-level onProgress there
+ * is no real per-tool-call detail to surface here — instead this synthesizes
+ * a "still working" heartbeat plus state-change lines, persisted via
+ * appendCodeChangeLog (mirrors pr_review_requests.log) and broadcast as
+ * 'code-change-log' so the task detail view's log panel updates live the
+ * same way the PR review log does.
  */
 export async function pollCodeChangeRequest(requestId: number, broadcast: (event: Record<string, unknown>) => void): Promise<void> {
   const POLL_INTERVAL_MS = 10_000;
@@ -18,29 +26,63 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
   const request = getCodeChangeRequest(requestId);
   if (!request) return;
 
+  const log = (message: string) => {
+    appendCodeChangeLog(requestId, message);
+    broadcast({ type: 'code-change-log', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, message });
+  };
+  log(`Starting Claude Code agent (session ${request.cliSessionId})…`);
+
+  let lastState: string | null = null;
+  let consecutiveFailures = 0;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     let info;
     try {
       info = await getTaskInfo(request.cliSessionId);
     } catch (err: any) {
-      console.error(`[claude-code] status check failed for request ${requestId}:`, err.message);
+      // err.stderr (present on a non-zero exit from execFile) usually has
+      // the actual reason — err.message alone is often just "Command
+      // failed: claude agents --json --all" with nothing actionable.
+      const detail = err?.stderr ? `${err.message}\n${String(err.stderr).trim()}` : err?.message ?? String(err);
+      console.error(`[claude-code] status check failed for request ${requestId}:`, detail);
+      consecutiveFailures++;
+      // Surfaced to the UI log too (not just the server console) so a
+      // stuck "Running…" isn't silent — but throttled to the first
+      // occurrence and then once per ~minute, same cadence as the
+      // "still working" heartbeat below, so a fast-repeating failure
+      // doesn't flood the log.
+      if (consecutiveFailures === 1 || consecutiveFailures % 6 === 0) {
+        log(`Status check failed (will retry): ${detail}`);
+      }
       continue; // transient CLI hiccup — keep trying rather than failing the whole task on one bad poll
     }
+    consecutiveFailures = 0;
     if (!info) continue; // not registered yet, or briefly missing — keep polling
+
+    if (info.state !== lastState) {
+      log(`Agent state: ${info.state}`);
+      lastState = info.state;
+    } else if (attempt > 0 && attempt % 6 === 0) {
+      // Every ~minute of no state change, so the log shows the agent is
+      // still alive rather than going silent for up to 20 minutes.
+      log(`Still working… (${Math.round(((attempt + 1) * POLL_INTERVAL_MS) / 60_000)}m elapsed)`);
+    }
 
     if (MAYBE_DONE_STATES.includes(info.state)) {
       try {
         const diff = await getWorktreeDiff(info.cwd);
         if (!diff.trim()) {
           const error = `Claude Code agent ended in state "${info.state}" with no file changes — check \`claude logs ${request.cliSessionId}\` for details.`;
+          log(error);
           markCodeChangeFailed(requestId, error);
           broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
           return;
         }
+        log('Agent finished — changes captured, ready for review.');
         markCodeChangeReady(requestId, info.cwd, diff);
         broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId });
       } catch (err: any) {
+        log(`Failed to capture diff: ${err.message}`);
         markCodeChangeFailed(requestId, err.message);
         broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error: err.message });
       }
@@ -48,6 +90,7 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
     }
     if (FAILURE_STATES.includes(info.state)) {
       const error = `Claude Code agent ended in state "${info.state}" — check \`claude logs ${request.cliSessionId}\` for details.`;
+      log(error);
       markCodeChangeFailed(requestId, error);
       broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
       return;
@@ -56,6 +99,7 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
   }
 
   const timeoutError = 'Timed out waiting for the Claude Code agent after 20 minutes.';
+  log(timeoutError);
   markCodeChangeFailed(requestId, timeoutError);
   broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error: timeoutError });
 }

@@ -107,6 +107,7 @@ test('bitbucketPrCommentDraft.execute: posts the comment with its anchor and ret
 
   const postSpy = mock.method(bitbucketServerModule, 'addPullRequestComment', async (pr: any, input: any) => {
     assert.equal(pr.id, 47);
+    // Posted exactly as drafted — no AI-disclosure trailer appended.
     assert.equal(input.text, 'the comment text');
     assert.deepEqual(input.anchor, { path: 'src/foo.ts', line: 12, lineType: 'ADDED', fileType: 'TO', diffType: 'EFFECTIVE' });
     return { id: 999, version: 0 };

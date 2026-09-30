@@ -9,6 +9,8 @@ import {
   appendPrReviewLog,
   markPrReviewReady,
   markPrReviewFailed,
+  initPrReviewPhases,
+  setPrReviewPhase,
 } from '../src/storage/prReviewRequestRepository';
 
 function seedTask(externalRef: string): number {
@@ -103,4 +105,50 @@ test('appendPrReviewLog: appends progress lines in order, preserving earlier one
   appendPrReviewLog(request.id, 'Checking Jira ticket(s)...');
   const updated = getPrReviewRequest(request.id)!;
   assert.deepEqual(updated.log, ['Fetched PR details.', 'Checking Jira ticket(s)...']);
+});
+
+test('createPrReviewRequest: starts with an empty phases list', () => {
+  const taskId = seedTask('PROJ/repo#8');
+  const request = createPrReviewRequest({ taskId, repoName: 'r', branchName: 'b' });
+  assert.deepEqual(request.phases, []);
+});
+
+test('initPrReviewPhases: seeds the full step list as given', () => {
+  const taskId = seedTask('PROJ/repo#9');
+  const request = createPrReviewRequest({ taskId, repoName: 'r', branchName: 'b' });
+  const phases = [
+    { key: 'context', label: 'Gather PR & ticket context', status: 'pending' as const, detail: null },
+    { key: 'worktree', label: 'Check out branch', status: 'pending' as const, detail: null },
+  ];
+  initPrReviewPhases(request.id, phases);
+  assert.deepEqual(getPrReviewRequest(request.id)!.phases, phases);
+});
+
+test('setPrReviewPhase: updates only the matching phase by key, leaving the others untouched', () => {
+  const taskId = seedTask('PROJ/repo#10');
+  const request = createPrReviewRequest({ taskId, repoName: 'r', branchName: 'b' });
+  initPrReviewPhases(request.id, [
+    { key: 'context', label: 'Gather context', status: 'pending', detail: null },
+    { key: 'worktree', label: 'Check out branch', status: 'pending', detail: null },
+  ]);
+
+  setPrReviewPhase(request.id, 'context', 'running');
+  let phases = getPrReviewRequest(request.id)!.phases;
+  assert.equal(phases[0].status, 'running');
+  assert.equal(phases[0].detail, null);
+  assert.equal(phases[1].status, 'pending');
+
+  setPrReviewPhase(request.id, 'context', 'done', '2 Jira ticket(s), 1 Confluence page(s).');
+  phases = getPrReviewRequest(request.id)!.phases;
+  assert.equal(phases[0].status, 'done');
+  assert.equal(phases[0].detail, '2 Jira ticket(s), 1 Confluence page(s).');
+  assert.equal(phases[1].status, 'pending', 'the worktree phase should be untouched by an update to context');
+});
+
+test('setPrReviewPhase: is a no-op (does not throw) for an unknown key', () => {
+  const taskId = seedTask('PROJ/repo#11');
+  const request = createPrReviewRequest({ taskId, repoName: 'r', branchName: 'b' });
+  initPrReviewPhases(request.id, [{ key: 'context', label: 'Gather context', status: 'pending', detail: null }]);
+  assert.doesNotThrow(() => setPrReviewPhase(request.id, 'nonexistent', 'done'));
+  assert.deepEqual(getPrReviewRequest(request.id)!.phases, [{ key: 'context', label: 'Gather context', status: 'pending', detail: null }]);
 });

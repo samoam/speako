@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import { createSession } from '../src/storage/segmentRepository';
 import { db } from '../src/storage/db';
 import { upsertTask, getOpenTasks } from '../src/storage/taskRepository';
+import { createDevCycle } from '../src/storage/devCycleRepository';
 import {
   createCodeChangeRequest,
   getCodeChangeRequest,
   getLatestCodeChangeRequestForActionItem,
   getLatestCodeChangeRequestForTask,
+  getLatestCodeChangeRequestForDevCycleOrigin,
+  updateCodeChangeDiff,
   getRunningCodeChangeRequests,
   markCodeChangeReady,
   markCodeChangeFailed,
@@ -53,6 +56,29 @@ test('getLatestCodeChangeRequestForActionItem: returns the most recent of severa
   const latest = getLatestCodeChangeRequestForActionItem(actionItemId);
   assert.equal(latest?.id, second.id);
   assert.notEqual(latest?.id, first.id);
+});
+
+test('getLatestCodeChangeRequestForDevCycleOrigin: scoped by both devCycleId and origin, most recent first', () => {
+  const cycle = createDevCycle({ ticketKey: 'CCR-DC-1', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_implement', repoName: 'r', repoPath: 'p', cliSessionId: 'impl-1' });
+  const merge1 = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'p', cliSessionId: 'merge-1' });
+  const merge2 = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'p', cliSessionId: 'merge-2' });
+
+  const latestMerge = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
+  assert.equal(latestMerge?.id, merge2.id);
+  assert.notEqual(latestMerge?.id, merge1.id);
+});
+
+test('updateCodeChangeDiff: overwrites diff without touching status', () => {
+  const cycle = createDevCycle({ ticketKey: 'CCR-DC-2', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'p', cliSessionId: 'merge-1' });
+  markCodeChangeReady(request.id, 'C:\\wt', 'diff --git a/x b/x\n+old');
+
+  updateCodeChangeDiff(request.id, 'diff --git a/x b/x\n+refined');
+
+  const updated = getCodeChangeRequest(request.id)!;
+  assert.equal(updated.status, 'ready');
+  assert.match(updated.diff!, /refined/);
 });
 
 test('markCodeChangeReady: sets status, worktreePath, and diff', () => {

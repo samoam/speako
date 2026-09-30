@@ -45,8 +45,19 @@ export interface ConnectorToolCall {
   args: Record<string, unknown>;
 }
 
-/** Thrown for anything from a connector-tool dispatch: process/spawn errors, a tool_result marked is_error, an unparseable result, or a timeout. */
-export class ConnectorToolError extends Error {}
+/**
+ * Thrown for anything from a connector-tool dispatch: process/spawn errors, a
+ * tool_result marked is_error, an unparseable result, or a timeout.
+ * `retryable` distinguishes a transient dispatch failure (the underlying
+ * MS365 connector being slow/unresponsive — timeout, no result, spawn error)
+ * from a genuine tool-level error (bad args, connector rejected the call
+ * outright) that retrying the exact same call won't fix.
+ */
+export class ConnectorToolError extends Error {
+  constructor(message: string, public readonly retryable = false) {
+    super(message);
+  }
+}
 
 function buildPrompt(fullToolName: string, args: Record<string, unknown>): string {
   return `Call the tool "${fullToolName}" with these exact arguments (JSON): ${JSON.stringify(args)}. Call it exactly once, with no other tool calls. After it returns, respond with only the word DONE — do not summarize, describe, or restate the result yourself.`;
@@ -65,7 +76,28 @@ function parseResultBlocks(content: unknown): unknown[] {
   });
 }
 
+const RETRY_DELAY_MS = 3_000;
+
+/**
+ * Retries once (2 attempts total) on a transient dispatch failure — the
+ * MS365 connector has been observed to occasionally sit unresponsive long
+ * enough to hit the default 60s timeout, then work fine moments later, so a
+ * single retry with a short backoff clears most of these without doubling
+ * every sync's worst-case latency. Never retries a genuine tool-level error
+ * (see ConnectorToolError.retryable) since the connector already answered —
+ * running the identical call again would just fail the same way.
+ */
 export async function callMicrosoft365Tool<T = any>(call: ConnectorToolCall, opts?: { timeoutMs?: number }): Promise<T[]> {
+  try {
+    return await callMicrosoft365ToolOnce<T>(call, opts);
+  } catch (err) {
+    if (!(err instanceof ConnectorToolError) || !err.retryable) throw err;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return callMicrosoft365ToolOnce<T>(call, opts);
+  }
+}
+
+function callMicrosoft365ToolOnce<T = any>(call: ConnectorToolCall, opts?: { timeoutMs?: number }): Promise<T[]> {
   const fullToolName = `${CONNECTOR_PREFIX}${call.tool}`;
   const prompt = buildPrompt(fullToolName, call.args);
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -92,7 +124,7 @@ export async function callMicrosoft365Tool<T = any>(call: ConnectorToolCall, opt
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new ConnectorToolError(`Connector call to "${fullToolName}" timed out after ${timeoutMs}ms.`));
+      reject(new ConnectorToolError(`Connector call to "${fullToolName}" timed out after ${timeoutMs}ms.`, true));
     }, timeoutMs);
 
     const settle = () => {
@@ -145,7 +177,7 @@ export async function callMicrosoft365Tool<T = any>(call: ConnectorToolCall, opt
 
     child.on('error', (err) => {
       settle();
-      reject(err);
+      reject(new ConnectorToolError(err.message, true));
     });
 
     child.on('close', (code) => {
@@ -157,7 +189,8 @@ export async function callMicrosoft365Tool<T = any>(call: ConnectorToolCall, opt
       } else {
         reject(
           new ConnectorToolError(
-            `Connector call to "${fullToolName}" exited with code ${code} without returning a result.${stderrOutput ? ` ${stderrOutput.slice(0, 500)}` : ''}`
+            `Connector call to "${fullToolName}" exited with code ${code} without returning a result.${stderrOutput ? ` ${stderrOutput.slice(0, 500)}` : ''}`,
+            true
           )
         );
       }

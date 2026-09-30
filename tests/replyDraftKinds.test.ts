@@ -1,11 +1,15 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertTask, getOpenTasks } from '../src/storage/taskRepository';
+import { upsertTask, getOpenTasks, getTaskById } from '../src/storage/taskRepository';
 import { updateSettings } from '../src/settingsStore';
 import * as geminiClientModule from '../src/gemini/geminiClient';
 import * as replyContextGatheringModule from '../src/drafts/kinds/replyContextGathering';
+import * as jiraMcpModule from '../src/integrations/jiraMcp';
+import * as bitbucketServerModule from '../src/integrations/bitbucketServer';
 import { teamsReplyDraft } from '../src/drafts/kinds/teamsReplyDraft';
 import { emailReplyDraft } from '../src/drafts/kinds/emailReplyDraft';
+import { jiraCommentReplyDraft } from '../src/drafts/kinds/jiraCommentReplyDraft';
+import { bitbucketPrCommentReplyDraft } from '../src/drafts/kinds/bitbucketPrCommentReplyDraft';
 
 function seedTask(source: 'teams_message' | 'email_message', externalRef: string, draftReply: string | null): number {
   upsertTask({ source, externalRef, title: 'A message', urgencyScore: 3, importanceScore: 3, draftReply });
@@ -75,7 +79,7 @@ test('teamsReplyDraft.generate: a redo with no Gemini configured falls back to t
   assert.deepEqual(result, { mode: 'draft', content: { text: 'original reply' } });
 });
 
-test('teamsReplyDraft.execute: records the approved text with a timestamp, marked manual (no real send yet)', async () => {
+test('teamsReplyDraft.execute: records the approved text with a timestamp, marked manual (no real send yet), and dismisses the task', async () => {
   const teamsId = seedTask('teams_message', 'reply-kinds-test/teams#6', 'ok');
   const task = (await teamsReplyDraft.loadSubject(String(teamsId)))!;
   const result = await teamsReplyDraft.execute('send', { draft: {} as any, subject: task, content: { text: 'Sounds good!' } });
@@ -83,6 +87,45 @@ test('teamsReplyDraft.execute: records the approved text with a timestamp, marke
   assert.equal(result.manual, true);
   assert.equal(result.channel, 'teams');
   assert.ok(typeof result.at === 'string');
+  // Approving is the only "mark handled" affordance available (no real send
+  // API) — the task must drop out of the open queue the same way an
+  // explicit Dismiss would, not linger as still "open."
+  assert.equal(getTaskById(teamsId)?.status, 'dismissed');
+});
+
+test('emailReplyDraft.execute: dismisses the task once the reply is approved', async () => {
+  const emailId = seedTask('email_message', 'reply-kinds-test/email#6', 'ok');
+  const task = (await emailReplyDraft.loadSubject(String(emailId)))!;
+  await emailReplyDraft.execute('send', { draft: {} as any, subject: task, content: { text: 'Thanks!' } });
+  assert.equal(getTaskById(emailId)?.status, 'dismissed');
+});
+
+test('jiraCommentReplyDraft.execute: posts the Jira comment and dismisses the task', async () => {
+  const updateSpy = mock.method(jiraMcpModule, 'updateJiraIssue', async () => ({ key: 'ETICK-1', url: 'https://jira.example/ETICK-1' }));
+  try {
+    upsertTask({ source: 'jira', externalRef: 'ETICK-1:comment:99', title: 'Comment on ETICK-1', urgencyScore: 3, importanceScore: 3 });
+    const taskId = getOpenTasks().find((t) => t.source === 'jira' && t.externalRef === 'ETICK-1:comment:99')!.id;
+    const task = (await jiraCommentReplyDraft.loadSubject(String(taskId)))!;
+    await jiraCommentReplyDraft.execute('submit', { draft: {} as any, subject: task, content: { text: 'On it.' } });
+    assert.equal(updateSpy.mock.calls.length, 1);
+    assert.equal(getTaskById(taskId)?.status, 'dismissed');
+  } finally {
+    updateSpy.mock.restore();
+  }
+});
+
+test('bitbucketPrCommentReplyDraft.execute: posts the Bitbucket reply and dismisses the task', async () => {
+  const postSpy = mock.method(bitbucketServerModule, 'addPullRequestComment', async () => ({ id: 555, version: 0 }));
+  try {
+    upsertTask({ source: 'bitbucket_pr', externalRef: 'PROJ/repo#7:comment:42', title: 'Mentioned in: PR', urgencyScore: 3, importanceScore: 3 });
+    const taskId = getOpenTasks().find((t) => t.source === 'bitbucket_pr' && t.externalRef === 'PROJ/repo#7:comment:42')!.id;
+    const task = (await bitbucketPrCommentReplyDraft.loadSubject(String(taskId)))!;
+    await bitbucketPrCommentReplyDraft.execute('post', { draft: {} as any, subject: task, content: { text: 'Sounds good.' } });
+    assert.equal(postSpy.mock.calls.length, 1);
+    assert.equal(getTaskById(taskId)?.status, 'dismissed');
+  } finally {
+    postSpy.mock.restore();
+  }
 });
 
 test('teamsReplyDraft.legacyBroadcast: fires plate-updated so the old Dashboard card re-renders', () => {

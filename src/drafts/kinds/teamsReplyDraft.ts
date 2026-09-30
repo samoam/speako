@@ -1,4 +1,4 @@
-import { Task } from '../../storage/taskRepository';
+import { Task, dismissTask } from '../../storage/taskRepository';
 import { Draft } from '../../storage/draftRepository';
 import { DraftHandler } from '../types';
 import { loadReplyTaskSubject, generateReplyDraft, ReplyDraftContent } from './replyDraftShared';
@@ -27,6 +27,11 @@ export const teamsReplyDraft: DraftHandler<Task> = {
     }),
   async execute(_gateKey, ctx) {
     const content = ctx.content as ReplyDraftContent;
+    // The gate is literally labeled "Mark handled" — approving IS the user
+    // saying this message is done (they've copied the text and will send it
+    // themselves), so the underlying task should drop out of the queue the
+    // same way an explicit Dismiss does, not linger as still "open."
+    dismissTask(ctx.subject.id);
     return { text: content.text, at: new Date().toISOString(), manual: true, channel: 'teams' };
   },
   async observeSince() {

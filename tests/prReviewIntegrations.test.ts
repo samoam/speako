@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extractIssueKeys, getJiraIssueDetail } from '../src/integrations/jiraMcp';
 import { getConfluencePage } from '../src/integrations/confluenceMcp';
-import { getPullRequest } from '../src/integrations/bitbucketServer';
+import { getPullRequest, getPullRequestDiff, getPullRequestComments } from '../src/integrations/bitbucketServer';
 import * as atlassianMcpModule from '../src/integrations/atlassianMcp';
 import { mock } from 'node:test';
 import { updateSettings } from '../src/settingsStore';
@@ -108,6 +108,103 @@ test('getPullRequest: maps fromRef/toRef display ids and description', async () 
     assert.equal(pr.fromRefDisplayId, 'feature/caching');
     assert.equal(pr.toRefDisplayId, 'main');
     assert.equal(pr.description, 'Implements ETICK-1234.');
+  } finally {
+    globalThis.fetch = originalFetch;
+    updateSettings({ bitbucketServerUrl: '', bitbucketServerUsername: '', bitbucketServerToken: '', bitbucketServerRepos: '' });
+  }
+});
+
+test('getPullRequestDiff: maps diffs/hunks/segments into FileDiff[], preserving line text and change type', async () => {
+  updateSettings({ bitbucketServerUrl: 'https://bitbucket.example.com', bitbucketServerUsername: 'madadi', bitbucketServerToken: 'tok', bitbucketServerRepos: 'PROJ/repo' });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        diffs: [
+          {
+            source: { toString: 'src/old.ts' },
+            destination: { toString: 'src/old.ts' },
+            hunks: [
+              {
+                sourceLine: 10,
+                sourceSpan: 2,
+                destinationLine: 10,
+                destinationSpan: 3,
+                segments: [
+                  { type: 'CONTEXT', lines: [{ source: 10, destination: 10, line: 'const x = 1;' }] },
+                  { type: 'REMOVED', lines: [{ source: 11, line: 'return x;' }] },
+                  {
+                    type: 'ADDED',
+                    lines: [
+                      { destination: 11, line: 'return x + 1;' },
+                      { destination: 12, line: 'log(x);' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            source: null,
+            destination: { toString: 'src/new.ts' },
+            hunks: [],
+          },
+        ],
+      })
+    )) as any;
+  try {
+    const files = await getPullRequestDiff({ id: 42, projectKey: 'PROJ', repoSlug: 'repo' });
+    assert.equal(files.length, 2);
+    assert.equal(files[0].path, 'src/old.ts');
+    assert.equal(files[0].changeType, 'MODIFY');
+    assert.equal(files[0].hunks[0].lines.length, 4);
+    assert.deepEqual(files[0].hunks[0].lines[1], { text: 'return x;', sourceLine: 11, destinationLine: null, type: 'REMOVED' });
+    assert.deepEqual(files[0].hunks[0].lines[2], { text: 'return x + 1;', sourceLine: null, destinationLine: 11, type: 'ADDED' });
+    assert.equal(files[1].path, 'src/new.ts');
+    assert.equal(files[1].changeType, 'ADD');
+  } finally {
+    globalThis.fetch = originalFetch;
+    updateSettings({ bitbucketServerUrl: '', bitbucketServerUsername: '', bitbucketServerToken: '', bitbucketServerRepos: '' });
+  }
+});
+
+test('getPullRequestComments: extracts inline anchor info and flattens threaded replies', async () => {
+  updateSettings({ bitbucketServerUrl: 'https://bitbucket.example.com', bitbucketServerUsername: 'madadi', bitbucketServerToken: 'tok', bitbucketServerRepos: 'PROJ/repo' });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        values: [
+          {
+            action: 'COMMENTED',
+            createdDate: 1700000000000,
+            commentAnchor: { path: 'src/foo.ts', line: 12, lineType: 'ADDED', fileType: 'TO' },
+            comment: {
+              id: 1,
+              text: 'Consider renaming this.',
+              author: { displayName: 'Bob' },
+              createdDate: 1700000000000,
+              comments: [{ id: 2, text: 'Good point, done.', author: { displayName: 'Alice' }, createdDate: 1700000001000 }],
+            },
+          },
+          {
+            action: 'COMMENTED',
+            createdDate: 1700000002000,
+            comment: { id: 3, text: 'General comment, no anchor.', author: { name: 'carol' }, createdDate: 1700000002000 },
+          },
+        ],
+        isLastPage: true,
+      })
+    )) as any;
+  try {
+    const comments = await getPullRequestComments({ id: 42, title: 'Add caching', projectKey: 'PROJ', repoSlug: 'repo' });
+    assert.equal(comments.length, 3);
+    assert.deepEqual(comments[0].anchor, { path: 'src/foo.ts', line: 12, lineType: 'ADDED', fileType: 'TO' });
+    assert.equal(comments[0].text, 'Consider renaming this.');
+    assert.deepEqual(comments[1].anchor, comments[0].anchor);
+    assert.equal(comments[1].authorName, 'Alice');
+    assert.equal(comments[2].anchor, null);
+    assert.equal(comments[2].authorName, 'carol');
   } finally {
     globalThis.fetch = originalFetch;
     updateSettings({ bitbucketServerUrl: '', bitbucketServerUsername: '', bitbucketServerToken: '', bitbucketServerRepos: '' });

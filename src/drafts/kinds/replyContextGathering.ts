@@ -21,8 +21,13 @@ import { ExternalMessage } from '../../storage/externalMessageRepository';
  * the same heuristic prep's generic workflow and fact-check already use) —
  * a "sounds good, thanks!" reply shouldn't fire a code search.
  */
-export async function gatherReplyContext(message: ExternalMessage | undefined, task: Task): Promise<string> {
-  const query = message?.bodyText || task.description || task.title;
+export interface GatherReplyContextOptions {
+  /** Drives the tool fan-out's query instead of the message/task text — used by src/qa/taskChat.ts so a free-form task-chat question gets the same grounded context reply drafting gets, rather than always querying against the original message body. */
+  queryOverride?: string;
+}
+
+export async function gatherReplyContext(message: ExternalMessage | undefined, task: Task, opts?: GatherReplyContextOptions): Promise<string> {
+  const query = opts?.queryOverride || message?.bodyText || task.description || task.title;
   const activeTools = config.replyDraftToolKeys;
   const ctx = { activeTools };
   const codeRelated = looksCodeRelated(query);

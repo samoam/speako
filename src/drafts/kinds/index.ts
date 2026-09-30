@@ -8,9 +8,12 @@ import { gitBranchCreateDraft } from './gitBranchCreateDraft';
 import { devPlanDraft } from './devPlanDraft';
 import { jiraTransitionDraft } from './jiraTransitionDraft';
 import { bitbucketPrCommentDraft } from './bitbucketPrCommentDraft';
+import { prReviewDecisionDraft } from './prReviewDecisionDraft';
 import { prOpenDraft } from './prOpenDraft';
 import { jenkinsFixDraft } from './jenkinsFixDraft';
 import { jenkinsRebuildDraft } from './jenkinsRebuildDraft';
+import { jiraCommentReplyDraft } from './jiraCommentReplyDraft';
+import { bitbucketPrCommentReplyDraft } from './bitbucketPrCommentReplyDraft';
 
 /** Import this module once (side effect only) to register every known draft kind — see src/interface/server.ts's constructor. */
 registerDraftKind(teamsReplyDraft);
@@ -22,6 +25,9 @@ registerDraftKind(gitBranchCreateDraft);
 registerDraftKind(devPlanDraft);
 registerDraftKind(jiraTransitionDraft);
 registerDraftKind(bitbucketPrCommentDraft);
+registerDraftKind(prReviewDecisionDraft);
 registerDraftKind(prOpenDraft);
 registerDraftKind(jenkinsFixDraft);
 registerDraftKind(jenkinsRebuildDraft);
+registerDraftKind(jiraCommentReplyDraft);
+registerDraftKind(bitbucketPrCommentReplyDraft);

@@ -31,6 +31,30 @@ export async function createTicketBranchWorktree(repoPath: string, branch: strin
   return worktreePath;
 }
 
+/**
+ * Adds a second worktree off a branch that already exists (created by
+ * createTicketBranchWorktree above) — used by the Jira-implement pipeline to
+ * give Gemini CLI its own worktree on the same branch as Claude's, so the two
+ * agents implement the same approved plan independently without either one
+ * seeing the other's in-progress edits.
+ *
+ * Deliberately `--detach` rather than checking the branch itself out here:
+ * confirmed live that git refuses `git worktree add <path> <branch>` for a
+ * branch that's already checked out in another worktree ("... is already
+ * used by worktree at ..."), which worktree A (createTicketBranchWorktree)
+ * always has it checked out in. A detached checkout at that branch's current
+ * commit sidesteps the restriction entirely — safe here since nothing in
+ * this worktree ever commits (Gemini's implementation is only ever read via
+ * getWorktreeDiff's uncommitted `git diff --cached`, never landed on the
+ * branch itself). No `-b` and no fetch — the branch was just created moments
+ * ago by the same pipeline run, so origin already has it.
+ */
+export async function addWorktreeForExistingBranch(repoPath: string, branch: string, label: string): Promise<string> {
+  const worktreePath = path.join(os.tmpdir(), `speako-dev-cycle-${label}-${branch.replace(/[/\\]/g, '-')}-${Date.now()}`);
+  await git(['worktree', 'add', '--detach', worktreePath, branch], repoPath, GIT_NETWORK_TIMEOUT_MS);
+  return worktreePath;
+}
+
 export interface BranchDiffStat {
   files: string[];
   insertions: number;
