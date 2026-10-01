@@ -1,9 +1,9 @@
 import { config } from '../../config';
-import { DevCycle, getDevCycle, setDevCyclePr } from '../../storage/devCycleRepository';
+import { DevCycle, getDevCycle, setDevCyclePr, closeDevCycle } from '../../storage/devCycleRepository';
 import { getLatestDraftForSubject } from '../../storage/draftRepository';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
 import { getBranchDiffStat, branchExistsOnRemote } from '../../integrations/gitBranches';
-import { runClaudeCodeReview } from '../../integrations/claudeCodeCli';
+import { runClaudeCodeReview, removeWorktree } from '../../integrations/claudeCodeCli';
 import { createPullRequest } from '../../integrations/bitbucketServer';
 import { runDeterministicChecks, buildPrePrPrompt, PRE_PR_JSON_SCHEMA, PrePrAgentResult, DeterministicCheckResult } from '../../dev/prePrChecks';
 import { buildPrTitle, buildPrDescription } from '../../dev/prDescription';
@@ -27,9 +27,8 @@ export interface PrOpenContent {
  * Opens the PR — the last step of the plan-before-code cycle (blueprint
  * §5.1 steps 5-7). Runs the pre-PR self-review checklist (src/dev/prePrChecks.ts)
  * AS PART OF drafting, rather than a separate gate/table: the checklist
- * result is just part of what the human reviews before approving, same
- * "generic gate is the single source of truth" pattern devPlanDraft.ts
- * already established. supportsRefine is false — re-running the whole
+ * result is just part of what the human reviews before approving — the
+ * generic gate is the single source of truth. supportsRefine is false — re-running the whole
  * checklist per chat turn would be expensive; title/description/reviewers
  * are edited directly instead.
  */
@@ -49,8 +48,10 @@ export const prOpenDraft: DraftHandler<DevCycle> = {
     const ticket = await getJiraIssueDetail(cycle.ticketKey);
     if (!ticket) throw new Error(`Jira issue ${cycle.ticketKey} was not found.`);
 
-    const planDraft = getLatestDraftForSubject('dev_cycle', cycle.id, 'dev_plan');
-    const plan = (planDraft?.content ?? null) as StructuredDevPlan | null;
+    // The Jira-implement pipeline stores its approved plan on the cycle row
+    // (plan_merged, or plan_claude when no second opinion ran) — reading the
+    // retired dev_plan draft here left every PR description without a plan.
+    const plan: StructuredDevPlan | null = cycle.planMerged ?? cycle.planClaude ?? null;
 
     const log = (message: string) => emitDraftLog(input.draftId, message);
     log('Running deterministic checks…');
@@ -120,6 +121,15 @@ export const prOpenDraft: DraftHandler<DevCycle> = {
       reviewerUsernames: content.reviewers,
     });
     setDevCyclePr(cycle.id, { projectKey: content.projectKey, repoSlug: content.repoSlug, prId: pr.id, prUrl: pr.link });
+    // The PR is the cycle's deliverable: close it as done here (nothing else
+    // ever did, so cycles stayed 'active' forever — polled by Jenkins, their
+    // worktrees never removed, and a restart of the same ticket got the old
+    // cycle back). The worktrees are disposable; jenkinsFixDraft re-creates
+    // one if a fix is needed after this point.
+    for (const worktree of [cycle.worktreePath, cycle.worktreePathGemini]) {
+      if (worktree) await removeWorktree(worktree, cycle.repoPath).catch((err: any) => console.error(`[pr-open] failed to remove worktree ${worktree}:`, err.message));
+    }
+    closeDevCycle(cycle.id, 'done');
     return { projectKey: content.projectKey, repoSlug: content.repoSlug, prId: pr.id, prUrl: pr.link };
   },
   legacyBroadcast(draft) {

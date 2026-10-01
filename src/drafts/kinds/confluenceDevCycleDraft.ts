@@ -1,6 +1,5 @@
 import { generateJson, hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../../ai/aiRouter';
 import { DevCycle, getDevCycle } from '../../storage/devCycleRepository';
-import { getLatestDraftForSubject } from '../../storage/draftRepository';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
 import { StructuredDevPlan } from '../../dev/devPlan';
 import { DraftHandler } from '../types';
@@ -19,8 +18,8 @@ async function suggestDevCycleConfluenceFields(cycle: DevCycle): Promise<Conflue
   if (!hasTextProvider()) throw new Error(NO_TEXT_PROVIDER_MESSAGE);
 
   const ticket = await getJiraIssueDetail(cycle.ticketKey);
-  const planDraft = getLatestDraftForSubject('dev_cycle', cycle.id, 'dev_plan');
-  const plan = (planDraft?.content ?? null) as StructuredDevPlan | null;
+  // Same plan source as prOpenDraft.ts: the cycle row, not the retired dev_plan draft.
+  const plan: StructuredDevPlan | null = cycle.planMerged ?? cycle.planClaude ?? null;
 
   const prompt = `You are helping document a completed development cycle as a Confluence page. Draft a title and a documentation-worthy body from the ticket and plan below — focus on what changed and why, and any behavior/architecture/runbook impact a teammate would need to know.
 

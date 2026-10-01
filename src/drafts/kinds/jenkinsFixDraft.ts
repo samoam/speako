@@ -1,7 +1,9 @@
+import * as fs from 'fs';
 import { JenkinsBuildRow, getJenkinsBuildByJobAndNumber } from '../../storage/jenkinsBuildRepository';
 import { DevCycle, getDevCycle } from '../../storage/devCycleRepository';
 import { createCodeChangeRequest } from '../../storage/codeChangeRequestRepository';
 import { startClaudeCodeTask } from '../../integrations/claudeCodeCli';
+import { addWorktreeForExistingBranch } from '../../integrations/gitBranches';
 import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
 import { BuildFailureAnalysis } from '../../dev/buildFailureClassification';
 import { buildFixPrompt } from '../../dev/buildFixPrompt';
@@ -36,10 +38,10 @@ function parseSubjectId(subjectId: string): { jobPath: string; buildNumber: numb
  * Proposes a scoped code fix for a classified Jenkins build failure —
  * refused at generate() time unless the classification says `fixable`
  * (compile_error/lint_error/test_regression only; infra_failure/flaky_test
- * are never proposed for an automatic fix, per the blueprint). Dispatch and
- * gating mirror devPlanDraft.ts exactly: startClaudeCodeTask into the
- * cycle's own worktree, a code_change_requests row the existing commit/push
- * gates already handle, no new CLI plumbing.
+ * are never proposed for an automatic fix, per the blueprint). Dispatch:
+ * startClaudeCodeTask into a worktree on the cycle's branch, a
+ * code_change_requests row the existing commit/push gates already handle,
+ * no new CLI plumbing.
  */
 export const jenkinsFixDraft: DraftHandler<JenkinsFixSubject> = {
   kind: 'jenkins_fix',
@@ -87,22 +89,24 @@ export const jenkinsFixDraft: DraftHandler<JenkinsFixSubject> = {
   async execute(_gateKey, ctx) {
     const { cycle } = ctx.subject;
     const content = ctx.content as JenkinsFixContent;
-    const { cliSessionId } = await startClaudeCodeTask(content.prompt, cycle.worktreePath!, 'sonnet');
+    if (!cycle.branchName) throw new Error('This dev cycle has no branch yet.');
+    // A cycle whose PR is already open has had its worktrees removed
+    // (prOpenDraft.ts) — a fix for a later build failure gets a fresh one on
+    // the same branch.
+    const worktreePath =
+      cycle.worktreePath && fs.existsSync(cycle.worktreePath) ? cycle.worktreePath : await addWorktreeForExistingBranch(cycle.repoPath, cycle.branchName, 'fix');
+    const { cliSessionId } = await startClaudeCodeTask(content.prompt, worktreePath, 'sonnet');
     const request = createCodeChangeRequest({
       devCycleId: cycle.id,
       taskId: cycle.taskId ?? undefined,
       origin: 'jenkins_fix',
       repoName: cycle.repoName,
-      repoPath: cycle.worktreePath!,
+      repoPath: worktreePath,
       cliSessionId,
     });
     pollCodeChangeRequest(request.id, getDraftBroadcaster()).catch((err: any) => {
       console.error(`[jenkins-fix] polling failed for code change request ${request.id}:`, err.message);
     });
     return { codeChangeRequestId: request.id, cliSessionId };
-  },
-  legacyBroadcast(draft) {
-    const parsed = parseSubjectId(draft.subjectId);
-    return parsed ? [{ type: 'jenkins-fix-updated', jobPath: parsed.jobPath, buildNumber: parsed.buildNumber }] : undefined;
   },
 };

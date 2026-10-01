@@ -27,7 +27,7 @@ export function emitDraftLog(draftId: number, message: string): void {
   broadcast({ type: 'draft-log', draftId, message });
 }
 
-/** Lets a kind handler's execute() kick off its own background process that broadcasts independently of the draft's own lifecycle (e.g. src/drafts/kinds/devPlanDraft.ts dispatching pollCodeChangeRequest) — same underlying callback setDraftBroadcast wired up, just exposed for reuse rather than duplicated. */
+/** Lets a kind handler's execute() kick off its own background process that broadcasts independently of the draft's own lifecycle (e.g. src/drafts/kinds/jenkinsFixDraft.ts dispatching pollCodeChangeRequest) — same underlying callback setDraftBroadcast wired up, just exposed for reuse rather than duplicated. */
 export function getDraftBroadcaster(): DraftBroadcast {
   return broadcast;
 }
@@ -64,7 +64,11 @@ async function generateAndStore(handler: DraftHandler<any>, draft: Draft, subjec
   let revision: DraftRevision;
   if (result.mode === 'draft') {
     revision = repo.appendDraftRevision({ draftId: draft.id, role: 'assistant', kind: 'draft', text: result.note, content: result.content });
-    repo.setDraftContent(draft.id, result.content, { status: 'ready' });
+    // Compare-and-swap, not a blind status write: a draft discarded while
+    // its (unawaited) generation was still running used to come back as
+    // 'ready' the moment generation finished.
+    repo.setDraftContent(draft.id, result.content);
+    repo.tryTransitionDraft(draft.id, ['generating', 'refining'], 'ready');
   } else if (result.mode === 'question') {
     revision = repo.appendDraftRevision({ draftId: draft.id, role: 'assistant', kind: 'question', text: result.text });
     // Same shape as the 'answer' branch below — content untouched — but the

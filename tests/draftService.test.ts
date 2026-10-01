@@ -331,3 +331,31 @@ test('reconcileStuckDrafts: marks generating/refining/executing rows failed with
   assert.equal(reconciled.status, 'failed');
   assert.match(reconciled.error!, /restarted/);
 });
+
+test('discardDraft during generation: the finishing generation must not flip the discarded draft back to ready', async () => {
+  // A kind whose generate() blocks until released, so the discard can land mid-generation.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const slowKind: DraftHandler<{ id: string }> = {
+    kind: 'test_slow_generate',
+    subjectKind: 'task',
+    gates: [{ key: 'send', label: 'Send' }],
+    redoStrategy: 'fresh',
+    loadSubject: async (id) => ({ id }),
+    async generate() {
+      await gate;
+      return { mode: 'draft', content: { text: 'late result' } };
+    },
+    async execute() {
+      return {};
+    },
+  };
+  registerDraftKind(slowKind);
+  const draft = await startDraft({ kind: 'test_slow_generate', subjectId: 'slow-1' });
+  assert.equal(draft.status, 'generating');
+  const discarded = await discardDraft(draft.id);
+  assert.equal(discarded.status, 'discarded');
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(getDraft(draft.id)!.status, 'discarded');
+});

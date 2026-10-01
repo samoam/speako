@@ -4,6 +4,7 @@ import { createDevCycle, setDevCycleBranch, getDevCycle } from '../src/storage/d
 import { upsertJenkinsBuild, setBuildClassification, getJenkinsBuildByJobAndNumber } from '../src/storage/jenkinsBuildRepository';
 import * as claudeCodeCliModule from '../src/integrations/claudeCodeCli';
 import * as codeChangePollerModule from '../src/integrations/codeChangePoller';
+import * as gitBranchesModule from '../src/integrations/gitBranches';
 import { getCodeChangeRequestsForDevCycle } from '../src/storage/codeChangeRequestRepository';
 import { jenkinsFixDraft } from '../src/drafts/kinds/jenkinsFixDraft';
 import { buildFixPrompt } from '../src/dev/buildFixPrompt';
@@ -71,6 +72,11 @@ test('jenkinsFixDraft.generate: a redo appends context about the failed prior at
 
 test('jenkinsFixDraft.execute: dispatches the fix agent and records a code_change_requests row scoped to the cycle', async () => {
   const { cycle, build } = seedFixableBuild('/job/u', 'PROJ-6');
+  // The seeded worktree path doesn't exist on disk, so execute() re-creates one on the branch (as it does after prOpenDraft removed it).
+  const worktreeSpy = mock.method(gitBranchesModule, 'addWorktreeForExistingBranch', async (_repo: string, branch: string) => {
+    assert.equal(branch, cycle.branchName);
+    return cycle.worktreePath!;
+  });
   const startSpy = mock.method(claudeCodeCliModule, 'startClaudeCodeTask', async (prompt: string, repoPath: string) => {
     assert.equal(repoPath, cycle.worktreePath);
     assert.equal(prompt, 'fix this'); // execute() passes ctx.content.prompt straight through to the agent, verbatim
@@ -85,7 +91,9 @@ test('jenkinsFixDraft.execute: dispatches the fix agent and records a code_chang
     assert.equal(requests[0].origin, 'jenkins_fix');
     assert.equal(requests[0].repoPath, cycle.worktreePath);
     assert.equal(pollSpy.mock.callCount(), 1);
+    assert.equal(worktreeSpy.mock.callCount(), 1);
   } finally {
+    worktreeSpy.mock.restore();
     startSpy.mock.restore();
     pollSpy.mock.restore();
   }
