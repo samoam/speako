@@ -1,5 +1,5 @@
 import { db } from './db';
-import { stampLogLine } from './logLine';
+import { RunStep } from './runRepository';
 
 export type PrReviewStatus = 'running' | 'ready' | 'failed';
 
@@ -31,23 +31,16 @@ export interface StructuredReview {
   findings: PrReviewFinding[];
 }
 
-export type PrReviewPhaseStatus = 'pending' | 'running' | 'done' | 'failed';
-
 /**
- * One step of the review pipeline (server.ts's review route defines the
- * actual list via buildPrReviewPhases) — a coarser-grained companion to
- * `log` below: `log` is the full blow-by-blow transcript (every tool call,
- * every reasoning line), while phases is the handful of high-level stages a
- * user actually wants a status/checkmark for at a glance, each with a short
- * `detail` — the step's own conclusion once it finishes (e.g. the review
- * step's `detail` becomes the review's own summary), not just "done".
+ * One step of the review pipeline (src/orchestration/kinds/prReviewRun.ts
+ * defines the list) — a coarser-grained companion to `log` below: `log` is
+ * the full blow-by-blow transcript (every tool call, every reasoning line),
+ * while phases is the handful of high-level stages a user actually wants a
+ * status/checkmark for at a glance, each with a short `detail` — the step's
+ * own conclusion once it finishes (e.g. the review step's `detail` becomes
+ * the review's own summary), not just "done". Same shape as a RunStep.
  */
-export interface PrReviewPhase {
-  key: string;
-  label: string;
-  status: PrReviewPhaseStatus;
-  detail: string | null;
-}
+export type PrReviewPhase = RunStep;
 
 export interface PrReviewRequest {
   id: number;
@@ -62,6 +55,8 @@ export interface PrReviewRequest {
   log: string[];
   /** Absent on rows persisted before this field was added — the UI falls back to the raw log-only view for those. */
   phases: PrReviewPhase[];
+  /** The orchestration run executing this review (src/orchestration/kinds/prReviewRun.ts) — it owns the live steps/log; `log`/`phases` above are only authoritative for rows from before runs existed (null here). */
+  runId: number | null;
   createdAt: string;
   resolvedAt: string | null;
 }
@@ -88,6 +83,7 @@ function mapRow(row: any): PrReviewRequest {
     error: row.error,
     log: row.log ? JSON.parse(row.log) : [],
     phases: row.phases ? JSON.parse(row.phases) : [],
+    runId: row.run_id ?? null,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
   };
@@ -116,23 +112,8 @@ export function setPrReviewContext(id: number, context: PrReviewContext): void {
   db.prepare('UPDATE pr_review_requests SET context = ? WHERE id = ?').run(JSON.stringify(context), id);
 }
 
-/** Appends one progress line — read-modify-write on the small JSON array rather than a separate table, since a review only ever has a handful of steps (not an unbounded stream). */
-export function appendPrReviewLog(id: number, message: string): void {
-  const existing = getPrReviewRequest(id)?.log ?? [];
-  const updated = [...existing, stampLogLine(message)];
-  db.prepare('UPDATE pr_review_requests SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
-}
-
-/** Seeds the full step list as 'pending' right after the request is created — server.ts's buildPrReviewPhases decides which steps apply (e.g. the merge step only when the Antigravity second opinion is available) before the run actually starts, so the UI can render the whole planned pipeline immediately rather than steps popping in one at a time as they're reached. */
-export function initPrReviewPhases(id: number, phases: PrReviewPhase[]): void {
-  db.prepare('UPDATE pr_review_requests SET phases = ? WHERE id = ?').run(JSON.stringify(phases), id);
-}
-
-/** Updates one phase's status/detail by key, read-modify-write like appendPrReviewLog — a review only ever has a handful of phases, not an unbounded stream, so this is cheap enough to not warrant a separate table. Silently a no-op if the key isn't found (e.g. phases were never initialized on an old row) rather than throwing, since this is called from deep inside the review pipeline where a throw would be worse than a missed UI update. */
-export function setPrReviewPhase(id: number, key: string, status: PrReviewPhaseStatus, detail: string | null = null): void {
-  const existing = getPrReviewRequest(id)?.phases ?? [];
-  const updated = existing.map((p) => (p.key === key ? { ...p, status, detail } : p));
-  db.prepare('UPDATE pr_review_requests SET phases = ? WHERE id = ?').run(JSON.stringify(updated), id);
+export function setPrReviewRunId(id: number, runId: number): void {
+  db.prepare('UPDATE pr_review_requests SET run_id = ? WHERE id = ?').run(runId, id);
 }
 
 /** Strips stray tool-call closing tags (e.g. `</parameter></invoke>`) occasionally leaked onto the end of a text field when the review agent's structured-output generation immediately follows a tool call — seen live in a real review's summary field. */

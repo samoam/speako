@@ -370,6 +370,8 @@
     .pr-review-phase-running .pr-review-phase-label { color: var(--text); }
     .pr-review-phase-done .pr-review-phase-icon { background: rgba(90,200,120,0.18); color: #7fd99a; }
     .pr-review-phase-failed .pr-review-phase-icon { background: rgba(220,80,80,0.2); color: #f0a3a3; }
+    .pr-review-phase-skipped .pr-review-phase-icon { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px dashed var(--border); }
+    .pr-review-phase-skipped .pr-review-phase-label { color: var(--muted); text-decoration: line-through; }
     .pr-review-phase-failed .pr-review-phase-detail { color: #e08a8a; }
     #taskDetailPrReviewSummaryRow { display: flex; align-items: flex-start; gap: 0.6rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     #taskDetailPrReviewSummary { flex: 1; font-size: 0.9rem; line-height: 1.5; }
@@ -5606,7 +5608,7 @@
     // Icon shown per phase status — a checkmark/x/dot rather than text, so
     // the whole pipeline reads at a glance (see .pr-review-phase-* CSS for
     // the color/pulse per status).
-    const PR_REVIEW_PHASE_ICONS = { pending: '', running: '', done: '✓', failed: '✕' };
+    const PR_REVIEW_PHASE_ICONS = { pending: '', running: '', done: '✓', failed: '✕', skipped: '–' };
 
     function prReviewPhaseHtml(p) {
       return `

@@ -134,7 +134,6 @@ import {
   applyCodeChangeToRepo,
   pushRepoChanges,
   discardCodeChangeTask,
-  createWorktreeForBranch,
   removeWorktree,
   runClaudeCodeReview,
   getBackgroundTaskLogs,
@@ -152,7 +151,9 @@ import {
 import { pollCodeChangeRequest } from '../integrations/codeChangePoller';
 import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
 import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequestComment, PrRef } from '../integrations/bitbucketServer';
-import { gatherReviewContext, buildReviewPrompt, mergeReviews, recommendWithJev, buildPrReviewPhases, REVIEW_JSON_SCHEMA } from '../summarization/prReviewContext';
+import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, ...) with src/orchestration/engine.ts
+import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
+import { startPrReviewRun, prReviewRequestView, PR_REVIEW_RUN_KIND } from '../orchestration/kinds/prReviewRun';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
@@ -176,14 +177,8 @@ import {
   createPrReviewRequest,
   getPrReviewRequest,
   getLatestPrReviewRequestForTask,
-  setPrReviewContext,
-  appendPrReviewLog,
-  markPrReviewReady,
   markPrReviewFailed,
   failInterruptedPrReviews,
-  initPrReviewPhases,
-  setPrReviewPhase,
-  PrReviewPhase,
 } from '../storage/prReviewRequestRepository';
 import '../drafts/kinds'; // side-effect only: registers every known draft kind (teams_reply, email_reply, ...) with src/drafts/registry.ts
 import { getDraft, getDraftRevisions, getLatestDraftForSubject, getDraftsForSubject, getDraftsForSubjectPrefix, getActiveDraftsByStatus, DraftSubjectKind } from '../storage/draftRepository';
@@ -293,17 +288,6 @@ type ResumeHandler = () => void;
 
 /** Longer than any healthy review: the Claude and Antigravity reviewers each time out at 30 min and run in parallel. */
 const STALE_PR_REVIEW_MS = 45 * 60 * 1000;
-const CONTEXT_STEP_TIMEOUT_MS = 2 * 60 * 1000;
-const COMMENTS_STEP_TIMEOUT_MS = 60 * 1000;
-
-/** Rejects with "<label> timed out after Ns" if `promise` hasn't settled by then (the promise itself keeps running; only the wait is bounded). */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
 
 export class InterfaceServer {
   private wss: WebSocketServer;
@@ -351,7 +335,6 @@ export class InterfaceServer {
   private teamsSyncTimer: NodeJS.Timeout | null = null;
   private orchestratorSyncTimer: NodeJS.Timeout | null = null;
   /** PR review request ids this process is actually running — a 'running' row not in here was orphaned (see POST /api/plate/:id/review). */
-  private activePrReviewIds = new Set<number>();
 
   constructor() {
     const app = express();
@@ -1570,11 +1553,12 @@ export class InterfaceServer {
         // timed out, and since this route refused while 'running', the review
         // could never be retried). Those are marked failed so a fresh run can start.
         const ageMs = Date.now() - new Date(`${existing.createdAt.replace(' ', 'T')}Z`).getTime();
-        const orphaned = !this.activePrReviewIds.has(existing.id);
+        const orphaned = !(existing.runId && isRunActive(existing.runId));
         if (!orphaned && ageMs < STALE_PR_REVIEW_MS) {
           res.json({ started: false, alreadyRunning: true, requestId: existing.id });
           return;
         }
+        if (existing.runId) await cancelRun(existing.runId);
         markPrReviewFailed(existing.id, orphaned ? 'Interrupted — Speako restarted while this review was running.' : 'Timed out — no result after 45 minutes.');
       }
       const match = task.externalRef.match(/^([^/]+)\/([^#]+)#(\d+)/);
@@ -1627,163 +1611,11 @@ export class InterfaceServer {
           return;
         }
         const request = createPrReviewRequest({ taskId, repoName, branchName: pr.fromRefDisplayId });
-        const secondOpinionEnabled = isAntigravityCliConfigured();
-        initPrReviewPhases(request.id, buildPrReviewPhases(secondOpinionEnabled));
+        // The pipeline itself lives in src/orchestration/kinds/prReviewRun.ts;
+        // its progress reaches the UI through the run broadcast adapter in
+        // the constructor (run-* events → the pr-review-* messages).
+        startPrReviewRun({ request, pr, repoPath, secondOpinionEnabled: isAntigravityCliConfigured() });
         res.json({ started: true, requestId: request.id });
-
-        // Progress line, persisted (so reopening the window mid-run still
-        // shows history-so-far) and broadcast live — the whole run is one
-        // long await with no other visible signal otherwise, and it was
-        // reported as looking "stuck" without this.
-        const log = (message: string) => {
-          appendPrReviewLog(request.id, message);
-          this.broadcast({ type: 'pr-review-log', taskId, requestId: request.id, message });
-        };
-        // Coarser companion to `log` above (see buildPrReviewPhases) — a
-        // checklist the UI can render at a glance instead of parsing the
-        // full transcript. `runningPhaseKeys` tracks every phase currently
-        // "running" (a Set, not a single key — claude_review and
-        // gemini_review run concurrently, both "running" at once) so the
-        // outer catch block below can mark all of them failed (rather than
-        // leaving them stuck at "running" forever) without every call site
-        // needing its own try/catch just to know which step(s) were live
-        // when something threw.
-        const runningPhaseKeys = new Set<string>();
-        const phase = (key: string, status: 'running' | 'done' | 'failed', detail: string | null = null) => {
-          if (status === 'running') runningPhaseKeys.add(key);
-          else runningPhaseKeys.delete(key);
-          setPrReviewPhase(request.id, key, status, detail);
-          this.broadcast({ type: 'pr-review-phase', taskId, requestId: request.id, key, status, detail });
-        };
-        // Live per-reviewer status while claude_review/gemini_review run in
-        // parallel — each onProgress line both goes into the raw `log`
-        // transcript AND updates that reviewer's own phase `detail`, so the
-        // step list itself shows what's actively happening (which file it's
-        // reading, etc.) instead of just sitting at "running" with no
-        // visible movement until the whole thing finishes.
-        const claudeProgress = (message: string) => {
-          log(message);
-          phase('claude_review', 'running', message);
-        };
-        const secondOpinionProgress = (message: string) => {
-          log(message);
-          phase('gemini_review', 'running', message);
-        };
-
-        this.activePrReviewIds.add(request.id);
-        (async () => {
-          let worktreePath: string | null = null;
-          try {
-            phase('context', 'running');
-            log(`Fetched PR details — source branch "${pr.fromRefDisplayId}", opened by ${pr.authorName}.`);
-            log('Checking linked Jira ticket(s) and related Confluence docs…');
-            // Bounded: context is helpful, not required — a hung lookup must
-            // not leave the whole review sitting at "running" forever.
-            const context = await withTimeout(gatherReviewContext(pr), CONTEXT_STEP_TIMEOUT_MS, 'Gathering ticket context').catch((err: any) => {
-              log(`${err.message} — continuing without ticket context.`);
-              return { jiraIssues: [], confluencePages: [] } as Awaited<ReturnType<typeof gatherReviewContext>>;
-            });
-            setPrReviewContext(request.id, {
-              authorName: pr.authorName,
-              jiraIssues: context.jiraIssues.map((i) => ({ key: i.key, summary: i.summary, status: i.status })),
-              confluencePages: context.confluencePages.map((p) => ({ title: p.title })),
-            });
-            log(
-              context.jiraIssues.length || context.confluencePages.length
-                ? `Found ${context.jiraIssues.length} Jira ticket(s) and ${context.confluencePages.length} Confluence page(s).`
-                : 'No linked Jira ticket or related Confluence docs found.'
-            );
-            // Existing comments (human, or from a prior automated review) are
-            // fed into the prompt so the review doesn't repeat feedback
-            // that's already been raised — best-effort: a fetch failure here
-            // shouldn't block the review itself.
-            const existingComments = await withTimeout(getPullRequestComments(pr), COMMENTS_STEP_TIMEOUT_MS, 'Fetching existing PR comments').catch((err: any) => {
-              console.error('[pr-review] failed to fetch existing comments:', err.message);
-              log(`${err.message} — continuing without them.`);
-              return [];
-            });
-            if (existingComments.length) log(`Found ${existingComments.length} existing comment(s) on this PR — the review will avoid repeating them.`);
-            phase(
-              'context',
-              'done',
-              `${context.jiraIssues.length} Jira ticket(s), ${context.confluencePages.length} Confluence page(s), ${existingComments.length} existing comment(s).`
-            );
-
-            phase('worktree', 'running');
-            log(`Checking out ${pr.fromRefDisplayId} into an isolated worktree…`);
-            worktreePath = await createWorktreeForBranch(repoPath, pr.fromRefDisplayId!);
-            phase('worktree', 'done', `Checked out ${pr.fromRefDisplayId}.`);
-
-            phase('claude_review', 'running');
-            if (secondOpinionEnabled) phase('gemini_review', 'running');
-            const prompt = buildReviewPrompt(pr, context, existingComments);
-            log(
-              secondOpinionEnabled
-                ? 'Worktree ready — running the Claude Code review and an Antigravity second opinion in parallel (this can take a few minutes)…'
-                : 'Worktree ready — running the Claude Code review (this can take a few minutes)…'
-            );
-            const [result, geminiResult] = await Promise.all([
-              runClaudeCodeReview(prompt, worktreePath, { jsonSchema: REVIEW_JSON_SCHEMA, onProgress: claudeProgress, model: 'opus' }),
-              secondOpinionEnabled ? runSecondOpinionReview(prompt, worktreePath, secondOpinionProgress) : Promise.resolve(null),
-            ]);
-            if (secondOpinionEnabled) {
-              phase('gemini_review', geminiResult && !geminiResult.isError ? 'done' : 'failed', geminiResult && !geminiResult.isError ? geminiResult.resultText.slice(0, 300) : geminiResult?.resultText ?? null);
-            }
-            if (result.isError || !result.structuredOutput) {
-              const message = result.isError ? result.resultText || 'Claude Code returned an error.' : 'Claude Code did not return a structured result.';
-              log('Review failed.');
-              phase('claude_review', 'failed', message);
-              markPrReviewFailed(request.id, message);
-              this.broadcast({ type: 'pr-review-failed', taskId, requestId: request.id });
-            } else {
-              // Watermarked 'claude' up front so a solo (non-merged) review's
-              // findings still carry a source — mergeReviews below overwrites
-              // this with its own per-finding 'claude'/'gemini'/'both' tags
-              // when a merge actually happens.
-              let review: typeof result.structuredOutput = {
-                ...result.structuredOutput,
-                findings: result.structuredOutput.findings.map((f: any) => ({ ...f, source: 'claude' })),
-              };
-              phase('claude_review', 'done', review.summary);
-              if (geminiResult && !geminiResult.isError) {
-                phase('merge', 'running');
-                log('Merging the Claude Code review and the Antigravity second opinion…');
-                try {
-                  review = await mergeReviews(review, geminiResult.resultText);
-                  phase('merge', 'done', review.summary);
-                } catch (err: any) {
-                  console.error('[pr-review] failed to merge the second-opinion review, keeping Claude-only result:', err.message);
-                  log('Could not merge the second-opinion review — keeping the Claude Code review only.');
-                  phase('merge', 'failed', `Kept the Claude Code review only: ${err.message}`);
-                }
-              }
-              const jevRecommendation = await recommendWithJev(review);
-              if (jevRecommendation && jevRecommendation !== review.recommendation) {
-                log(`Jev recommends "${jevRecommendation}" (reviewer suggested "${review.recommendation}") — using Jev's pick.`);
-                review = { ...review, recommendation: jevRecommendation };
-              }
-              log('Review complete.');
-              markPrReviewReady(request.id, review);
-              this.broadcast({ type: 'pr-review-ready', taskId, requestId: request.id });
-            }
-          } catch (err: any) {
-            console.error('[pr-review] failed:', err.message);
-            log(`Failed: ${err.message}`);
-            for (const key of [...runningPhaseKeys]) phase(key, 'failed', err.message);
-            markPrReviewFailed(request.id, err.message);
-            this.broadcast({ type: 'pr-review-failed', taskId, requestId: request.id });
-          } finally {
-            this.activePrReviewIds.delete(request.id);
-            if (worktreePath) {
-              log('Cleaning up worktree…');
-              try {
-                await removeWorktree(worktreePath, repoPath);
-              } catch (err: any) {
-                console.error('[pr-review] failed to remove worktree:', err.message);
-              }
-            }
-          }
-        })();
       } catch (err: any) {
         console.error('[pr-review] failed to start:', err.message);
         res.status(500).json({ error: err.message });
@@ -1793,7 +1625,7 @@ export class InterfaceServer {
     app.get('/api/plate/:id/review', (req, res) => {
       const taskId = Number(req.params.id);
       const request = getLatestPrReviewRequestForTask(taskId);
-      res.json(request ?? null);
+      res.json(request ? prReviewRequestView(request) : null);
     });
 
     // Idempotent: re-POSTing an already-staged review returns the existing
@@ -2170,6 +2002,22 @@ export class InterfaceServer {
     this.wss = new WebSocketServer({ server: this.httpServer });
 
     setDraftBroadcast((event) => this.broadcast(event));
+    setRunBroadcast((event) => {
+      this.broadcast(event);
+      // index.html's PR review view still listens to the pre-engine
+      // pr-review-* messages; translate until it moves to the generic run view.
+      if (event.type === 'run-status' ? event.run.kind !== PR_REVIEW_RUN_KIND : event.kind !== PR_REVIEW_RUN_KIND) return;
+      if (event.type === 'run-status') {
+        const { run } = event;
+        const requestId = run.state?.requestId;
+        if (run.status === 'done') this.broadcast({ type: 'pr-review-ready', taskId: Number(run.subjectId), requestId });
+        else if (run.status === 'failed' || run.status === 'cancelled') this.broadcast({ type: 'pr-review-failed', taskId: Number(run.subjectId), requestId });
+      } else if (event.type === 'run-step') {
+        this.broadcast({ type: 'pr-review-phase', taskId: Number(event.subjectId), runId: event.runId, key: event.step.key, status: event.step.status, detail: event.step.detail });
+      } else {
+        this.broadcast({ type: 'pr-review-log', taskId: Number(event.subjectId), runId: event.runId, message: event.message });
+      }
+    });
     reconcileStuckDrafts().catch((err: any) => console.error('[drafts] failed to reconcile stuck drafts on startup:', err.message));
 
     this.wss.on('connection', (client) => {
@@ -2527,8 +2375,14 @@ export class InterfaceServer {
       process.exit(1);
     });
 
+    // Rows from before runs existed are failed directly; everything since is
+    // a run, and the engine fails those (running their cleanup) and restarts
+    // whatever was still queued.
     const interruptedReviews = failInterruptedPrReviews('Interrupted — Speako restarted while this review was running.');
     if (interruptedReviews) console.log(`[pr-review] marked ${interruptedReviews} interrupted review(s) as failed`);
+    reconcileRunsOnStartup()
+      .then((count) => count && console.log(`[runs] marked ${count} interrupted run(s) as failed`))
+      .catch((err: any) => console.error('[runs] failed to reconcile runs on startup:', err.message));
 
     this.httpServer.listen(config.httpPort, () => {
       console.log(`Live transcript view: http://localhost:${config.httpPort}`);
@@ -3032,8 +2886,8 @@ export class InterfaceServer {
 
   /**
    * The Jira-implement tab's own step list (replaces the old popup-driven
-   * "Dev cycle…" flow's per-draft-panel UX) — mirrors buildPrReviewPhases's
-   * "seed the whole checklist as pending up front" shape. Branch creation and
+   * "Dev cycle…" flow's per-draft-panel UX) — same "seed the whole checklist
+   * as pending up front" shape as an orchestration run's steps. Branch creation and
    * both worktrees are one phase-pair (no separate human approval between
    * them — see the plan's "collapse mechanical steps" decision), same for
    * the AI merge and the final human diff review.

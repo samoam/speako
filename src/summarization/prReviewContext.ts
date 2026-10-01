@@ -1,36 +1,10 @@
 import { BitbucketPullRequest, BitbucketPullRequestComment } from '../integrations/bitbucketServer';
 import { isJiraConfigured, extractIssueKeys, getJiraIssueDetail, JiraIssueDetail } from '../integrations/jiraMcp';
 import { isConfluenceConfigured, searchConfluence, getConfluencePage, ConfluencePage } from '../integrations/confluenceMcp';
-import { StructuredReview, PrReviewPhase, PrReviewRecommendation } from '../storage/prReviewRequestRepository';
+import { StructuredReview, PrReviewRecommendation } from '../storage/prReviewRequestRepository';
 import { generateJson } from '../ai/aiRouter';
 import { askJev, isJevConfigured, jevChoice } from '../integrations/typesafeJev';
 import { SPEAKO_COMMENT_MARKER } from './prReviewComments';
-
-/**
- * The review pipeline's step list, shown as a checklist in the UI
- * (index.html's pr-review-phases) alongside the raw progress log — decided
- * once, up front (server.ts calls this right after creating the request,
- * before the run starts), rather than steps appearing one at a time as
- * they're reached. Claude and the second opinion get their own steps (run in
- * parallel, but each with its own live status/detail — see server.ts's
- * claudeProgress/secondOpinionProgress) rather than one shared "review" step,
- * so a user can tell which of the two is still running and which already
- * finished; `gemini_review`/`merge` (kept as the internal phase key — see
- * antigravityCli.ts for why this is Antigravity now, not the `gemini` CLI)
- * only appear when a second opinion is actually going to run.
- */
-export function buildPrReviewPhases(secondOpinionEnabled: boolean): PrReviewPhase[] {
-  const phases: PrReviewPhase[] = [
-    { key: 'context', label: 'Gather PR & ticket context', status: 'pending', detail: null },
-    { key: 'worktree', label: 'Check out branch', status: 'pending', detail: null },
-    { key: 'claude_review', label: 'Run Claude Code review', status: 'pending', detail: null },
-  ];
-  if (secondOpinionEnabled) {
-    phases.push({ key: 'gemini_review', label: 'Run Antigravity second opinion', status: 'pending', detail: null });
-    phases.push({ key: 'merge', label: 'Merge Claude + second-opinion reviews', status: 'pending', detail: null });
-  }
-  return phases;
-}
 
 export interface PrReviewContext {
   jiraIssues: JiraIssueDetail[];

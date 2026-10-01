@@ -584,6 +584,48 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- One durable, multi-step background job (src/orchestration/engine.ts):
+  -- a PR review, a Jira-implement cycle, ... The step list is decided up
+  -- front and stored as a JSON snapshot (steps: [{key,label,status,detail}])
+  -- so the UI can render the whole checklist immediately; state is the
+  -- run's own JSON scratch data, persisted after every step so a run parked
+  -- at waiting_approval survives a restart. Kind-specific result records
+  -- (pr_review_requests, ...) point at their run via a run_id column.
+  -- status: 'queued'|'running'|'waiting_approval'|'done'|'failed'|'cancelled'.
+  CREATE TABLE IF NOT EXISTS orchestration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    steps TEXT NOT NULL,
+    state TEXT,
+    current_step TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_orchestration_runs_subject ON orchestration_runs(subject_kind, subject_id, id);
+  CREATE INDEX IF NOT EXISTS idx_orchestration_runs_status ON orchestration_runs(status);
+
+  -- Append-only transcript of a run: 'log' lines (the blow-by-blow progress
+  -- the UI streams) and 'step' transitions, in one ordered stream — a
+  -- separate table rather than a JSON column because a review's log is a
+  -- few hundred lines of agent tool calls, and read-modify-writing that on
+  -- every line was the cost pr_review_requests.log paid.
+  CREATE TABLE IF NOT EXISTS run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES orchestration_runs(id),
+    kind TEXT NOT NULL,
+    step_key TEXT,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, id);
+
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
@@ -681,6 +723,12 @@ if (!prReviewRequestColumns.some((c) => c.name === 'phases')) {
   // PrReviewPhase) shown alongside the fine-grained `log` above — same
   // guarded-ALTER reasoning as `log`.
   db.exec('ALTER TABLE pr_review_requests ADD COLUMN phases TEXT');
+}
+if (!prReviewRequestColumns.some((c) => c.name === 'run_id')) {
+  // Reviews now execute as an orchestration run (src/orchestration/); the
+  // run owns the live steps/log, and `log`/`phases` above are only read for
+  // rows that predate this column (run_id IS NULL).
+  db.exec('ALTER TABLE pr_review_requests ADD COLUMN run_id INTEGER REFERENCES orchestration_runs(id)');
 }
 
 // code_change_requests originally only supported the meeting-action-item

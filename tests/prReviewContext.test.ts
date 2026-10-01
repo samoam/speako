@@ -1,6 +1,6 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { gatherReviewContext, buildReviewPrompt, mergeReviews, buildPrReviewPhases } from '../src/summarization/prReviewContext';
+import { gatherReviewContext, buildReviewPrompt, mergeReviews } from '../src/summarization/prReviewContext';
 import * as jiraMcp from '../src/integrations/jiraMcp';
 import * as confluenceMcp from '../src/integrations/confluenceMcp';
 import * as geminiClientModule from '../src/gemini/geminiClient';
@@ -181,20 +181,6 @@ test('mergeReviews: falls back to the Claude review\'s own fields for anything m
 
   const result = await mergeReviews(claudeReview, 'Reviewer B text.');
   assert.deepEqual(result, claudeReview);
-});
-
-test('buildPrReviewPhases: a Claude-only run has just a claude_review step, no gemini/merge steps', () => {
-  const phases = buildPrReviewPhases(false);
-  assert.deepEqual(phases.map((p) => p.key), ['context', 'worktree', 'claude_review']);
-  assert.ok(phases.every((p) => p.status === 'pending' && p.detail === null));
-  assert.match(phases.find((p) => p.key === 'claude_review')!.label, /^Run Claude Code review$/);
-});
-
-test('buildPrReviewPhases: with a second opinion enabled, claude and the second opinion are separate steps, plus a merge step', () => {
-  const phases = buildPrReviewPhases(true);
-  assert.deepEqual(phases.map((p) => p.key), ['context', 'worktree', 'claude_review', 'gemini_review', 'merge']);
-  assert.match(phases.find((p) => p.key === 'claude_review')!.label, /^Run Claude Code review$/);
-  assert.match(phases.find((p) => p.key === 'gemini_review')!.label, /^Run Antigravity second opinion$/);
 });
 
 test('gatherReviewContext: finds the Jira key in the branch name and fetches it over Jira REST', async (t) => {
