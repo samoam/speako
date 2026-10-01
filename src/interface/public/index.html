@@ -250,6 +250,8 @@
     .plate-task-title a { color: var(--text); }
     .plate-task-meta { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
     .task-time { font-variant-numeric: tabular-nums; cursor: default; }
+    .plate-task-snippet { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; line-height: 1.3; overflow-wrap: anywhere; }
+    .plate-task-snippet strong { color: var(--text); font-weight: 600; }
     .plate-task-priority { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; align-self: flex-start; }
     .plate-task-priority-high { background: rgba(220,80,80,0.18); color: #e08a8a; }
     .plate-task-priority-med { background: rgba(220,180,60,0.18); color: #d8c07a; }
@@ -4293,6 +4295,28 @@
       return `<span class="task-time" title="${escapeHtml(`${label} ${date.toLocaleString()}`)}">${escapeHtml(relativeTimeText(date))}</span>`;
     }
 
+    /**
+     * Comment cards (Jira/Bitbucket refs ending ":comment:<id>") share their
+     * parent's title, so several comments on one PR — e.g. an automated
+     * reviewer posting 4 findings in one batch, all stamped the same second —
+     * looked like the same card repeated. Shows who wrote it and the
+     * comment's first line (from the "Author: text" description taskSync
+     * stores), markdown markers stripped.
+     */
+    function commentSnippetHtml(task) {
+      if (!String(task.externalRef).includes(':comment:') || !task.description) return '';
+      const separator = task.description.indexOf(': ');
+      const author = separator > 0 ? task.description.slice(0, separator) : '';
+      const body = (separator > 0 ? task.description.slice(separator + 2) : task.description)
+        .replace(/```[\s\S]*?(```|$)/g, ' ')
+        .replace(/[*_`#>]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const shortAuthor = author.split(' - ')[0].trim();
+      const line = body.length > 110 ? `${body.slice(0, 110)}…` : body;
+      return `<div class="plate-task-snippet">${shortAuthor ? `<strong>${escapeHtml(shortAuthor)}:</strong> ` : ''}${escapeHtml(line)}</div>`;
+    }
+
     function plateTaskCompactHtml(task, variant) {
       variant = variant || 'open';
       const REVIEW_STATE_LABELS = {
@@ -4349,6 +4373,7 @@
           </div>
           <div class="plate-task-body">
             <div class="plate-task-title">${escapeHtml(task.title)}</div>
+            ${commentSnippetHtml(task)}
             ${meta.length ? `<div class="plate-task-meta">${meta.join(' · ')}</div>` : ''}
           </div>
           ${statusSelectHtml}
@@ -4811,13 +4836,29 @@
       return buckets;
     }
 
+    /**
+     * Bitbucket tab order, per the user: Reworked PRs first (the author
+     * pushed after you asked for changes — they're waiting on your re-review),
+     * then New, then Request changes (waiting on the author), each oldest
+     * first by when the PR was opened. Comment cards (replies/mentions —
+     * externalRef "...:comment:<id>") aren't PRs and go last, newest first.
+     */
+    function sortBitbucketTasks(tasks) {
+      const PR_STATE_RANK = { REWORKED: 0, NEW: 1, NEEDS_WORK: 2 };
+      const isComment = (t) => String(t.externalRef).includes(':comment:');
+      const rank = (t) => (isComment(t) ? 3 : PR_STATE_RANK[t.myReviewStatus] ?? PR_STATE_RANK.NEW);
+      const time = (t) => (parseServerTime(t.occurredAt) || parseServerTime(t.createdAt))?.getTime() ?? 0;
+      return [...tasks].sort((a, b) => rank(a) - rank(b) || (isComment(a) ? time(b) - time(a) : time(a) - time(b)));
+    }
+
     function renderDashboardBoard() {
       const isMeetings = currentDashboardTab === 'meetings';
       const isToday = currentDashboardTab === 'today';
       const isDismissed = currentDashboardTab === 'dismissed';
       const columns = isMeetings ? MEETING_BOARD_COLUMNS : TASK_BOARD_COLUMNS;
       const buckets = isMeetings ? bucketMeetingsByColumn() : null;
-      const filteredTasks = isMeetings || isDismissed ? null : isToday ? dashboardTasks : dashboardTasks.filter((t) => t.source === currentDashboardTab);
+      const sourceTasks = isMeetings || isDismissed || isToday ? null : dashboardTasks.filter((t) => t.source === currentDashboardTab);
+      const filteredTasks = isMeetings || isDismissed ? null : isToday ? dashboardTasks : currentDashboardTab === 'bitbucket_pr' ? sortBitbucketTasks(sourceTasks) : sourceTasks;
 
       const isEmpty = isMeetings
         ? columns.every((c) => buckets[c.key].length === 0)
