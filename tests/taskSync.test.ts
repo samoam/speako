@@ -427,3 +427,12 @@ test('syncTasks: replies to my comments and comments on my PRs become bitbucket_
     spies.forEach((s) => s.mock.restore());
   }
 });
+
+test('toIsoTime: reads Jira\'s "… Eastern Daylight Time" format as local time, and passes ISO through', () => {
+  const { toIsoTime } = require('../src/orchestrator/taskSync');
+  // Same instant either way: the zone name is dropped and the rest is local time.
+  assert.equal(toIsoTime('2026-10-01 11:46:14 Eastern Daylight Time'), new Date('2026-10-01T11:46:14').toISOString());
+  assert.equal(toIsoTime('2026-10-01T15:46:14.000Z'), '2026-10-01T15:46:14.000Z');
+  assert.equal(toIsoTime('not a date'), null);
+  assert.equal(toIsoTime(null), null);
+});

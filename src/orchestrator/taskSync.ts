@@ -53,6 +53,24 @@ function withVipBump(importance: number, name: string | null | undefined): numbe
   return isVip(name) ? Math.min(5, importance + 1) : importance;
 }
 
+/**
+ * ISO string for a source timestamp, or null. Confirmed live (2026-10-01)
+ * that Jira's MCP server returns times like "2026-10-01 11:46:14 Eastern
+ * Daylight Time", which Date can't parse (Invalid Date) — so Jira cards fell
+ * back to "Added" and comment ages came out NaN. The zone name is dropped and
+ * the rest read as local time: the Jira server and this machine share a zone
+ * (America/Toronto), confirmed against the same issue's REST timestamp.
+ */
+export function toIsoTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
+  if (!match) return null;
+  const local = new Date(`${match[1]}T${match[2]}`);
+  return Number.isNaN(local.getTime()) ? null : local.toISOString();
+}
+
 export function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
   return {
     source: 'jira',
@@ -63,7 +81,7 @@ export function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
     dueDate: issue.dueDate,
     importanceScore: jiraImportance(issue.priorityName),
     urgencyScore: urgencyFromDueDate(issue.dueDate),
-    occurredAt: issue.updated ?? null,
+    occurredAt: toIsoTime(issue.updated),
   };
 }
 
@@ -170,9 +188,9 @@ async function syncJira(): Promise<void> {
         url: mention.url,
         dueDate: null,
         importanceScore: withVipBump(jiraImportance(mention.priorityName), mention.authorName),
-        urgencyScore: withUrgencySignal(jiraCommentUrgency(mention.createdDate), urgencySignal),
+        urgencyScore: withUrgencySignal(jiraCommentUrgency(toIsoTime(mention.createdDate) ?? mention.createdDate), urgencySignal),
         urgencySignal,
-        occurredAt: mention.createdDate,
+        occurredAt: toIsoTime(mention.createdDate),
       });
     }
   }
