@@ -33,6 +33,8 @@ function existingComment(overrides: Partial<BitbucketPullRequestComment> = {}): 
     repoSlug: 'repo',
     commentId: 1,
     authorName: 'Bob',
+    authorUsername: 'bob',
+    rootCommentId: 1,
     text: 'Please add a test for the miss case.',
     createdDate: '2026-01-01T00:00:00.000Z',
     anchor: null,

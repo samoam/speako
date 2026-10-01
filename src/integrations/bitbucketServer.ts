@@ -157,6 +157,10 @@ export interface BitbucketPullRequestComment {
   repoSlug: string;
   commentId: number;
   authorName: string;
+  /** Bitbucket username (author.name, e.g. "madadi") — compared against config.bitbucketServerUsername; display names aren't unique or stable. */
+  authorUsername: string;
+  /** The thread's top-level comment id (equal to commentId for a top-level comment) — replies are nested under it in Bitbucket's response, and flattening would otherwise lose which thread a reply belongs to. */
+  rootCommentId: number;
   text: string;
   createdDate: string;
   /** Set only for inline/file comments — Bitbucket's activity feed carries this as `commentAnchor` on the activity, not on the comment itself. Null for general PR-level comments. Used to overlay existing human comments onto the diff viewer. */
@@ -174,7 +178,12 @@ function mapCommentAnchor(raw: any): BitbucketCommentAnchorInfo | null {
 }
 
 /** Flattens one comment plus its threaded replies (Bitbucket nests replies under `.comments[]`) — replies inherit the parent's anchor since Bitbucket doesn't repeat it per-reply. */
-function flattenComment(comment: any, pr: Pick<BitbucketPullRequest, 'id' | 'title' | 'projectKey' | 'repoSlug'>, anchor: BitbucketCommentAnchorInfo | null): BitbucketPullRequestComment[] {
+function flattenComment(
+  comment: any,
+  pr: Pick<BitbucketPullRequest, 'id' | 'title' | 'projectKey' | 'repoSlug'>,
+  anchor: BitbucketCommentAnchorInfo | null,
+  rootCommentId: number = comment?.id
+): BitbucketPullRequestComment[] {
   const out: BitbucketPullRequestComment[] = [];
   if (comment?.text) {
     out.push({
@@ -184,13 +193,15 @@ function flattenComment(comment: any, pr: Pick<BitbucketPullRequest, 'id' | 'tit
       repoSlug: pr.repoSlug,
       commentId: comment.id,
       authorName: comment.author?.displayName ?? comment.author?.name ?? 'unknown',
+      authorUsername: comment.author?.name ?? comment.author?.slug ?? '',
+      rootCommentId,
       text: comment.text,
       createdDate: new Date(comment.createdDate).toISOString(),
       anchor,
     });
   }
   for (const reply of comment?.comments ?? []) {
-    out.push(...flattenComment(reply, pr, anchor));
+    out.push(...flattenComment(reply, pr, anchor, rootCommentId));
   }
   return out;
 }

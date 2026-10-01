@@ -15,13 +15,42 @@ function mentionsMe(comment: BitbucketPullRequestComment): boolean {
   return comment.text.toLowerCase().includes(needle);
 }
 
+function byMe(comment: BitbucketPullRequestComment): boolean {
+  return comment.authorUsername.toLowerCase() === config.bitbucketServerUsername.toLowerCase();
+}
+
+/**
+ * Someone else's comment in a thread I'd already commented in, posted after
+ * my first comment there — e.g. an author answering a review comment with
+ * "Fixed in 5e51db85db". Replies don't @-mention you, so mention matching
+ * alone missed every one of them (confirmed live: 3 such replies on a single
+ * PR, none surfaced). Thread = rootCommentId, which flattenComment carries
+ * since Bitbucket nests replies under their root.
+ */
+function findRepliesToMe(comments: BitbucketPullRequestComment[]): BitbucketPullRequestComment[] {
+  const myFirstCommentByThread = new Map<string, number>();
+  for (const c of comments) {
+    if (!byMe(c)) continue;
+    const key = `${c.projectKey}/${c.repoSlug}#${c.prId}:${c.rootCommentId}`;
+    const at = new Date(c.createdDate).getTime();
+    myFirstCommentByThread.set(key, Math.min(myFirstCommentByThread.get(key) ?? at, at));
+  }
+  return comments.filter((c) => {
+    if (byMe(c)) return false;
+    const myFirst = myFirstCommentByThread.get(`${c.projectKey}/${c.repoSlug}#${c.prId}:${c.rootCommentId}`);
+    return myFirst !== undefined && new Date(c.createdDate).getTime() > myFirst;
+  });
+}
+
 export interface PullRequestActivity {
   /** Open PRs where I'm a requested reviewer, with my current approval status. */
   reviewRequests: import('./bitbucketServer').BitbucketPullRequest[];
-  /** Comments on PRs I authored (excluding any that also match mentionsMe, to avoid duplicating them in both lists). */
+  /** Others' comments on PRs I authored (excluding any already in mentionsOfMe/repliesToMe, so no comment lands in two lists). */
   commentsOnMyPRs: BitbucketPullRequestComment[];
   /** Comments mentioning me by @username, across PRs I authored or am reviewing. */
   mentionsOfMe: BitbucketPullRequestComment[];
+  /** Others' replies in threads I'd commented in (see findRepliesToMe), excluding any already in mentionsOfMe. */
+  repliesToMe: BitbucketPullRequestComment[];
 }
 
 /** One combined lookup — reviewer status + PR comments/mentions — for the voice tool and prep workflows to both consume. Ignores its query/limit params (matches webSearch's precedent in toolCatalog.ts): this is a fixed "what's my current PR activity" view, not a keyword search. */
@@ -43,10 +72,12 @@ export async function getPullRequestActivity(): Promise<PullRequestActivity> {
   const allComments = commentLists.flat();
 
   const mentionsOfMe = allComments.filter(mentionsMe);
+  const repliesToMe = findRepliesToMe(allComments).filter((c) => !mentionsMe(c));
+  const replyIds = new Set(repliesToMe.map((c) => c.commentId));
   const myPrIds = new Set(myPRs.map((pr) => pr.id));
-  const commentsOnMyPRs = allComments.filter((c) => myPrIds.has(c.prId) && !mentionsMe(c));
+  const commentsOnMyPRs = allComments.filter((c) => myPrIds.has(c.prId) && !byMe(c) && !mentionsMe(c) && !replyIds.has(c.commentId));
 
-  return { reviewRequests, commentsOnMyPRs, mentionsOfMe };
+  return { reviewRequests, commentsOnMyPRs, mentionsOfMe, repliesToMe };
 }
 
 function formatComment(c: BitbucketPullRequestComment): string {
@@ -68,6 +99,9 @@ export async function formatPullRequestActivity(): Promise<string> {
   }
   if (activity.mentionsOfMe.length) {
     parts.push('Comments mentioning you:\n' + activity.mentionsOfMe.map(formatComment).join('\n'));
+  }
+  if (activity.repliesToMe.length) {
+    parts.push('Replies to your comments:\n' + activity.repliesToMe.map(formatComment).join('\n'));
   }
   if (activity.commentsOnMyPRs.length) {
     parts.push('Other comments on your pull requests:\n' + activity.commentsOnMyPRs.map(formatComment).join('\n'));

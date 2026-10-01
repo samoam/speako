@@ -11,7 +11,7 @@ import { getOpenTasks } from '../src/storage/taskRepository';
 import { db } from '../src/storage/db';
 
 function emptyActivity() {
-  return { reviewRequests: [], commentsOnMyPRs: [], mentionsOfMe: [] };
+  return { reviewRequests: [], commentsOnMyPRs: [], mentionsOfMe: [], repliesToMe: [] };
 }
 
 function mockAllUnconfigured() {
@@ -63,6 +63,7 @@ test('syncTasks: Bitbucket review requests and mentions both become bitbucket_pr
         { id: 42, title: 'Add caching', state: 'OPEN', projectKey: 'PROJ', repoSlug: 'repo', authorName: 'alice', link: 'https://bitbucket.example/PROJ/repo/pr/42', myApprovalStatus: 'UNAPPROVED', createdDate: new Date().toISOString() },
       ],
       commentsOnMyPRs: [],
+      repliesToMe: [],
       mentionsOfMe: [
         { prId: 7, prTitle: 'Refactor auth', projectKey: 'PROJ', repoSlug: 'repo', authorName: 'bob', text: '@me can you check this?', createdDate: '2026-01-01T00:00:00.000Z' },
       ],
@@ -174,6 +175,7 @@ test('syncTasks: a Bitbucket review request already approved by me is skipped, a
         { id: 43, title: 'Already approved PR', state: 'OPEN', projectKey: 'PROJ', repoSlug: 'repo', authorName: 'alice', link: 'https://bitbucket.example/PROJ/repo/pr/43', myApprovalStatus: 'APPROVED', createdDate: new Date().toISOString() },
       ],
       commentsOnMyPRs: [],
+      repliesToMe: [],
       mentionsOfMe: [],
     })),
     mock.method(summaryRepository, 'getAllOpenActionItems', () => []),

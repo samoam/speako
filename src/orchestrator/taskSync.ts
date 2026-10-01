@@ -224,14 +224,22 @@ async function syncBitbucket(): Promise<void> {
     });
   }
 
-  for (const comment of activity.mentionsOfMe) {
+  // Three disjoint lists (bitbucketReviews.ts keeps each comment in one), all
+  // with the same "<pr ref>:comment:<id>" externalRef shape that
+  // bitbucketPrCommentReplyDraft.ts drafts replies for.
+  const commentTasks = [
+    ...activity.mentionsOfMe.map((comment) => ({ comment, title: `Mentioned in: ${comment.prTitle}` })),
+    ...activity.repliesToMe.map((comment) => ({ comment, title: `Reply on: ${comment.prTitle}` })),
+    ...activity.commentsOnMyPRs.map((comment) => ({ comment, title: `Comment on your PR: ${comment.prTitle}` })),
+  ];
+  for (const { comment, title } of commentTasks) {
     const ref = `${comment.projectKey}/${comment.repoSlug}#${comment.prId}:comment:${comment.commentId}`;
     refs.push(ref);
     const urgencySignal = await commentUrgencySignal('bitbucket_pr', ref, comment.text);
     upsertTask({
       source: 'bitbucket_pr',
       externalRef: ref,
-      title: `Mentioned in: ${comment.prTitle}`,
+      title,
       description: `${comment.authorName}: ${comment.text.slice(0, 300)}`,
       url: null,
       dueDate: null,
