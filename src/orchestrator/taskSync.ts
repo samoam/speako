@@ -294,7 +294,8 @@ interface TriagedTeamsMessageRow {
   participants: string | null;
 }
 
-async function syncTeamsMessages(): Promise<void> {
+/** Exported so a running Teams triage can surface each finished batch on the board right away (server.ts's runTeamsSync) — local DB only, unlike syncTasks' remote sources. */
+export async function syncTeamsMessages(): Promise<void> {
   const rows = db
     .prepare(
       `SELECT t.message_id AS messageId, em.title AS chatTitle, em.occurred_at AS occurredAt,

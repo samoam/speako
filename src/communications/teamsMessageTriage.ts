@@ -34,15 +34,23 @@ export function detectMyTeamsDisplayName(): string | null {
   return best;
 }
 
-/** Teams messages not yet triaged, excluding the user's own outgoing messages (nothing to triage there). */
-export function getUntriagedTeamsMessages(myName: string): ExternalMessage[] {
+/**
+ * Teams messages not yet triaged, excluding the user's own outgoing messages
+ * (nothing to triage there), newest first. `sinceIso` skips anything older —
+ * the sync passes its own lookback window, so a backlog of stale messages
+ * (88 never-triaged August messages from the old scraper, seen live) doesn't
+ * sit in front of today's.
+ */
+export function getUntriagedTeamsMessages(myName: string, sinceIso?: string): ExternalMessage[] {
   const rows = db
     .prepare(
       `SELECT em.* FROM external_messages em
        LEFT JOIN teams_message_triage t ON t.message_id = em.id
-       WHERE em.source = 'teams' AND t.message_id IS NULL`
+       WHERE em.source = 'teams' AND t.message_id IS NULL
+         AND (@since IS NULL OR em.occurred_at >= @since)
+       ORDER BY em.occurred_at DESC`
     )
-    .all() as any[];
+    .all({ since: sinceIso ?? null }) as any[];
   return rows
     .map((r) => ({
       id: r.id,
@@ -164,26 +172,48 @@ const insertTriageStmt = db.prepare(`
  * background poll timer. One message failing classification never
  * blocks the rest (per-item try/catch inside classifyMessage() itself).
  */
-export async function runTeamsMessageTriage(): Promise<{ triaged: number }> {
+const TRIAGE_CONCURRENCY = 4;
+const TRIAGE_BATCH_SIZE = 8;
+
+/**
+ * Each message's prose step is a ~5-7s Claude CLI call (src/ai/claudeText.ts),
+ * so a one-at-a-time loop over a fresh sync (74 messages, seen live) took
+ * many minutes before any task appeared. Runs TRIAGE_CONCURRENCY at a time,
+ * and calls `onBatch` after every TRIAGE_BATCH_SIZE so the caller can put
+ * finished messages on the board while the rest are still being triaged.
+ */
+export async function runTeamsMessageTriage(options: { sinceIso?: string; onBatch?: (triagedSoFar: number) => Promise<void> } = {}): Promise<{ triaged: number }> {
   const myName = detectMyTeamsDisplayName();
   if (!myName) return { triaged: 0 };
 
-  const messages = getUntriagedTeamsMessages(myName);
+  const queue = getUntriagedTeamsMessages(myName, options.sinceIso);
   let triaged = 0;
-  for (const message of messages) {
-    try {
-      const result = await classifyMessage(message, myName);
-      insertTriageStmt.run({
-        messageId: message.id,
-        directedAtMe: result.directedAtMe ? 1 : 0,
-        summary: result.summary,
-        draftReply: result.draftReply,
-        urgencySignal: result.urgencySignal,
-      });
-      triaged++;
-    } catch (err: any) {
-      console.error('[teams-triage] failed to triage a message:', err.message);
+  let sinceLastBatch = 0;
+  let batchChain = Promise.resolve();
+  const worker = async () => {
+    for (let message = queue.shift(); message; message = queue.shift()) {
+      try {
+        const result = await classifyMessage(message, myName);
+        insertTriageStmt.run({
+          messageId: message.id,
+          directedAtMe: result.directedAtMe ? 1 : 0,
+          summary: result.summary,
+          draftReply: result.draftReply,
+          urgencySignal: result.urgencySignal,
+        });
+        triaged++;
+        if (options.onBatch && ++sinceLastBatch >= TRIAGE_BATCH_SIZE) {
+          sinceLastBatch = 0;
+          const soFar = triaged;
+          // Chained so batch callbacks never overlap each other.
+          batchChain = batchChain.then(() => options.onBatch!(soFar)).catch((err) => console.error('[teams-triage] batch callback failed:', err.message));
+        }
+      } catch (err: any) {
+        console.error('[teams-triage] failed to triage a message:', err.message);
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: TRIAGE_CONCURRENCY }, worker));
+  await batchChain;
   return { triaged };
 }

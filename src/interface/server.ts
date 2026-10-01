@@ -109,7 +109,7 @@ import { runEmailTriage } from '../communications/emailTriage';
 import { isWithinBusinessHours } from '../util/businessHours';
 import { getCurrentWeekEvents, importUpcomingEventsThisWeek } from '../calendar/calendarImport';
 import { getSessionIdByCalendarEventId } from '../storage/segmentRepository';
-import { syncTasks } from '../orchestrator/taskSync';
+import { syncTasks, syncTeamsMessages as syncTeamsTasks } from '../orchestrator/taskSync';
 import { addManualTask, ManualTaskNotFoundError, ManualTaskRefError } from '../orchestrator/manualTask';
 import {
   getOpenTasks,
@@ -2807,7 +2807,16 @@ export class InterfaceServer {
     syncTeamsMessages()
       .then(async (result) => {
         console.log(`[teams-sync] synced ${result.messageCount} message(s)`);
-        const triageResult = await runTeamsMessageTriage();
+        const sinceIso = new Date(Date.now() - config.teamsSyncLookbackHours * 60 * 60_000).toISOString();
+        const triageResult = await runTeamsMessageTriage({
+          sinceIso,
+          // Put each finished batch on the board now rather than after the whole run.
+          onBatch: async (triagedSoFar) => {
+            await syncTeamsTasks();
+            this.broadcast({ type: 'plate-updated' });
+            console.log(`[teams-sync] ${triagedSoFar} message(s) triaged so far`);
+          },
+        });
         console.log(`[teams-sync] triaged ${triageResult.triaged} message(s)`);
         await syncTasks();
         this.teamsSyncLastSyncAt = new Date().toISOString();

@@ -206,6 +206,8 @@ export interface PaginateConnectorToolOptions {
   args: Record<string, unknown>;
   /** 'offset' (default) reads args.offset back from moreResults/nextOffset — outlook_email_search, chat_message_search, outlook_calendar_search. 'cursor' reads args.cursor back from moreResults/nextCursor — teams_list_chats. */
   paging?: 'offset' | 'cursor';
+  /** Stop after this many pages even if the connector reports more. */
+  maxPages?: number;
 }
 
 /**
@@ -222,7 +224,7 @@ export async function paginateConnectorTool<T = any>(options: PaginateConnectorT
   let offset = 0;
   let cursor: string | undefined;
 
-  for (;;) {
+  for (let page = 1; ; page++) {
     const args = paging === 'cursor' ? { ...options.args, ...(cursor ? { cursor } : {}) } : { ...options.args, offset };
     const blocks = await callMicrosoft365Tool<any>({ tool: options.tool, args });
     for (const block of blocks) {
@@ -232,6 +234,7 @@ export async function paginateConnectorTool<T = any>(options: PaginateConnectorT
       | { moreResults?: boolean; nextOffset?: number; nextCursor?: string }
       | undefined;
     if (!pagination?.moreResults) break;
+    if (options.maxPages && page >= options.maxPages) break;
     if (paging === 'cursor') {
       if (!pagination.nextCursor) break;
       cursor = pagination.nextCursor;

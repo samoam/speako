@@ -70,3 +70,35 @@ test('syncTeamsMessages: upserts every fetched message using chat titles from te
     spy.mock.restore();
   }
 });
+
+test('syncTeamsMessages: a failing chat-title lookup no longer discards the fetched messages', async () => {
+  // Confirmed live: teams_list_chats page 2 (with the connector's own nextCursor) fails with a Graph 400 —
+  // that used to reject the whole sync, so no Teams message was ever stored.
+  const spy = mock.method(claudeConnectorCliModule, 'paginateConnectorTool', async (opts: any) => {
+    if (opts.tool === 'chat_message_search') {
+      return [{ id: 'teams-fallback-1', chatId: 'chat-unknown', createdDateTime: '2026-09-30T20:00:00Z', summary: 'can you check this?', from: { displayName: 'Stéphane Dion' } }];
+    }
+    throw new Error('Graph API Error: 400 BadRequest');
+  });
+  try {
+    const result = await syncTeamsMessages();
+    assert.equal(result.messageCount, 1);
+  } finally {
+    spy.mock.restore();
+  }
+});
+
+test('syncTeamsMessages: chat titles are read from the first page only', async () => {
+  const calls: any[] = [];
+  const spy = mock.method(claudeConnectorCliModule, 'paginateConnectorTool', async (opts: any) => {
+    calls.push(opts);
+    return opts.tool === 'teams_list_chats' ? [{ id: 'chat-1', topic: 'Project Sync' }] : [];
+  });
+  try {
+    await syncTeamsMessages();
+    const titles = calls.find((c) => c.tool === 'teams_list_chats');
+    assert.equal(titles.maxPages, 1);
+  } finally {
+    spy.mock.restore();
+  }
+});

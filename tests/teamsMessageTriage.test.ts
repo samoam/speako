@@ -70,3 +70,19 @@ test('classifyMessage: falls back to a truncated summary and no draft when Gemin
   assert.equal(result.summary, message.bodyText.slice(0, 200));
   assert.equal(result.urgencySignal, 'none');
 });
+
+test('getUntriagedTeamsMessages: with a since cutoff, skips older backlog and returns newest first', () => {
+  cleanup();
+  try {
+    const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString();
+    insertMessage.run({ id: 'triage-test:old', title: 'Stand up', participants: JSON.stringify(['Alice']), occurredAt: at(24 * 47), bodyText: 'from August' });
+    insertMessage.run({ id: 'triage-test:recent', title: 'Stand up', participants: JSON.stringify(['Bob']), occurredAt: at(2), bodyText: 'two hours ago' });
+    insertMessage.run({ id: 'triage-test:newest', title: 'Stand up', participants: JSON.stringify(['Carol']), occurredAt: at(0.1), bodyText: 'just now' });
+    const ids = getUntriagedTeamsMessages('Me', at(48))
+      .map((m) => m.id)
+      .filter((id) => id.startsWith('triage-test:'));
+    assert.deepEqual(ids, ['triage-test:newest', 'triage-test:recent']);
+  } finally {
+    cleanup();
+  }
+});
