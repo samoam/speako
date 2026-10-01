@@ -1,5 +1,5 @@
 import { db } from './db';
-import { stampLogLine } from './logLine';
+import { RunStep } from './runRepository';
 import type { StructuredDevPlan } from '../dev/devPlan';
 
 /** Semantic Jira lifecycle state this cycle is currently in — see src/dev/lifecycle.ts for the fixed transition graph this must stay within. */
@@ -7,15 +7,8 @@ export type LifecycleState = 'Evaluation' | 'On Hold' | 'Dev Ready' | 'In Progre
 export type BranchType = 'feature' | 'bugfix' | 'hotfix' | 'chore';
 export type DevCycleStatus = 'active' | 'done' | 'abandoned';
 
-export type DevCyclePhaseStatus = 'pending' | 'running' | 'done' | 'failed';
-
-/** The Jira-implement tab's top-level checklist (src/interface/server.ts's buildJiraImplementPhases) — same shape as PrReviewPhase, one row per pipeline step: analyze, plan, branch_and_worktrees, implement, merge_and_review. */
-export interface DevCyclePhase {
-  key: string;
-  label: string;
-  status: DevCyclePhaseStatus;
-  detail: string | null;
-}
+/** The Jira-implement tab's checklist — a RunStep of the cycle's orchestration run (src/orchestration/kinds/devCycleRun.ts). */
+export type DevCyclePhase = RunStep;
 
 /** Which pipeline step is currently unlocked — the server-side gate every /api/jira-implement/:id/* route checks before acting, not just a UI cue. Null on cycles created before this pipeline existed (see openJiraImplementTab's legacy fallback). */
 export type DevCycleStep = 'analyze' | 'plan' | 'branch_and_worktrees' | 'implement' | 'merge_and_review' | 'done';
@@ -46,6 +39,7 @@ export interface DevCycle {
   prUrl: string | null;
   jenkinsJobPath: string | null;
   status: DevCycleStatus;
+  /** Only populated from these columns for cycles that predate orchestration runs; newer cycles get phases/log from their run (devCycleRun.ts's devCycleView). */
   phases: DevCyclePhase[];
   log: string[];
   currentStep: DevCycleStep | null;
@@ -177,26 +171,7 @@ export function closeDevCycle(id: number, status: Extract<DevCycleStatus, 'done'
   db.prepare("UPDATE dev_cycles SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, id);
 }
 
-/** Seeds the full step list as 'pending' right after the cycle is created — mirrors initPrReviewPhases (prReviewRequestRepository.ts) so the Jira-implement tab can render its whole planned pipeline immediately. */
-export function initDevCyclePhases(id: number, phases: DevCyclePhase[]): void {
-  db.prepare("UPDATE dev_cycles SET phases = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(phases), id);
-}
-
-/** Read-modify-write on the small JSON array — same convention as setPrReviewPhase, silently a no-op if the key isn't found. */
-export function setDevCyclePhase(id: number, key: string, status: DevCyclePhaseStatus, detail: string | null = null): void {
-  const existing = getDevCycle(id)?.phases ?? [];
-  const updated = existing.map((p) => (p.key === key ? { ...p, status, detail } : p));
-  db.prepare("UPDATE dev_cycles SET phases = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(updated), id);
-}
-
-/** Appends one progress line — same convention as appendPrReviewLog. */
-export function appendDevCycleLog(id: number, message: string): void {
-  const existing = getDevCycle(id)?.log ?? [];
-  const updated = [...existing, stampLogLine(message)];
-  db.prepare("UPDATE dev_cycles SET log = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(updated), id);
-}
-
-/** The server-side gate every /api/jira-implement/:id/* route checks before acting (see registerJiraImplementRoutes) — only ever set from inside the pipeline's own orchestration, never from a client-supplied value. */
+/** Which stage of the cycle is unlocked — the gate the plan/merge refine+approve routes and the UI's editable states check. Advanced by the run's steps (devCycleRun.ts) and by merge/approve ('done'), never from a client-supplied value. */
 export function setDevCycleCurrentStep(id: number, step: DevCycleStep): void {
   db.prepare("UPDATE dev_cycles SET current_step = ?, updated_at = datetime('now') WHERE id = ?").run(step, id);
 }

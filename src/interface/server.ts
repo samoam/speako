@@ -135,14 +135,11 @@ import {
   pushRepoChanges,
   discardCodeChangeTask,
   removeWorktree,
-  runClaudeCodeReview,
-  getBackgroundTaskLogs,
 } from '../integrations/claudeCodeCli';
 import {
   createCodeChangeRequest,
   getCodeChangeRequest,
   getLatestCodeChangeRequestForActionItem,
-  markCodeChangeReady,
   markCodeChangeFailed,
   markCodeChangeApplied,
   markCodeChangePushed,
@@ -151,27 +148,18 @@ import {
 import { pollCodeChangeRequest } from '../integrations/codeChangePoller';
 import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
 import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequestComment, PrRef } from '../integrations/bitbucketServer';
-import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, ...) with src/orchestration/engine.ts
+import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, dev_cycle) with src/orchestration/engine.ts
 import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
 import { startPrReviewRun, prReviewRequestView, PR_REVIEW_RUN_KIND } from '../orchestration/kinds/prReviewRun';
+import { startDevCycleRun, retryDevCycleRun, approveDevCyclePlan, isDevCycleAwaitingPlanApproval, logDevCycle, devCycleView, DEV_CYCLE_RUN_KIND } from '../orchestration/kinds/devCycleRun';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
 import { getJenkinsBuildRequestsForCycle } from '../storage/jenkinsBuildRequestRepository';
-import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, disableGitPush, getWorktreeDiffSinceBase } from '../integrations/antigravityCli';
-import { gatherJiraImplementContext } from '../dev/jiraImplementContext';
-import { buildPlanPrompt, mergeDevPlans, DEV_PLAN_JSON_SCHEMA, StructuredDevPlan } from '../dev/devPlan';
-import { mergeImplementations, refineMergedDiff } from '../dev/mergeImplementations';
-import { buildBranchName } from '../dev/branchNaming';
-import { createTicketBranchWorktree, addWorktreeForExistingBranch, branchExistsOnRemote } from '../integrations/gitBranches';
-import { lifecycleTransitionSubjectId } from '../drafts/kinds/jiraTransitionDraft';
-import {
-  createDevCycleImplementation,
-  getDevCycleImplementation,
-  getDevCycleImplementationsForCycle,
-  markDevCycleImplementationReady,
-  markDevCycleImplementationFailed,
-} from '../storage/devCycleImplementationRepository';
+import { isAntigravityCliConfigured } from '../integrations/antigravityCli';
+import { mergeDevPlans, StructuredDevPlan } from '../dev/devPlan';
+import { refineMergedDiff } from '../dev/mergeImplementations';
+import { getDevCycleImplementationsForCycle } from '../storage/devCycleImplementationRepository';
 import { getLatestCodeChangeRequestForDevCycleOrigin, updateCodeChangeDiff } from '../storage/codeChangeRequestRepository';
 import {
   createPrReviewRequest,
@@ -191,18 +179,8 @@ import {
   getDevCycle,
   getActiveDevCycleForTicket,
   BranchType,
-  DevCycle,
-  DevCyclePhase,
-  DevCyclePhaseStatus,
-  DevCycleStep,
-  initDevCyclePhases,
-  setDevCyclePhase,
-  appendDevCycleLog,
   setDevCycleCurrentStep,
-  setDevCycleAnalysisContext,
   setDevCyclePlans,
-  setDevCycleWorktrees,
-  setDevCycleBranch,
   setDevCycleBaseBranch,
   closeDevCycle,
   bumpDevCycleRound,
@@ -2004,9 +1982,22 @@ export class InterfaceServer {
     setDraftBroadcast((event) => this.broadcast(event));
     setRunBroadcast((event) => {
       this.broadcast(event);
-      // index.html's PR review view still listens to the pre-engine
-      // pr-review-* messages; translate until it moves to the generic run view.
-      if (event.type === 'run-status' ? event.run.kind !== PR_REVIEW_RUN_KIND : event.kind !== PR_REVIEW_RUN_KIND) return;
+      // index.html's PR review and Jira-implement views still listen to the
+      // pre-engine pr-review-* / dev-cycle-* messages; translate until they
+      // move to the generic run view.
+      const kind = event.type === 'run-status' ? event.run.kind : event.kind;
+      if (kind === DEV_CYCLE_RUN_KIND) {
+        if (event.type === 'run-status') {
+          // Parked for plan approval / finished / failed — the tab reloads itself on dev-cycle-updated.
+          if (event.run.status !== 'queued' && event.run.status !== 'running') this.broadcast({ type: 'dev-cycle-updated', devCycleId: Number(event.run.subjectId) });
+        } else if (event.type === 'run-step') {
+          this.broadcast({ type: 'dev-cycle-phase', devCycleId: Number(event.subjectId), key: event.step.key, status: event.step.status, detail: event.step.detail });
+        } else {
+          this.broadcast({ type: 'dev-cycle-log', devCycleId: Number(event.subjectId), message: event.message });
+        }
+        return;
+      }
+      if (kind !== PR_REVIEW_RUN_KIND) return;
       if (event.type === 'run-status') {
         const { run } = event;
         const requestId = run.state?.requestId;
@@ -2884,483 +2875,6 @@ export class InterfaceServer {
     });
   }
 
-  /**
-   * The Jira-implement tab's own step list (replaces the old popup-driven
-   * "Dev cycle…" flow's per-draft-panel UX) — same "seed the whole checklist
-   * as pending up front" shape as an orchestration run's steps. Branch creation and
-   * both worktrees are one phase-pair (no separate human approval between
-   * them — see the plan's "collapse mechanical steps" decision), same for
-   * the AI merge and the final human diff review.
-   */
-  private buildJiraImplementPhases(): DevCyclePhase[] {
-    return [
-      { key: 'analyze', label: 'Gather ticket context', status: 'pending', detail: null },
-      { key: 'plan', label: 'Plan (Claude + Antigravity)', status: 'pending', detail: null },
-      { key: 'branch_and_worktrees', label: 'Create branch & worktrees', status: 'pending', detail: null },
-      { key: 'implement', label: 'Implement (Claude + Antigravity)', status: 'pending', detail: null },
-      { key: 'merge_and_review', label: 'Merge & review', status: 'pending', detail: null },
-    ];
-  }
-
-  private jiraImplementLogger(cycleId: number): (message: string) => void {
-    return (message: string) => {
-      appendDevCycleLog(cycleId, message);
-      this.broadcast({ type: 'dev-cycle-log', devCycleId: cycleId, message });
-    };
-  }
-
-  private jiraImplementPhaseSetter(cycleId: number): (key: string, status: DevCyclePhaseStatus, detail?: string | null) => void {
-    return (key: string, status: DevCyclePhaseStatus, detail: string | null = null) => {
-      setDevCyclePhase(cycleId, key, status, detail);
-      this.broadcast({ type: 'dev-cycle-phase', devCycleId: cycleId, key, status, detail });
-    };
-  }
-
-  /**
-   * Analyze step, auto-continuing straight into Plan generation — there's
-   * nothing for a human to approve about "gathered some context", so this
-   * runs unattended right after the cycle is created (POST /api/jira-implement/start),
-   * same "fire and return immediately, then keep working async" shape as the
-   * PR-review route. Also the entry point for POST /api/jira-implement/:id/redo-plan
-   * (a new requirement was added to the ticket after the plan was already
-   * approved/implemented) — bumps the round first so a redo's implementations
-   * land under a fresh round rather than colliding with the old one, but
-   * deliberately does NOT touch an already-created branch/worktree: the
-   * idempotent ensureJiraImplementBranchAndWorktrees below reuses them as-is.
-   */
-  private async runJiraImplementAnalyzeAndPlan(cycleId: number): Promise<void> {
-    const cycle = getDevCycle(cycleId);
-    if (!cycle) return;
-    const log = this.jiraImplementLogger(cycleId);
-    const phase = this.jiraImplementPhaseSetter(cycleId);
-    // Only phases this function itself sets 'running' are reset to 'failed'
-    // in the catch below — a redo-plan call that fails partway through must
-    // never blindly stomp 'branch_and_worktrees'/'implement'/'merge_and_review'
-    // back to 'failed' when those already succeeded in an earlier round and
-    // this run never touched them (the bug this Set fixes: an earlier version
-    // unconditionally marked fixed phase keys failed regardless of whether
-    // they'd actually run this call).
-    const runningPhaseKeys = new Set<string>();
-    const trackedPhase = (key: string, status: DevCyclePhaseStatus, detail: string | null = null) => {
-      if (status === 'running') runningPhaseKeys.add(key);
-      else runningPhaseKeys.delete(key);
-      phase(key, status, detail);
-    };
-    try {
-      trackedPhase('analyze', 'running');
-      log(`Gathering context for ${cycle.ticketKey}…`);
-      const { seed, context } = await gatherJiraImplementContext(cycle.ticketKey, cycle.repoName);
-      setDevCycleAnalysisContext(cycleId, context);
-      trackedPhase(
-        'analyze',
-        'done',
-        `${context.confluencePages.length} Confluence page(s), ${context.codeHits.length} code hit(s), ${context.relatedPrs.length} related PR(s).`
-      );
-      setDevCycleCurrentStep(cycleId, 'plan');
-
-      trackedPhase('plan', 'running');
-      const secondOpinionEnabled = isAntigravityCliConfigured();
-      log(
-        secondOpinionEnabled
-          ? 'Running Claude Code planning, plus an Antigravity second opinion, in parallel…'
-          : 'Running Claude Code planning…'
-      );
-      const prompt = buildPlanPrompt(seed);
-      const claudeProgress = (message: string) => {
-        log(message);
-        trackedPhase('plan', 'running', message);
-      };
-      const [claudeResult, geminiResult] = await Promise.all([
-        runClaudeCodeReview(prompt, cycle.repoPath, { jsonSchema: DEV_PLAN_JSON_SCHEMA, onProgress: claudeProgress, model: 'opus' }),
-        secondOpinionEnabled ? runSecondOpinionReview(prompt, cycle.repoPath, (message) => log(`Antigravity: ${message}`)) : Promise.resolve(null),
-      ]);
-      if (claudeResult.isError || !claudeResult.structuredOutput) {
-        throw new Error(claudeResult.resultText || 'Claude Code did not return a usable plan.');
-      }
-      const claudePlan = claudeResult.structuredOutput as StructuredDevPlan;
-      // Antigravity has no --json-schema equivalent — its solo plan is kept
-      // as free text tucked into `understanding` purely for side-by-side
-      // display in the UI; the structured shape (files/tests/risks/...) only
-      // ever comes from the merge pass below, same convention
-      // prReviewContext.ts's mergeReviews already established for the review
-      // pipeline.
-      const geminiPlanText = geminiResult && !geminiResult.isError ? geminiResult.resultText : null;
-      const geminiPlanForDisplay: StructuredDevPlan | null = geminiPlanText
-        ? { understanding: geminiPlanText, approach: '', files: [], tests: [], risks: [], openQuestions: [], estimatedSize: 'm' }
-        : null;
-
-      let mergedPlan = claudePlan;
-      if (geminiPlanText) {
-        log('Merging the Claude Code plan and the Antigravity second opinion…');
-        try {
-          mergedPlan = await mergeDevPlans(claudePlan, geminiPlanText);
-        } catch (err: any) {
-          console.error(`[jira-implement] failed to merge plans for cycle ${cycleId}, keeping Claude-only plan:`, err.message);
-          log(`Could not merge the Antigravity plan — keeping the Claude Code plan only: ${err.message}`);
-        }
-      }
-      setDevCyclePlans(cycleId, { claude: claudePlan, gemini: geminiPlanForDisplay, merged: mergedPlan });
-      trackedPhase('plan', 'done', mergedPlan.understanding);
-      log('Plan ready for review — approve to continue.');
-      this.broadcast({ type: 'dev-cycle-plan-ready', devCycleId: cycleId });
-    } catch (err: any) {
-      console.error(`[jira-implement] analyze/plan failed for cycle ${cycleId}:`, err.message);
-      log(`Failed: ${err.message}`);
-      for (const key of [...runningPhaseKeys]) trackedPhase(key, 'failed', err.message);
-    }
-  }
-
-  /** POST /api/jira-implement/:id/redo-plan's entry point — bumps the round then re-runs analyze+plan from scratch (a fresh Jira fetch picks up any requirement change), resetting current_step back to 'plan' so the human re-approves before anything is (re)implemented. */
-  private async runJiraImplementRedoPlan(cycleId: number): Promise<void> {
-    bumpDevCycleRound(cycleId);
-    setDevCyclePlans(cycleId, { claude: null, gemini: null, merged: null });
-    const phase = this.jiraImplementPhaseSetter(cycleId);
-    phase('plan', 'pending');
-    phase('implement', 'pending');
-    phase('merge_and_review', 'pending');
-    setDevCycleCurrentStep(cycleId, 'analyze');
-    await this.runJiraImplementAnalyzeAndPlan(cycleId);
-  }
-
-  /**
-   * Idempotent branch+worktrees step — skips creating whatever already
-   * exists on the cycle (branchName/worktreePath, worktreePathGemini), so a
-   * retry after a partial failure (e.g. the branch got created but the
-   * second worktree's `git worktree add` failed) doesn't try to re-create a
-   * branch that already exists and error out. Returns null (having already
-   * logged/phased the failure) if branch creation itself can't be completed.
-   */
-  private async ensureJiraImplementBranchAndWorktrees(cycleId: number): Promise<{ worktreePathClaude: string; worktreePathGemini: string } | null> {
-    const log = this.jiraImplementLogger(cycleId);
-    const phase = this.jiraImplementPhaseSetter(cycleId);
-    let cycle = getDevCycle(cycleId);
-    if (!cycle) return null;
-    try {
-      phase('branch_and_worktrees', 'running');
-      let worktreePathClaude = cycle.worktreePath;
-      let branchName = cycle.branchName;
-      if (branchName && worktreePathClaude) {
-        log(`Branch "${branchName}" already exists — reusing it.`);
-      } else {
-        const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
-        const summary = ticket?.summary || cycle.ticketKey;
-        branchName = buildBranchName({ type: cycle.branchType, ticketKey: cycle.ticketKey, summary });
-        log(`Creating branch "${branchName}"…`);
-        worktreePathClaude = await createTicketBranchWorktree(cycle.repoPath, branchName, cycle.baseBranch);
-        setDevCycleBranch(cycle.id, { branchName, worktreePath: worktreePathClaude });
-
-        // "Branch created + implementation work starts" is one approval — the
-        // Jira write itself is still its own separately-gated draft.
-        startDraft({ kind: 'jira_transition', subjectId: lifecycleTransitionSubjectId(cycle.id, 'In Progress') }).catch((err: any) => {
-          console.error(`[jira-implement] failed to auto-start the Dev Ready -> In Progress transition for cycle ${cycle!.id}:`, err.message);
-        });
-      }
-
-      let worktreePathGemini = cycle.worktreePathGemini;
-      if (worktreePathGemini) {
-        log('Antigravity worktree already exists — reusing it.');
-      } else {
-        log('Creating a second worktree for the Antigravity implementation…');
-        worktreePathGemini = await addWorktreeForExistingBranch(cycle.repoPath, branchName, 'gemini');
-        setDevCycleWorktrees(cycle.id, { worktreePathGemini });
-      }
-      phase('branch_and_worktrees', 'done', `Branch "${branchName}", 2 worktrees created.`);
-      return { worktreePathClaude, worktreePathGemini };
-    } catch (err: any) {
-      console.error(`[jira-implement] branch/worktrees failed for cycle ${cycleId}:`, err.message);
-      log(`Failed: ${err.message}`);
-      phase('branch_and_worktrees', 'failed', err.message);
-      return null;
-    }
-  }
-
-  private async runJiraImplementClaudeImplementation(
-    cycle: DevCycle,
-    approvedPlan: StructuredDevPlan,
-    implementPrompt: string,
-    worktreePathClaude: string
-  ): Promise<{ status: 'ready' | 'failed'; diff: string | null; error: string | null }> {
-    const log = this.jiraImplementLogger(cycle.id);
-    try {
-      const { cliSessionId } = await startClaudeCodeTask(implementPrompt, worktreePathClaude, 'sonnet');
-      const codeChangeRequest = createCodeChangeRequest({
-        taskId: cycle.taskId ?? undefined,
-        devCycleId: cycle.id,
-        origin: 'dev_cycle_implement',
-        repoName: cycle.repoName,
-        repoPath: worktreePathClaude,
-        cliSessionId,
-      });
-      const implementationRow = createDevCycleImplementation({
-        devCycleId: cycle.id,
-        round: cycle.round,
-        variant: 'claude',
-        worktreePath: worktreePathClaude,
-        codeChangeRequestId: codeChangeRequest.id,
-        cliSessionId,
-      });
-      // Tails `claude logs <id>` alongside pollCodeChangeRequest's own
-      // coarse state-heartbeat polling — `--bg` has no equivalent of
-      // runClaudeCodeReview's streaming onProgress, so this is the only way
-      // to surface what the agent is actually doing (tool calls, reasoning)
-      // in the live log rather than just "Agent state: running" for however
-      // long implementation takes. Stopped once pollCodeChangeRequest settles.
-      let tailingStopped = false;
-      let lastLoggedLength = 0;
-      const tailClaudeLogs = async () => {
-        while (!tailingStopped) {
-          await new Promise((resolve) => setTimeout(resolve, 15_000));
-          if (tailingStopped) return;
-          try {
-            const logs = await getBackgroundTaskLogs(cliSessionId);
-            if (logs.length > lastLoggedLength) {
-              const added = logs.slice(lastLoggedLength);
-              lastLoggedLength = logs.length;
-              for (const line of added.split('\n')) {
-                const trimmed = line.trim();
-                if (trimmed) log(`Claude: ${trimmed}`);
-              }
-            }
-          } catch {
-            // best-effort only — a failed `claude logs` call shouldn't affect the actual poll/outcome
-          }
-        }
-      };
-      const tailPromise = tailClaudeLogs();
-      await pollCodeChangeRequest(codeChangeRequest.id, (event) => this.broadcast(event));
-      tailingStopped = true;
-      await tailPromise;
-      const finished = getCodeChangeRequest(codeChangeRequest.id)!;
-      if (finished.status === 'ready') {
-        markDevCycleImplementationReady(implementationRow.id, finished.diff ?? '');
-        log('Claude Code implementation ready.');
-        return { status: 'ready', diff: finished.diff ?? '', error: null };
-      }
-      markDevCycleImplementationFailed(implementationRow.id, finished.error ?? 'Claude Code implementation failed.');
-      log(`Claude Code implementation failed: ${finished.error ?? 'unknown error'}`);
-      return { status: 'failed', diff: null, error: finished.error ?? 'Claude Code implementation failed.' };
-    } catch (err: any) {
-      log(`Claude Code implementation failed to start: ${err.message}`);
-      return { status: 'failed', diff: null, error: err.message };
-    }
-  }
-
-  /**
-   * Antigravity CLI (agy) — synchronous, subscription-billed, no
-   * PID-tracking/polling needed since headless `agy -p` runs to completion
-   * on its own (unlike Claude's `--bg`). `disableGitPush` +
-   * `getWorktreeDiffSinceBase` are the structural safety net documented in
-   * antigravityCli.ts's header comment (agy's accept-edits mode isn't
-   * confirmed to block `git commit` the way Claude Code CLI is). No `gemini`
-   * CLI fallback here anymore — when agy isn't installed or fails, this
-   * variant is simply marked failed and runJiraImplementImplement (below)
-   * auto-proceeds with whichever implementation did succeed.
-   */
-  private async runJiraImplementGeminiImplementation(
-    cycle: DevCycle,
-    implementPrompt: string,
-    worktreePathGemini: string
-  ): Promise<{ status: 'ready' | 'failed'; diff: string | null; error: string | null }> {
-    const log = this.jiraImplementLogger(cycle.id);
-
-    if (!isAntigravityCliConfigured()) {
-      const error = 'Antigravity CLI (agy) is not installed.';
-      log(error);
-      return { status: 'failed', diff: null, error };
-    }
-
-    const implementationRow = createDevCycleImplementation({
-      devCycleId: cycle.id,
-      round: cycle.round,
-      variant: 'gemini',
-      worktreePath: worktreePathGemini,
-      cliSessionId: 'antigravity',
-    });
-    try {
-      await disableGitPush(worktreePathGemini);
-      const result = await runAntigravityAgent(implementPrompt, worktreePathGemini, {
-        mode: 'accept-edits',
-        onProgress: (message) => log(`Antigravity: ${message}`),
-      });
-      if (!result.isError) {
-        const diff = await getWorktreeDiffSinceBase(worktreePathGemini, `origin/${cycle.baseBranch}`);
-        if (diff.trim()) {
-          markDevCycleImplementationReady(implementationRow.id, diff);
-          log('Antigravity implementation ready.');
-          return { status: 'ready', diff, error: null };
-        }
-        const error = 'Antigravity implementation agent produced no file changes.';
-        markDevCycleImplementationFailed(implementationRow.id, error);
-        log(error);
-        return { status: 'failed', diff: null, error };
-      }
-      const error = result.resultText.slice(0, 300);
-      markDevCycleImplementationFailed(implementationRow.id, error);
-      log(`Antigravity implementation failed: ${error}`);
-      return { status: 'failed', diff: null, error };
-    } catch (err: any) {
-      markDevCycleImplementationFailed(implementationRow.id, err.message);
-      log(`Antigravity implementation errored: ${err.message}`);
-      return { status: 'failed', diff: null, error: err.message };
-    }
-  }
-
-  /**
-   * Runs both implementations in parallel — idempotent per variant: reuses
-   * an already-'ready' dev_cycle_implementations row for this (cycle, round,
-   * variant) instead of re-dispatching a whole agent run, so a retry after
-   * (say) only Gemini failed doesn't re-run Claude's already-successful
-   * implementation for no reason.
-   */
-  private async runJiraImplementImplement(
-    cycleId: number,
-    approvedPlan: StructuredDevPlan,
-    worktreePathClaude: string,
-    worktreePathGemini: string
-  ): Promise<{ claudeOutcome: { status: 'ready' | 'failed'; diff: string | null; error: string | null }; geminiOutcome: { status: 'ready' | 'failed'; diff: string | null; error: string | null } } | null> {
-    const log = this.jiraImplementLogger(cycleId);
-    const phase = this.jiraImplementPhaseSetter(cycleId);
-    const cycle = getDevCycle(cycleId);
-    if (!cycle) return null;
-    setDevCycleCurrentStep(cycleId, 'implement');
-    phase('implement', 'running');
-    // Clears a stale 'failed' merge_and_review status left over from an
-    // earlier attempt/round — that phase hasn't been evaluated yet this
-    // pass, so leaving its old status in place would confusingly show a red
-    // X for a step that's simply not reached yet while implement is still
-    // genuinely in progress.
-    phase('merge_and_review', 'pending');
-
-    const existing = getDevCycleImplementationsForCycle(cycleId, cycle.round);
-    const existingClaude = existing.find((i) => i.variant === 'claude' && i.status === 'ready');
-    const existingGemini = existing.find((i) => i.variant === 'gemini' && i.status === 'ready');
-
-    const implementPrompt = `Implement Jira ticket ${cycle.ticketKey} following this approved plan exactly. If you must deviate from it, make the minimum necessary change and clearly state the deviation in your final message.
-
-Plan:
-${JSON.stringify(approvedPlan, null, 2)}`;
-
-    log(
-      existingClaude || existingGemini
-        ? 'Retrying the implementation — reusing whichever agent already succeeded, re-running only the one that failed…'
-        : 'Starting the Claude Code and Antigravity implementations in parallel — both implement the same approved plan independently, in their own worktree…'
-    );
-
-    const [claudeOutcome, geminiOutcome] = await Promise.all([
-      existingClaude
-        ? Promise.resolve({ status: 'ready' as const, diff: existingClaude.diff, error: null })
-        : this.runJiraImplementClaudeImplementation(cycle, approvedPlan, implementPrompt, worktreePathClaude),
-      existingGemini
-        ? Promise.resolve({ status: 'ready' as const, diff: existingGemini.diff, error: null })
-        : this.runJiraImplementGeminiImplementation(cycle, implementPrompt, worktreePathGemini),
-    ]);
-
-    if (claudeOutcome.status === 'failed' && geminiOutcome.status === 'failed') {
-      const error = `Both implementations failed. Claude: ${claudeOutcome.error}. Antigravity: ${geminiOutcome.error}.`;
-      phase('implement', 'failed', error);
-      log(error);
-      return null;
-    }
-    phase(
-      'implement',
-      'done',
-      claudeOutcome.status === 'ready' && geminiOutcome.status === 'ready'
-        ? 'Both implementations ready.'
-        : `Only ${claudeOutcome.status === 'ready' ? 'Claude' : 'Gemini'}'s implementation succeeded — proceeding with it alone.`
-    );
-    return { claudeOutcome, geminiOutcome };
-  }
-
-  /** Reconciles the two implementations (or carries the sole survivor forward) into one merged diff for the final human review. */
-  private async runJiraImplementMerge(
-    cycleId: number,
-    approvedPlan: StructuredDevPlan,
-    worktreePathClaude: string,
-    claudeOutcome: { status: 'ready' | 'failed'; diff: string | null; error: string | null },
-    geminiOutcome: { status: 'ready' | 'failed'; diff: string | null; error: string | null }
-  ): Promise<void> {
-    const log = this.jiraImplementLogger(cycleId);
-    const phase = this.jiraImplementPhaseSetter(cycleId);
-    const cycle = getDevCycle(cycleId);
-    if (!cycle) return;
-    setDevCycleCurrentStep(cycleId, 'merge_and_review');
-    phase('merge_and_review', 'running');
-    try {
-      let mergedDiff: string;
-      let mergeNote: string;
-      if (claudeOutcome.status === 'ready' && geminiOutcome.status === 'ready') {
-        log('Reconciling both implementations into one merged diff…');
-        try {
-          const merged = await mergeImplementations(
-            approvedPlan,
-            claudeOutcome.diff!,
-            geminiOutcome.diff!,
-            cycle.baseBranch,
-            worktreePathClaude,
-            (message) => log(`Merge: ${message}`)
-          );
-          mergedDiff = merged.mergedDiff;
-          mergeNote = merged.reconciliationNotes;
-        } catch (err: any) {
-          console.error(`[jira-implement] merge failed for cycle ${cycleId}, falling back to Claude's implementation only:`, err.message);
-          log(`Could not reconcile the two implementations — falling back to Claude's implementation only: ${err.message}`);
-          mergedDiff = claudeOutcome.diff!;
-          mergeNote = 'Merge failed — this is Claude\'s implementation, unmodified.';
-        }
-      } else {
-        mergedDiff = (claudeOutcome.diff ?? geminiOutcome.diff)!;
-        mergeNote = `Only ${claudeOutcome.status === 'ready' ? 'Claude' : 'Gemini'}'s implementation succeeded — no comparison was possible.`;
-      }
-
-      const mergeRequest = createCodeChangeRequest({
-        taskId: cycle.taskId ?? undefined,
-        devCycleId: cycle.id,
-        origin: 'dev_cycle_merge',
-        repoName: cycle.repoName,
-        repoPath: worktreePathClaude,
-        cliSessionId: `dev-cycle-merge-${cycle.id}-${cycle.round}-${Date.now()}`,
-      });
-      markCodeChangeReady(mergeRequest.id, worktreePathClaude, mergedDiff);
-      log(`Merge notes: ${mergeNote}`);
-      phase('merge_and_review', 'done', 'Merged diff ready for review.');
-      log('Merged diff ready for review — approve to apply, or request changes.');
-      this.broadcast({ type: 'dev-cycle-merge-ready', devCycleId: cycle.id, requestId: mergeRequest.id });
-    } catch (err: any) {
-      console.error(`[jira-implement] merge step failed for cycle ${cycleId}:`, err.message);
-      log(`Failed: ${err.message}`);
-      phase('merge_and_review', 'failed', err.message);
-    }
-  }
-
-  /**
-   * Runs once the Plan step is approved: creates the branch + both worktrees
-   * (one phase-pair, no separate approval), then immediately starts both
-   * implementations in parallel, then reconciles them into one merged diff
-   * for the final human review — the plan's "collapse mechanical steps"
-   * decision means everything from here to a ready merged diff runs
-   * unattended. Also the entry point POST /api/jira-implement/:id/retry
-   * reuses when the cycle is still on the 'plan' step (i.e. the failure
-   * happened somewhere in branch/implement/merge) — every step here is
-   * idempotent, so calling this again just picks up wherever it left off.
-   */
-  private async runJiraImplementBranchThroughMerge(cycleId: number, approvedPlan: StructuredDevPlan): Promise<void> {
-    const paths = await this.ensureJiraImplementBranchAndWorktrees(cycleId);
-    if (!paths) return;
-    const outcomes = await this.runJiraImplementImplement(cycleId, approvedPlan, paths.worktreePathClaude, paths.worktreePathGemini);
-    if (!outcomes) return;
-    await this.runJiraImplementMerge(cycleId, approvedPlan, paths.worktreePathClaude, outcomes.claudeOutcome, outcomes.geminiOutcome);
-  }
-
-  /** Rebuilds each variant's outcome from its latest 'ready' dev_cycle_implementations row for the cycle's current round (implement already succeeded — this never re-runs either agent) and re-reconciles them — shared by /retry's merge_and_review branch and the manual "rerun merge & review" action. */
-  private async rerunJiraImplementMergeFromLatest(cycle: DevCycle, approvedPlan: StructuredDevPlan): Promise<void> {
-    const implementations = getDevCycleImplementationsForCycle(cycle.id, cycle.round);
-    const claudeImpl = implementations.find((i) => i.variant === 'claude' && i.status === 'ready');
-    const geminiImpl = implementations.find((i) => i.variant === 'gemini' && i.status === 'ready');
-    const claudeOutcome = claudeImpl ? { status: 'ready' as const, diff: claudeImpl.diff, error: null } : { status: 'failed' as const, diff: null, error: 'No ready Claude implementation found.' };
-    const geminiOutcome = geminiImpl ? { status: 'ready' as const, diff: geminiImpl.diff, error: null } : { status: 'failed' as const, diff: null, error: 'No ready Gemini implementation found.' };
-    await this.runJiraImplementMerge(cycle.id, approvedPlan, cycle.worktreePath!, claudeOutcome, geminiOutcome);
-  }
-
   private registerJiraImplementRoutes(app: express.Express): void {
     app.post('/api/jira-implement/start', async (req, res) => {
       const ticketKey = typeof req.body?.ticketKey === 'string' ? req.body.ticketKey.trim() : '';
@@ -3421,10 +2935,12 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
           res.json({ cycleId: cycle.id });
           return;
         }
-        initDevCyclePhases(cycle.id, this.buildJiraImplementPhases());
         setDevCycleCurrentStep(cycle.id, 'analyze');
         res.json({ cycleId: cycle.id });
-        this.runJiraImplementAnalyzeAndPlan(cycle.id).catch((err: any) => {
+        // The pipeline itself is src/orchestration/kinds/devCycleRun.ts; its
+        // progress reaches the UI through the run broadcast adapter in the
+        // constructor (run-* events → the dev-cycle-* messages).
+        startDevCycleRun(cycle.id).catch((err: any) => {
           console.error(`[jira-implement] failed to start for cycle ${cycle!.id}:`, err.message);
         });
       } catch (err: any) {
@@ -3442,7 +2958,7 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
       const implementations = getDevCycleImplementationsForCycle(cycle.id, cycle.round);
       const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
       res.json({
-        cycle,
+        cycle: devCycleView(cycle),
         implementations,
         mergeRequest: mergeRequest ?? null,
         builds: getBuildsForDevCycle(cycle.id),
@@ -3457,8 +2973,8 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
-      if (cycle.currentStep !== 'plan') {
-        res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — cannot refine the plan now.` });
+      if (!isDevCycleAwaitingPlanApproval(cycle.id)) {
+        res.status(409).json({ error: 'This cycle is not waiting on a plan — cannot refine the plan now.' });
         return;
       }
       const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : '';
@@ -3473,7 +2989,7 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
       try {
         const merged = await mergeDevPlans(cycle.planClaude, cycle.planGemini?.understanding ?? '', instruction);
         setDevCyclePlans(cycle.id, { merged });
-        appendDevCycleLog(cycle.id, `Plan refined per feedback: ${instruction}`);
+        logDevCycle(cycle.id, `Plan refined per feedback: ${instruction}`);
         this.broadcast({ type: 'dev-cycle-plan-ready', devCycleId: cycle.id });
         res.json({ plan: merged });
       } catch (err: any) {
@@ -3488,8 +3004,8 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
-      if (cycle.currentStep !== 'plan') {
-        res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — cannot approve the plan now.` });
+      if (!isDevCycleAwaitingPlanApproval(cycle.id)) {
+        res.status(409).json({ error: 'This cycle is not waiting on a plan approval.' });
         return;
       }
       const editedPlan = req.body?.plan as StructuredDevPlan | undefined;
@@ -3499,19 +3015,15 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         return;
       }
       setDevCyclePlans(cycle.id, { merged: finalPlan });
-      res.json({ started: true });
-      this.runJiraImplementBranchThroughMerge(cycle.id, finalPlan).catch((err: any) => {
-        console.error(`[jira-implement] branch/implement/merge failed to start for cycle ${cycle.id}:`, err.message);
-      });
+      // Approving resumes the parked run: branch + worktrees, both
+      // implementations and the AI merge then run unattended.
+      res.json({ started: approveDevCyclePlan(cycle.id) });
     });
 
-    // Retries whichever step actually failed, without redoing steps that
-    // already succeeded — every helper this dispatches to
-    // (ensureJiraImplementBranchAndWorktrees/runJiraImplementImplement/
-    // runJiraImplementMerge) is idempotent, so this is just "call back in at
-    // the right point" rather than needing its own separate retry logic.
+    // Retries from whichever step failed (engine.ts's retryRun keeps the
+    // previous run's finished steps and its plan approval).
     app.post('/api/jira-implement/:id/retry', (req, res) => {
-      let cycle = getDevCycle(Number(req.params.id));
+      const cycle = getDevCycle(Number(req.params.id));
       if (!cycle) {
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
@@ -3523,96 +3035,35 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
       // retroactively correct it, so retry accepts an override here instead
       // of forcing the whole cycle to be discarded just to fix one field.
       const baseBranchOverride = typeof req.body?.baseBranch === 'string' ? req.body.baseBranch.trim() : '';
-      if (baseBranchOverride && baseBranchOverride !== cycle.baseBranch) {
-        setDevCycleBaseBranch(cycle.id, baseBranchOverride);
-        cycle = getDevCycle(cycle.id)!;
-      }
-      // current_step stays at 'plan' both while Plan hasn't succeeded yet
-      // AND after it succeeds (it only advances once branch_and_worktrees
-      // actually completes) — so currentStep alone can't tell which failure
-      // this is. The plan PHASE's own status disambiguates: 'failed' means
-      // Plan itself never produced anything to retry from (an approvedPlan
-      // check below would 400 in that case), so retrying here means
-      // regenerating the plan, not resuming past it.
-      if (cycle.currentStep === 'plan' && cycle.phases?.find((p) => p.key === 'plan')?.status === 'failed') {
-        res.json({ started: true });
-        this.runJiraImplementAnalyzeAndPlan(cycle.id).catch((err: any) => {
-          console.error(`[jira-implement] retry (plan) failed for cycle ${cycle.id}:`, err.message);
-        });
+      if (baseBranchOverride && baseBranchOverride !== cycle.baseBranch) setDevCycleBaseBranch(cycle.id, baseBranchOverride);
+      const run = retryDevCycleRun(cycle.id);
+      if (!run) {
+        res.status(409).json({ error: 'Nothing failed to retry — the pipeline is still running or was never started.' });
         return;
       }
-      const approvedPlan = cycle.planMerged ?? cycle.planClaude;
-      if (!approvedPlan) {
-        res.status(400).json({ error: 'No approved plan to retry from.' });
-        return;
-      }
-      if (cycle.currentStep === 'plan') {
-        // A failure somewhere in branch/implement/merge leaves current_step
-        // at 'plan' (it only ever advances past 'plan' once
-        // branch_and_worktrees actually succeeds) — this is the same call
-        // "Approve plan" makes, it just reads more naturally as "Retry" once
-        // a failure is showing.
-        res.json({ started: true });
-        this.runJiraImplementBranchThroughMerge(cycle.id, approvedPlan).catch((err: any) => {
-          console.error(`[jira-implement] retry failed for cycle ${cycle.id}:`, err.message);
-        });
-        return;
-      }
-      if (cycle.currentStep === 'implement') {
-        if (!cycle.worktreePath || !cycle.worktreePathGemini) {
-          res.status(400).json({ error: 'This cycle has no worktrees to retry the implementation in.' });
-          return;
-        }
-        res.json({ started: true });
-        (async () => {
-          const outcomes = await this.runJiraImplementImplement(cycle.id, approvedPlan, cycle.worktreePath!, cycle.worktreePathGemini!);
-          if (!outcomes) return;
-          await this.runJiraImplementMerge(cycle.id, approvedPlan, cycle.worktreePath!, outcomes.claudeOutcome, outcomes.geminiOutcome);
-        })().catch((err: any) => console.error(`[jira-implement] retry failed for cycle ${cycle.id}:`, err.message));
-        return;
-      }
-      if (cycle.currentStep === 'merge_and_review') {
-        if (!cycle.worktreePath) {
-          res.status(400).json({ error: 'This cycle has no worktree to retry the merge in.' });
-          return;
-        }
-        res.json({ started: true });
-        this.rerunJiraImplementMergeFromLatest(cycle, approvedPlan).catch((err: any) => {
-          console.error(`[jira-implement] retry failed for cycle ${cycle.id}:`, err.message);
-        });
-        return;
-      }
-      res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — nothing to retry.` });
+      res.json({ started: true });
     });
 
-    // Manual, on-demand re-run of a specific step regardless of whether it
-    // already succeeded — distinct from /retry (which only ever resumes
-    // wherever a failure left current_step). "Implement" bumps the round so
-    // the fresh run gets its own dev_cycle_implementations rows instead of
-    // colliding with (or being silently skipped in favor of) the previous
-    // round's already-'ready' ones — same round-bump convention
-    // runJiraImplementRedoPlan uses. "Merge & review" just re-reconciles the
-    // current round's existing implementations, no round bump needed.
-    app.post('/api/jira-implement/:id/rerun-step', (req, res) => {
+    // Manual, on-demand re-run from a given step regardless of whether it
+    // already succeeded — distinct from /retry (which only resumes after a
+    // failure). "Plan" regenerates from scratch (fresh context + fresh
+    // plans) and asks for approval again; "Implement" bumps the round so the
+    // fresh run gets its own dev_cycle_implementations rows instead of
+    // reusing the previous round's already-'ready' ones; "Merge & review"
+    // just re-reconciles the current round's existing implementations.
+    app.post('/api/jira-implement/:id/rerun-step', async (req, res) => {
       const cycle = getDevCycle(Number(req.params.id));
       if (!cycle) {
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
       const step = req.body?.step;
-      // Plan doesn't need an already-approved plan to rerun — regenerating
-      // it from scratch (fresh context gather + fresh Claude/Antigravity
-      // plans) is exactly the point, including when Plan itself failed and
-      // never produced one in the first place.
       if (step === 'plan') {
         res.json({ started: true });
-        this.runJiraImplementAnalyzeAndPlan(cycle.id).catch((err: any) => {
-          console.error(`[jira-implement] manual rerun of "plan" failed for cycle ${cycle.id}:`, err.message);
-        });
+        await startDevCycleRun(cycle.id);
         return;
       }
-      const approvedPlan = cycle.planMerged ?? cycle.planClaude;
-      if (!approvedPlan) {
+      if (!(cycle.planMerged ?? cycle.planClaude)) {
         res.status(400).json({ error: 'No approved plan available.' });
         return;
       }
@@ -3623,11 +3074,7 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         }
         bumpDevCycleRound(cycle.id);
         res.json({ started: true });
-        (async () => {
-          const outcomes = await this.runJiraImplementImplement(cycle.id, approvedPlan, cycle.worktreePath!, cycle.worktreePathGemini!);
-          if (!outcomes) return;
-          await this.runJiraImplementMerge(cycle.id, approvedPlan, cycle.worktreePath!, outcomes.claudeOutcome, outcomes.geminiOutcome);
-        })().catch((err: any) => console.error(`[jira-implement] manual rerun of "implement" failed for cycle ${cycle.id}:`, err.message));
+        await startDevCycleRun(cycle.id, { completedThrough: 'branch_and_worktrees' });
         return;
       }
       if (step === 'merge_and_review') {
@@ -3636,9 +3083,7 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
           return;
         }
         res.json({ started: true });
-        this.rerunJiraImplementMergeFromLatest(cycle, approvedPlan).catch((err: any) => {
-          console.error(`[jira-implement] manual rerun of "merge_and_review" failed for cycle ${cycle.id}:`, err.message);
-        });
+        await startDevCycleRun(cycle.id, { completedThrough: 'implement' });
         return;
       }
       res.status(400).json({ error: `Cannot manually rerun step "${step}".` });
@@ -3649,10 +3094,9 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
     // under a bumped round so any prior implementations/merge diff for this
     // cycle stay as history rather than being overwritten. Allowed from any
     // step except 'done' (PR already opened — start a fresh cycle instead).
-    // Deliberately does NOT touch an already-created branch/worktree:
-    // ensureJiraImplementBranchAndWorktrees (run again once the redone plan
-    // is re-approved) reuses them as-is.
-    app.post('/api/jira-implement/:id/redo-plan', (req, res) => {
+    // Deliberately does NOT touch an already-created branch/worktree: the
+    // branch step reuses them as-is once the redone plan is re-approved.
+    app.post('/api/jira-implement/:id/redo-plan', async (req, res) => {
       const cycle = getDevCycle(Number(req.params.id));
       if (!cycle) {
         res.status(404).json({ error: 'Unknown dev cycle.' });
@@ -3662,10 +3106,11 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — cannot redo the plan now.` });
         return;
       }
+      bumpDevCycleRound(cycle.id);
+      setDevCyclePlans(cycle.id, { claude: null, gemini: null, merged: null });
+      setDevCycleCurrentStep(cycle.id, 'analyze');
       res.json({ started: true });
-      this.runJiraImplementRedoPlan(cycle.id).catch((err: any) => {
-        console.error(`[jira-implement] redo-plan failed for cycle ${cycle.id}:`, err.message);
-      });
+      await startDevCycleRun(cycle.id);
     });
 
     app.post('/api/jira-implement/:id/merge/refine', async (req, res) => {
@@ -3691,17 +3136,16 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         return;
       }
       try {
-        const log = this.jiraImplementLogger(cycle.id);
         const refined = await refineMergedDiff(
           mergeRequest.diff ?? '',
           instruction,
           cycle.baseBranch,
           cycle.worktreePath,
           { filePath, line },
-          (message) => log(`Refine: ${message}`)
+          (message) => logDevCycle(cycle.id, `Refine: ${message}`)
         );
         updateCodeChangeDiff(mergeRequest.id, refined.mergedDiff);
-        log(`Merged diff refined per feedback: ${instruction} (${refined.reconciliationNotes})`);
+        logDevCycle(cycle.id, `Merged diff refined per feedback: ${instruction} (${refined.reconciliationNotes})`);
         this.broadcast({ type: 'dev-cycle-merge-ready', devCycleId: cycle.id, requestId: mergeRequest.id });
         res.json({ diff: refined.mergedDiff, reconciliationNotes: refined.reconciliationNotes });
       } catch (err: any) {
@@ -3735,7 +3179,7 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
         markCodeChangePushed(mergeRequest.id);
         this.broadcast({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: mergeRequest.id });
         setDevCycleCurrentStep(cycle.id, 'done');
-        appendDevCycleLog(cycle.id, 'Merged diff applied and pushed — opening the pull request…');
+        logDevCycle(cycle.id, 'Merged diff applied and pushed — opening the pull request…');
         this.broadcast({ type: 'dev-cycle-updated', devCycleId: cycle.id });
         res.json({ applied: true });
         startDraft({ kind: 'pr_open', subjectId: cycle.id }).catch((err: any) => {

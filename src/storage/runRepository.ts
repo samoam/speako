@@ -124,6 +124,12 @@ export function hasRunEvent(runId: number, kind: RunEventKind, stepKey: string):
   return !!db.prepare('SELECT 1 FROM run_events WHERE run_id = ? AND kind = ? AND step_key = ? LIMIT 1').get(runId, kind, stepKey);
 }
 
+/** The gate steps a human approved in this run — carried over by the engine's retryRun so a retry doesn't ask again. */
+export function getRunApprovedSteps(runId: number): string[] {
+  const rows = db.prepare("SELECT DISTINCT step_key FROM run_events WHERE run_id = ? AND kind = 'approval' AND step_key IS NOT NULL").all(runId) as { step_key: string }[];
+  return rows.map((r) => r.step_key);
+}
+
 /** The 'log' lines of a run in order — what the UI shows as the progress transcript. */
 export function getRunLog(runId: number): string[] {
   const rows = db.prepare("SELECT message FROM run_events WHERE run_id = ? AND kind = 'log' ORDER BY id ASC").all(runId) as { message: string }[];

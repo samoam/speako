@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unstampLogLine } from '../src/storage/logLine';
 import { getRun, getRunLog, createRun, tryTransitionRun, setRunStep, Run } from '../src/storage/runRepository';
-import { registerRunKind, startRun, approveRun, cancelRun, isRunActive, setRunBroadcast, reconcileRunsOnStartup } from '../src/orchestration/engine';
+import { registerRunKind, startRun, approveRun, cancelRun, isRunActive, setRunBroadcast, reconcileRunsOnStartup, retryRun, logRun } from '../src/orchestration/engine';
 import { RunBroadcastEvent, RunDefinition, StepEntry } from '../src/orchestration/types';
 
 const events: RunBroadcastEvent[] = [];
@@ -203,4 +203,55 @@ test('reconcileRunsOnStartup: runs left "running" by a dead process are failed w
   assert.equal(failed.steps[0].status, 'failed');
   assert.ok(finalized.some((f) => f.startsWith('failed:Interrupted')), `finalize ran for the orphan: ${JSON.stringify(finalized)}`);
   assert.equal((await waitForStatus(queued.id, ['done', 'failed'])).status, 'done', 'the queued run was picked up');
+});
+
+test('startRun with resume: listed steps start done and listed gates start approved, so the run begins at the first unsettled step', async () => {
+  const ran: string[] = [];
+  const kind = defineKind<{}>(() => [
+    { key: 'a', label: 'A', run: async () => { ran.push('a'); } },
+    { key: 'gate', label: 'Gate', approval: true, run: async () => { ran.push('gate'); } },
+    { key: 'c', label: 'C', run: async () => { ran.push('c'); } },
+  ]);
+  const run = startRun({ kind, subjectKind: 'task', subjectId: '12', state: {}, resume: { completed: ['a'], approved: ['gate'] } });
+  assert.equal(run.steps[0].status, 'done');
+  assert.equal(run.steps[0].detail, 'Kept from the previous run.');
+  const done = await waitForStatus(run.id, ['done', 'failed', 'waiting_approval']);
+  assert.equal(done.status, 'done', 'the pre-approved gate did not park the run');
+  assert.deepEqual(ran, ['gate', 'c']);
+});
+
+test("retryRun: a new run of the same kind/state that keeps the failed run's finished steps and approvals, re-running only from the failure", async () => {
+  let failOnce = true;
+  const ran: string[] = [];
+  const kind = defineKind<{ n: number }>(() => [
+    { key: 'plan', label: 'Plan', run: async () => { ran.push('plan'); } },
+    { key: 'gate', label: 'Gate', approval: true, run: async () => { ran.push('gate'); } },
+    { key: 'flaky', label: 'Flaky', run: async () => { ran.push('flaky'); if (failOnce) { failOnce = false; throw new Error('transient'); } } },
+    { key: 'last', label: 'Last', run: async () => { ran.push('last'); } },
+  ]);
+  const first = startRun({ kind, subjectKind: 'task', subjectId: '13', state: { n: 1 } });
+  await waitForStatus(first.id, ['waiting_approval']);
+  approveRun(first.id);
+  const failed = await waitForStatus(first.id, ['done', 'failed']);
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(stepStatuses(failed), { plan: 'done', gate: 'done', flaky: 'failed', last: 'skipped' });
+
+  assert.equal(retryRun(first.id + 100000), null, 'unknown run');
+  const retry = retryRun(first.id)!;
+  assert.notEqual(retry.id, first.id);
+  assert.deepEqual(retry.state, { n: 1 });
+  const done = await waitForStatus(retry.id, ['done', 'failed', 'waiting_approval']);
+  assert.equal(done.status, 'done');
+  assert.deepEqual(stepStatuses(done), { plan: 'done', gate: 'done', flaky: 'done', last: 'done' });
+  assert.deepEqual(ran, ['plan', 'gate', 'flaky', 'flaky', 'last'], 'plan and the approved gate did not run again');
+});
+
+test("logRun: appends to the run's log and broadcasts it like a step would", async () => {
+  const kind = defineKind<{}>(() => [{ key: 'gate', label: 'Gate', approval: true, run: async () => {} }]);
+  const run = startRun({ kind, subjectKind: 'task', subjectId: '14', state: {} });
+  await waitForStatus(run.id, ['waiting_approval']);
+  events.length = 0;
+  logRun(run.id, 'refined by hand');
+  assert.deepEqual(getRunLog(run.id).map(unstampLogLine), ['refined by hand']);
+  assert.deepEqual(events.map((e: any) => [e.type, e.message]), [['run-log', 'refined by hand']]);
 });

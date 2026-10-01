@@ -10,6 +10,7 @@ import {
   setRunCurrentStep,
   appendRunEvent,
   hasRunEvent,
+  getRunApprovedSteps,
   failInterruptedRuns,
 } from '../storage/runRepository';
 import { RunDefinition, StepDefinition, StepEntry, StepContext, RunOutcome, RunBroadcastEvent } from './types';
@@ -51,15 +52,62 @@ function flattenSteps<S>(entries: StepEntry<S>[]): StepDefinition<S>[] {
   return entries.flatMap((e) => (Array.isArray(e) ? e : [e]));
 }
 
-/** Creates the run (status 'queued', every step 'pending') and starts it as soon as a worker slot is free. */
-export function startRun<S>(params: { kind: string; subjectKind: string; subjectId: string; state: S }): Run<S> {
+/**
+ * Steps a new run should treat as already settled: `completed` are marked
+ * done up front (the loop skips settled steps) and `approved` gates get
+ * their approval event, so a retry or a manual "rerun from step X" doesn't
+ * redo work — or re-ask for an approval — that already happened. Only
+ * meaningful for a kind whose steps leave their results in the database
+ * rather than in run state (the dev cycle); see retryRun.
+ */
+export interface RunResume {
+  completed?: string[];
+  approved?: string[];
+}
+
+/** Creates the run (status 'queued', every step 'pending' unless `resume` says otherwise) and starts it as soon as a worker slot is free. */
+export function startRun<S>(params: { kind: string; subjectKind: string; subjectId: string; state: S; resume?: RunResume }): Run<S> {
   const definition = definitions.get(params.kind);
   if (!definition) throw new Error(`Unknown run kind "${params.kind}".`);
   const steps: RunStep[] = flattenSteps(definition.steps(params.state)).map((s) => ({ key: s.key, label: s.label, status: 'pending', detail: null }));
-  const run = createRun({ ...params, steps });
-  broadcast({ type: 'run-status', run });
+  const run = createRun({ kind: params.kind, subjectKind: params.subjectKind, subjectId: params.subjectId, state: params.state, steps });
+  for (const key of params.resume?.completed ?? []) setRunStep(run.id, key, 'done', 'Kept from the previous run.');
+  for (const key of params.resume?.approved ?? []) appendRunEvent(run.id, 'approval', key, 'Approved in the previous run.');
+  const created = getRun(run.id)! as Run<S>;
+  broadcast({ type: 'run-status', run: created });
   pump();
-  return run;
+  return created;
+}
+
+/**
+ * Starts a fresh run of the same kind/subject/state that keeps the finished
+ * run's completed steps and approvals (see RunResume), so only the failed
+ * step and everything after it run again. Returns null if the run isn't
+ * finished yet.
+ */
+export function retryRun(runId: number): Run | null {
+  const previous = getRun(runId);
+  if (!previous || !['failed', 'cancelled', 'done'].includes(previous.status)) return null;
+  return startRun({
+    kind: previous.kind,
+    subjectKind: previous.subjectKind,
+    subjectId: previous.subjectId,
+    state: previous.state,
+    resume: { completed: previous.steps.filter((s) => s.status === 'done').map((s) => s.key), approved: getRunApprovedSteps(runId) },
+  });
+}
+
+/** Forwards an arbitrary UI event over the run broadcast — for a step that awaits a helper which reports progress as its own events (codeChangePoller's code-change-* messages) rather than through ctx.log. */
+export function emitEvent(event: Record<string, unknown>): void {
+  broadcast(event as unknown as RunBroadcastEvent);
+}
+
+/** Appends a progress line to a run from outside its steps (a route acting on the run's subject, e.g. "plan refined per feedback") and broadcasts it like a step's own ctx.log would. */
+export function logRun(runId: number, message: string): void {
+  const run = getRun(runId);
+  if (!run) return;
+  appendRunEvent(runId, 'log', null, message);
+  broadcast({ type: 'run-log', runId, kind: run.kind, subjectKind: run.subjectKind, subjectId: run.subjectId, message });
 }
 
 /** Resumes a run parked at waiting_approval; the approval is recorded as a run_event so it survives a restart. Returns false if the run wasn't waiting. */

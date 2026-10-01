@@ -1,13 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { unstampLogLine } from '../src/storage/logLine';
-
-/** Log lines carry a "[<ISO time>] " prefix (src/storage/logLine.ts) — checks it's there, then compares the messages. */
-function assertStampedLog(log: string[] | undefined, expected: string[]): void {
-  assert.ok(log && log.every((line) => /^\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] /.test(line)), `every line should be time-stamped: ${JSON.stringify(log)}`);
-  assert.deepEqual(log!.map(unstampLogLine), expected);
-}
-
 import {
   createDevCycle,
   getDevCycle,
@@ -19,9 +11,6 @@ import {
   setDevCycleJenkinsJob,
   bumpDevCycleRound,
   closeDevCycle,
-  initDevCyclePhases,
-  setDevCyclePhase,
-  appendDevCycleLog,
   setDevCycleCurrentStep,
   setDevCycleAnalysisContext,
   setDevCyclePlans,
@@ -86,7 +75,7 @@ test('bumpDevCycleRound: increments round for the Return loop', () => {
   assert.equal(getDevCycle(cycle.id)?.round, 3);
 });
 
-test('Jira-implement pipeline fields: phases/log/currentStep/analysisContext/plans/worktrees round-trip and default empty/null', () => {
+test('Jira-implement pipeline fields: currentStep/analysisContext/plans/worktrees round-trip and default empty/null', () => {
   const cycle = createDevCycle({ ticketKey: 'PROJ-7', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
   assert.deepEqual(cycle.phases, []);
   assert.deepEqual(cycle.log, []);
@@ -94,17 +83,6 @@ test('Jira-implement pipeline fields: phases/log/currentStep/analysisContext/pla
   assert.equal(cycle.analysisContext, null);
   assert.equal(cycle.planClaude, null);
   assert.equal(cycle.worktreePathGemini, null);
-
-  const phases = [{ key: 'analyze', label: 'Gather ticket context', status: 'pending' as const, detail: null }];
-  initDevCyclePhases(cycle.id, phases);
-  assert.deepEqual(getDevCycle(cycle.id)?.phases, phases);
-
-  setDevCyclePhase(cycle.id, 'analyze', 'done', 'Found 2 docs.');
-  assert.deepEqual(getDevCycle(cycle.id)?.phases, [{ key: 'analyze', label: 'Gather ticket context', status: 'done', detail: 'Found 2 docs.' }]);
-
-  appendDevCycleLog(cycle.id, 'Starting…');
-  appendDevCycleLog(cycle.id, 'Done.');
-  assertStampedLog(getDevCycle(cycle.id)?.log, ['Starting…', 'Done.']);
 
   setDevCycleCurrentStep(cycle.id, 'plan');
   assert.equal(getDevCycle(cycle.id)?.currentStep, 'plan');

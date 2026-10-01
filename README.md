@@ -24,6 +24,9 @@ src/
   rag/             embeds past sessions + retrieves grounding context for suggestions
   suggestions/     category-specific prompts generating proactive suggestions
   storage/         SQLite schema and all persistence (transcript/summary/etc.)
+  drafts/          draft-gate: AI-proposed external writes reviewed/approved before executing
+  orchestration/   run engine + the multi-step pipelines built on it (PR review, Jira implement)
+  dev/             dev-cycle building blocks (planning, branch naming, merge, Jenkins, lifecycle)
   interface/        Express + WebSocket live transcript view
   session.ts       wires every live pipeline stage together
   index.ts         CLI entrypoint
