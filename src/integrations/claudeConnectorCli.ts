@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const CONNECTOR_PREFIX = 'mcp__claude_ai_Microsoft_365__';
@@ -123,7 +123,12 @@ function callMicrosoft365ToolOnce<T = any>(call: ConnectorToolCall, opts?: { tim
     const timeoutHandle = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      // Each relay `claude` starts every configured MCP server as its own
+      // child (confirmed live: 22 servers for one get_me call), and on
+      // Windows child.kill() only ends claude.exe itself — so the whole tree
+      // is killed, same reason mcpClient.ts's close() uses taskkill /T.
+      if (process.platform === 'win32' && child.pid) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {});
+      else child.kill();
       reject(new ConnectorToolError(`Connector call to "${fullToolName}" timed out after ${timeoutMs}ms.`, true));
     }, timeoutMs);
 

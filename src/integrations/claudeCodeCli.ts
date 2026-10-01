@@ -327,6 +327,11 @@ export function runClaudeCodeReview(
         '--include-partial-messages',
         '--verbose', // required by the CLI when combining --print with --output-format=stream-json (confirmed live — otherwise it exits immediately with an error)
         '--permission-mode', 'plan',
+        // No MCP servers: a review/plan/merge run only reads the checked-out
+        // code with built-in tools, and Speako already supplies the Jira/
+        // Confluence/Bitbucket context in the prompt. Without this every run
+        // started all of the user's configured MCP servers (22 seen live).
+        '--strict-mcp-config',
         '--disallowedTools', ...REVIEW_DISALLOWED_TOOLS,
         ...(options?.jsonSchema ? ['--json-schema', JSON.stringify(options.jsonSchema)] : []),
         ...(options?.model ? ['--model', options.model] : []),

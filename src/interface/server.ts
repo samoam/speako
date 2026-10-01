@@ -109,7 +109,7 @@ import { runEmailTriage } from '../communications/emailTriage';
 import { isWithinBusinessHours } from '../util/businessHours';
 import { getCurrentWeekEvents, importUpcomingEventsThisWeek } from '../calendar/calendarImport';
 import { getSessionIdByCalendarEventId } from '../storage/segmentRepository';
-import { syncTasks, syncTeamsMessages as syncTeamsTasks } from '../orchestrator/taskSync';
+import { syncTasks, syncTeamsMessages as syncTeamsTasks, syncEmailMessages as syncEmailTasks, syncJenkins as syncJenkinsTasks } from '../orchestrator/taskSync';
 import { addManualTask, ManualTaskNotFoundError, ManualTaskRefError } from '../orchestrator/manualTask';
 import {
   getOpenTasks,
@@ -2786,7 +2786,10 @@ export class InterfaceServer {
         // same "don't wait for the next orchestrator tick" convention as
         // runTeamsSync().
         await runEmailTriage();
-        await syncTasks();
+        // Email tasks only — the full syncTasks() (Jira MCP + ~14 Bitbucket
+        // requests) already runs on its own orchestrator tick; repeating it
+        // after every email/Teams/Jenkins pass ran it ~5x per 15 minutes.
+        await syncEmailTasks();
         this.broadcast({ type: 'plate-updated' });
       })
       .catch((err: any) => {
@@ -2851,7 +2854,7 @@ export class InterfaceServer {
           },
         });
         console.log(`[teams-sync] triaged ${triageResult.triaged} message(s)`);
-        await syncTasks();
+        await syncTeamsTasks();
         this.teamsSyncLastSyncAt = new Date().toISOString();
         this.teamsSyncLastError = null;
         this.broadcast({ type: 'plate-updated' });
@@ -2903,7 +2906,7 @@ export class InterfaceServer {
     if (this.jenkinsSyncInProgress) return;
     this.jenkinsSyncInProgress = true;
     pollJenkinsBuilds((event) => this.broadcast(event))
-      .then(() => syncTasks())
+      .then(() => syncJenkinsTasks())
       .then(() => this.broadcast({ type: 'plate-updated' }))
       .catch((err: any) => console.error('[jenkins] poll failed:', err.message))
       .finally(() => {

@@ -339,7 +339,8 @@ interface TriagedEmailMessageRow {
   participants: string | null;
 }
 
-async function syncEmailMessages(): Promise<void> {
+/** Exported, like syncTeamsMessages, so an email sync can refresh just its own tasks instead of re-running every remote source (server.ts's runEmailSync). */
+export async function syncEmailMessages(): Promise<void> {
   const rows = db
     .prepare(
       `SELECT t.message_id AS messageId, em.title AS subject, em.occurred_at AS occurredAt,
@@ -381,7 +382,8 @@ async function syncEmailMessages(): Promise<void> {
  * only returns the LATEST build per job, so a new passing build drops the
  * old failing ref from `refs` below).
  */
-async function syncJenkins(): Promise<void> {
+/** Exported for the Jenkins poller, which only needs build tasks refreshed (local DB), not a full Jira/Bitbucket re-sync. */
+export async function syncJenkins(): Promise<void> {
   if (!isJenkinsConfigured()) return;
   const failing = getCurrentFailingBuilds();
   const refs: string[] = [];
