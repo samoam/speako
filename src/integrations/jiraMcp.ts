@@ -19,8 +19,13 @@ function extractResultText(result: any): string {
 }
 
 /** Matches Jira issue keys like "ITIC-9652" or "ETICK-8613" directly named in text. */
+/**
+ * Lookbehind rather than a leading \b: '_' is a word character, so \b found
+ * no boundary in "bugfix_ETICK-10230-sql-…" (this team's branch naming) and
+ * the key was silently missed.
+ */
 export function extractIssueKeys(text: string): string[] {
-  const matches = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/g) ?? [];
+  const matches = text.match(/(?<![A-Za-z0-9])[A-Z][A-Z0-9]{1,9}-\d+\b/g) ?? [];
   return [...new Set(matches)];
 }
 
@@ -38,9 +43,40 @@ export interface JiraIssueDetail {
  * body (acceptance criteria, context for *why* the change exists), so this
  * requests a wider field set and returns an untruncated shape instead.
  */
+const JIRA_REST_TIMEOUT_MS = 15_000;
+
+/**
+ * Same ticket via Jira's own REST API with the same personal token — confirmed
+ * live (2026-10-01) that GET /rest/api/2/issue/<key> with `Authorization:
+ * Bearer <JIRA_PERSONAL_TOKEN>` returns the issue in ~2s, at a moment when the
+ * mcp-atlassian route timed out (MCP error -32001) and a PR review went ahead
+ * with "No linked Jira ticket" for a key sitting right in the PR title.
+ * Null for a 404; throws for anything else so the MCP route gets a turn.
+ */
+async function getJiraIssueDetailViaRest(issueKey: string): Promise<JiraIssueDetail | null> {
+  const res = await fetch(`${config.jiraUrl.replace(/\/+$/, '')}/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=summary,description,status`, {
+    headers: { Authorization: `Bearer ${config.jiraPersonalToken}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(JIRA_REST_TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Jira REST ${res.status} for ${issueKey}`);
+  const body: any = await res.json();
+  return {
+    key: body.key ?? issueKey,
+    summary: body.fields?.summary ?? '',
+    description: body.fields?.description ?? '',
+    status: body.fields?.status?.name ?? '',
+  };
+}
+
 export async function getJiraIssueDetail(issueKey: string): Promise<JiraIssueDetail | null> {
   if (!isJiraConfigured()) {
     throw new Error('Jira is not configured — see NOTES.md.');
+  }
+  try {
+    return await getJiraIssueDetailViaRest(issueKey);
+  } catch (err: any) {
+    console.error(`[jira] REST lookup for ${issueKey} failed, trying the MCP server:`, err.message);
   }
   const result = await getClient().callTool('jira_get_issue', {
     issue_key: issueKey,

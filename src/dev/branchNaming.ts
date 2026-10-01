@@ -38,7 +38,8 @@ export function buildBranchName(params: { type: BranchType; ticketKey: string; s
   return `${prefix}${slug}`.slice(0, 100);
 }
 
-const TICKET_IN_BRANCH = /(?:^|\/)([A-Z][A-Z0-9]{1,9}-\d+)(?:-|$)/;
+// '_' as well as '/' before the key: this team also names branches "bugfix_ETICK-10230-…".
+const TICKET_IN_BRANCH = /(?:^|[/_])([A-Z][A-Z0-9]{1,9}-\d+)(?:-|$)/;
 
 /** The auto-link primitive: PR branch name -> ticket key, per the naming convention above. Null if the branch doesn't follow it. */
 export function extractTicketKeyFromBranch(branch: string): string | null {

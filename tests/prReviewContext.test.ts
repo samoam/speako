@@ -196,3 +196,18 @@ test('buildPrReviewPhases: with a second opinion enabled, claude and the second 
   assert.match(phases.find((p) => p.key === 'claude_review')!.label, /^Run Claude Code review$/);
   assert.match(phases.find((p) => p.key === 'gemini_review')!.label, /^Run Antigravity second opinion$/);
 });
+
+test('gatherReviewContext: finds the Jira key in the branch name and fetches it over Jira REST', async (t) => {
+  updateSettings({ jiraUrl: 'https://jira.example.com/jira', jiraPersonalToken: 'pat-token' });
+  t.after(() => updateSettings({ jiraUrl: '', jiraPersonalToken: '' }));
+  const fetchSpy = mock.method(globalThis, 'fetch', async (url: string, init: any) => {
+    assert.match(String(url), /\/rest\/api\/2\/issue\/ETICK-10230\?/);
+    assert.equal(init.headers.Authorization, 'Bearer pat-token');
+    return new Response(JSON.stringify({ key: 'ETICK-10230', fields: { summary: 'SQL injection', description: 'Escape inputs', status: { name: 'In Progress' } } }), { status: 200 });
+  });
+  t.after(() => fetchSpy.mock.restore());
+  // Key only in the branch, after an underscore — the case \b used to miss.
+  const pr = { id: 1, title: 'Fix injection', description: null, fromRefDisplayId: 'bugfix_ETICK-10230-sql-injection', toRefDisplayId: 'master', projectKey: 'GTEE', repoSlug: 'officercc', authorName: 'Jacob', link: '', state: 'OPEN', createdDate: null } as any;
+  const context = await gatherReviewContext(pr);
+  assert.deepEqual(context.jiraIssues.map((i) => [i.key, i.summary, i.status]), [['ETICK-10230', 'SQL injection', 'In Progress']]);
+});

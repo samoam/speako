@@ -294,6 +294,20 @@ type StopHandler = () => void;
 type PauseHandler = () => void;
 type ResumeHandler = () => void;
 
+/** Longer than any healthy review: the Claude and Antigravity reviewers each time out at 30 min and run in parallel. */
+const STALE_PR_REVIEW_MS = 45 * 60 * 1000;
+const CONTEXT_STEP_TIMEOUT_MS = 2 * 60 * 1000;
+const COMMENTS_STEP_TIMEOUT_MS = 60 * 1000;
+
+/** Rejects with "<label> timed out after Ns" if `promise` hasn't settled by then (the promise itself keeps running; only the wait is bounded). */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export class InterfaceServer {
   private wss: WebSocketServer;
   private httpServer: http.Server;
@@ -341,6 +355,8 @@ export class InterfaceServer {
   private calendarImportTimer: NodeJS.Timeout | null = null;
   private teamsSyncTimer: NodeJS.Timeout | null = null;
   private orchestratorSyncTimer: NodeJS.Timeout | null = null;
+  /** PR review request ids this process is actually running — a 'running' row not in here was orphaned (see POST /api/plate/:id/review). */
+  private activePrReviewIds = new Set<number>();
 
   constructor() {
     const app = express();
@@ -1756,8 +1772,17 @@ export class InterfaceServer {
       }
       const existing = getLatestPrReviewRequestForTask(taskId);
       if (existing && existing.status === 'running') {
-        res.json({ started: false, alreadyRunning: true, requestId: existing.id });
-        return;
+        // A row can say 'running' with nothing behind it: the process that ran
+        // it restarted, or a step hung (seen live: stuck after the Jira lookup
+        // timed out, and since this route refused while 'running', the review
+        // could never be retried). Those are marked failed so a fresh run can start.
+        const ageMs = Date.now() - new Date(`${existing.createdAt.replace(' ', 'T')}Z`).getTime();
+        const orphaned = !this.activePrReviewIds.has(existing.id);
+        if (!orphaned && ageMs < STALE_PR_REVIEW_MS) {
+          res.json({ started: false, alreadyRunning: true, requestId: existing.id });
+          return;
+        }
+        markPrReviewFailed(existing.id, orphaned ? 'Interrupted — Speako restarted while this review was running.' : 'Timed out — no result after 45 minutes.');
       }
       const match = task.externalRef.match(/^([^/]+)\/([^#]+)#(\d+)/);
       if (!match) {
@@ -1852,13 +1877,19 @@ export class InterfaceServer {
           phase('gemini_review', 'running', message);
         };
 
+        this.activePrReviewIds.add(request.id);
         (async () => {
           let worktreePath: string | null = null;
           try {
             phase('context', 'running');
             log(`Fetched PR details — source branch "${pr.fromRefDisplayId}", opened by ${pr.authorName}.`);
             log('Checking linked Jira ticket(s) and related Confluence docs…');
-            const context = await gatherReviewContext(pr);
+            // Bounded: context is helpful, not required — a hung lookup must
+            // not leave the whole review sitting at "running" forever.
+            const context = await withTimeout(gatherReviewContext(pr), CONTEXT_STEP_TIMEOUT_MS, 'Gathering ticket context').catch((err: any) => {
+              log(`${err.message} — continuing without ticket context.`);
+              return { jiraIssues: [], confluencePages: [] } as Awaited<ReturnType<typeof gatherReviewContext>>;
+            });
             setPrReviewContext(request.id, {
               authorName: pr.authorName,
               jiraIssues: context.jiraIssues.map((i) => ({ key: i.key, summary: i.summary, status: i.status })),
@@ -1873,8 +1904,9 @@ export class InterfaceServer {
             // fed into the prompt so the review doesn't repeat feedback
             // that's already been raised — best-effort: a fetch failure here
             // shouldn't block the review itself.
-            const existingComments = await getPullRequestComments(pr).catch((err: any) => {
+            const existingComments = await withTimeout(getPullRequestComments(pr), COMMENTS_STEP_TIMEOUT_MS, 'Fetching existing PR comments').catch((err: any) => {
               console.error('[pr-review] failed to fetch existing comments:', err.message);
+              log(`${err.message} — continuing without them.`);
               return [];
             });
             if (existingComments.length) log(`Found ${existingComments.length} existing comment(s) on this PR — the review will avoid repeating them.`);
@@ -1948,6 +1980,7 @@ export class InterfaceServer {
             markPrReviewFailed(request.id, err.message);
             this.broadcast({ type: 'pr-review-failed', taskId, requestId: request.id });
           } finally {
+            this.activePrReviewIds.delete(request.id);
             if (worktreePath) {
               log('Cleaning up worktree…');
               try {

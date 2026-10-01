@@ -81,3 +81,8 @@ test('parseBranchName: null for a non-conforming branch name', () => {
   assert.equal(parseBranchName('main'), null);
   assert.equal(parseBranchName('random/PROJ-1234-thing'), null);
 });
+
+test('extractTicketKeyFromBranch: also finds the key after an underscore ("bugfix_ETICK-10230-…")', () => {
+  assert.equal(extractTicketKeyFromBranch('bugfix_ETICK-10230-sql-injection-in-generictablerowlist.jsp'), 'ETICK-10230');
+  assert.equal(extractTicketKeyFromBranch('feature/ETICK-10176-same-day'), 'ETICK-10176');
+});

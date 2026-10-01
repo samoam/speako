@@ -91,7 +91,8 @@ const MAX_CONFLUENCE_PAGES = 2;
 export async function gatherReviewContext(pr: BitbucketPullRequest): Promise<PrReviewContext> {
   const jiraIssues: JiraIssueDetail[] = [];
   if (isJiraConfigured()) {
-    const keys = extractIssueKeys(`${pr.title} ${pr.description ?? ''}`);
+    // The branch name too — some PRs only carry the key there (e.g. "bugfix_ETICK-10230-…").
+    const keys = extractIssueKeys(`${pr.title} ${pr.description ?? ''} ${pr.fromRefDisplayId ?? ''}`);
     for (const key of keys) {
       try {
         const detail = await getJiraIssueDetail(key);
