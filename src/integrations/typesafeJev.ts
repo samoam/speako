@@ -52,7 +52,7 @@ export function jevTrue(answer: JevAnswer | undefined): boolean | null {
 export type UrgencySignal = 'none' | 'soon' | 'urgent';
 export const URGENCY_SIGNALS = ['none', 'soon', 'urgent'] as const;
 
-/** Same three buckets the Gemini triage schemas use, so Jev and the Gemini fallback feed teamsMessageUrgency/emailMessageUrgency (taskSync.ts) identically. */
+/** Same three buckets the Gemini triage schemas use, so Jev and the Gemini fallback feed messageUrgency (taskSync.ts) identically. */
 export const URGENCY_QUESTION: JevQuestion = {
   type: 'choice',
   instructions: 'How quickly does the reader need to act on this message?',

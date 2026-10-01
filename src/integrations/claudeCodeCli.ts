@@ -79,8 +79,8 @@ export interface ClaudeCodeTaskHandle {
  * `claude --help` documents that the one-time-per-directory workspace trust
  * dialog is skipped automatically for `-p`/non-interactive output (which is
  * why runClaudeCodeReview below never hits this) — but confirmed live that
- * `--bg` is NOT covered by that same skip, and unlike geminiCli.ts's
- * `--skip-trust` there is no equivalent flag for Claude CLI, so a `--bg` run
+ * `--bg` is NOT covered by that same skip, and Claude CLI has no
+ * skip-trust flag, so a `--bg` run
  * against a freshly created worktree (always untrusted) fails outright with
  * "Workspace not trusted... run claude once and accept the trust prompt" —
  * fatal in headless mode with no TTY to answer it. Claude CLI persists

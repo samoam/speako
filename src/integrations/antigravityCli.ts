@@ -17,10 +17,8 @@ import { git } from './claudeCodeCli';
  * isn't available/fails, callers now just proceed without a second opinion
  * rather than trying a second fallback CLI.
  *
- * A real .exe (unlike gemini CLI's Windows `.cmd` shim — see geminiCli.ts's
- * header comment for why that one needs cross-spawn), so plain
- * `child_process.spawn('agy', ...)` resolves it correctly without cross-spawn's
- * shell workaround.
+ * A real .exe (not a Windows `.cmd` shim), so plain `child_process.spawn`
+ * resolves it without a shell wrapper.
  *
  * Confirmed live (this session, against a real installed `agy` 1.2.10):
  * - Every turn now goes through runAgyTurn below (prompt on stdin via

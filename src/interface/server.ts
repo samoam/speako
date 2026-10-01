@@ -37,7 +37,6 @@ import {
   getActionItem,
   setActionItemStatus,
   setActionItemType,
-  setActionItemExternalRef,
   getUnnotifiedReminders,
   markReminderNotified,
   saveSummaryAndActionItems,
@@ -86,11 +85,9 @@ import { updateSettings } from '../settingsStore';
 import { ALL_TOOL_KEYS, ToolKey } from '../tools/activeTools';
 import { ALL_FEATURE_KEYS, FEATURE_LABELS } from '../tools/activeFeatures';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
-import { isJiraConfigured, createJiraIssue, updateJiraIssue, getJiraIssueDetail } from '../integrations/jiraMcp';
-import { isConfluenceConfigured, createConfluencePage, updateConfluencePage } from '../integrations/confluenceMcp';
+import { isJiraConfigured, getJiraIssueDetail } from '../integrations/jiraMcp';
+import { isConfluenceConfigured } from '../integrations/confluenceMcp';
 import {
-  suggestJiraFields,
-  suggestConfluenceFields,
   suggestEmailFields,
   suggestTeamsMessageFields,
   suggestScheduleMeetingFields,
@@ -146,7 +143,6 @@ import {
   createCodeChangeRequest,
   getCodeChangeRequest,
   getLatestCodeChangeRequestForActionItem,
-  getLatestCodeChangeRequestForTask,
   markCodeChangeReady,
   markCodeChangeFailed,
   markCodeChangeApplied,
@@ -346,8 +342,6 @@ export class InterfaceServer {
   private calendarImportLastRunAt: string | null = null;
   private calendarImportLastError: string | null = null;
   private orchestratorSyncInProgress = false;
-  private orchestratorLastRunAt: string | null = null;
-  private orchestratorLastError: string | null = null;
   private jenkinsSyncInProgress = false;
   private jenkinsSyncTimer: NodeJS.Timeout | null = null;
   private scheduleTimer: NodeJS.Timeout | null = null;
@@ -363,10 +357,6 @@ export class InterfaceServer {
     const app = express();
     app.use(express.json());
     app.use(express.static(path.join(__dirname, 'public')));
-
-    app.get('/api/status', (_req, res) => {
-      res.json({ recording: !!this.currentSessionId, sessionId: this.currentSessionId, paused: this.paused });
-    });
 
     app.get('/api/languages', (_req, res) => {
       res.json(SUPPORTED_LANGUAGES);
@@ -601,7 +591,6 @@ export class InterfaceServer {
         ? req.body.activeTools.filter((t: unknown) => typeof t === 'string' && ALL_TOOL_KEYS.includes(t as any))
         : [];
       setActiveTools(sessionId, activeTools);
-      this.broadcast({ type: 'session-tools-updated', sessionId, activeTools });
       res.json({ sessionId, activeTools });
     });
 
@@ -618,7 +607,6 @@ export class InterfaceServer {
         ? req.body.activeFeatures.filter((f: unknown) => typeof f === 'string' && ALL_FEATURE_KEYS.includes(f as any))
         : [];
       setActiveFeatures(sessionId, activeFeatures);
-      this.broadcast({ type: 'session-features-updated', sessionId, activeFeatures });
       res.json({ sessionId, activeFeatures });
     });
 
@@ -842,23 +830,6 @@ export class InterfaceServer {
       }
     });
 
-    app.post('/api/jenkins/poll', (_req, res) => {
-      if (this.jenkinsSyncInProgress) {
-        res.json({ started: false, alreadyRunning: true });
-        return;
-      }
-      this.runJenkinsSync();
-      res.json({ started: true });
-    });
-
-    app.get('/api/plate/status', (_req, res) => {
-      res.json({
-        inProgress: this.orchestratorSyncInProgress,
-        lastRunAt: this.orchestratorLastRunAt,
-        lastError: this.orchestratorLastError,
-      });
-    });
-
     // The morning digest (src/summarization/morningBriefing.ts) — generated
     // at most once per day by checkMorningBriefing() below. null until the
     // first business-hours tick of the day has run.
@@ -1080,38 +1051,8 @@ export class InterfaceServer {
       res.json({ ok: true });
     });
 
-    // AI-drafted starting point for the Jira/Confluence dialogs — read-only,
-    // never itself creates/updates anything. Fired once when a dialog opens;
-    // the user still reviews and can edit every field before submitting.
-    app.get('/api/action-items/:id/jira/suggest', async (req, res) => {
-      const item = getActionItem(Number(req.params.id));
-      if (!item) {
-        res.status(404).json({ error: 'Unknown action item.' });
-        return;
-      }
-      try {
-        res.json(await suggestJiraFields(item));
-      } catch (err: any) {
-        res.status(502).json({ error: err.message });
-      }
-    });
-
-    app.get('/api/action-items/:id/confluence/suggest', async (req, res) => {
-      const item = getActionItem(Number(req.params.id));
-      if (!item) {
-        res.status(404).json({ error: 'Unknown action item.' });
-        return;
-      }
-      try {
-        res.json(await suggestConfluenceFields(item));
-      } catch (err: any) {
-        res.status(502).json({ error: err.message });
-      }
-    });
-
-    // Same "draft, then the user still reviews/sends it themselves" pattern
-    // as the Jira/Confluence suggest routes above, for the deep-link-only
-    // action types — read-only, never sends/posts/creates anything itself.
+    // Drafts a starting point the user still reviews/sends themselves — read-only,
+    // never sends/posts/creates anything itself.
     app.get('/api/action-items/:id/email/suggest', async (req, res) => {
       const item = getActionItem(Number(req.params.id));
       if (!item) {
@@ -1146,97 +1087,6 @@ export class InterfaceServer {
       }
       try {
         res.json(await suggestScheduleMeetingFields(item));
-      } catch (err: any) {
-        res.status(502).json({ error: err.message });
-      }
-    });
-
-    // Real write — actually creates or updates a Jira issue (see
-    // src/integrations/jiraMcp.ts's createJiraIssue/updateJiraIssue).
-    // Explicit, user-confirmed, one item at a time — reached only from the
-    // Action Items tab's "Create/update Jira" dialog, never automatically.
-    app.post('/api/action-items/:id/jira', async (req, res) => {
-      const id = Number(req.params.id);
-      const item = getActionItem(id);
-      if (!item) {
-        res.status(404).json({ error: 'Unknown action item.' });
-        return;
-      }
-      try {
-        let result;
-        let action: 'created' | 'updated';
-        if (req.body?.mode === 'update') {
-          const issueKey = typeof req.body?.issueKey === 'string' ? req.body.issueKey.trim() : '';
-          const transition = typeof req.body?.transition === 'string' ? req.body.transition.trim() : '';
-          const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
-          if (!issueKey) {
-            res.status(400).json({ error: 'Issue key is required.' });
-            return;
-          }
-          if (!transition && !comment) {
-            res.status(400).json({ error: 'Provide a status transition and/or a comment.' });
-            return;
-          }
-          result = await updateJiraIssue({ issueKey, transition: transition || undefined, comment: comment || undefined });
-          action = 'updated';
-        } else {
-          const projectKey = typeof req.body?.projectKey === 'string' ? req.body.projectKey.trim() : '';
-          const issueType = typeof req.body?.issueType === 'string' ? req.body.issueType.trim() : '';
-          const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : item.description;
-          const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
-          if (!projectKey || !issueType) {
-            res.status(400).json({ error: 'Project key and issue type are required.' });
-            return;
-          }
-          result = await createJiraIssue({ projectKey, issueType, summary, description: description || undefined });
-          action = 'created';
-        }
-        setActionItemExternalRef(id, { tool: 'jira', action, key: result.key, url: result.url, at: new Date().toISOString() });
-        const updated = getActionItem(id)!;
-        this.broadcast({ type: 'action-item-updated', sessionId: item.sessionId, actionItem: updated });
-        res.json(updated);
-      } catch (err: any) {
-        res.status(502).json({ error: err.message });
-      }
-    });
-
-    // Real write — actually creates or updates a Confluence page (see
-    // src/integrations/confluenceMcp.ts). Same explicit, one-item-at-a-time
-    // pattern as the Jira route above.
-    app.post('/api/action-items/:id/confluence', async (req, res) => {
-      const id = Number(req.params.id);
-      const item = getActionItem(id);
-      if (!item) {
-        res.status(404).json({ error: 'Unknown action item.' });
-        return;
-      }
-      try {
-        let result;
-        let action: 'created' | 'updated';
-        const title = typeof req.body?.title === 'string' && req.body.title.trim() ? req.body.title.trim() : item.description.slice(0, 200);
-        const content = typeof req.body?.content === 'string' && req.body.content.trim() ? req.body.content.trim() : item.description;
-        if (req.body?.mode === 'update') {
-          const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId.trim() : '';
-          if (!pageId) {
-            res.status(400).json({ error: 'Page ID is required.' });
-            return;
-          }
-          result = await updateConfluencePage({ pageId, title, content });
-          action = 'updated';
-        } else {
-          const spaceKey = typeof req.body?.spaceKey === 'string' ? req.body.spaceKey.trim() : '';
-          const parentId = typeof req.body?.parentId === 'string' ? req.body.parentId.trim() : '';
-          if (!spaceKey) {
-            res.status(400).json({ error: 'Space key is required.' });
-            return;
-          }
-          result = await createConfluencePage({ spaceKey, title, content, parentId: parentId || undefined });
-          action = 'created';
-        }
-        setActionItemExternalRef(id, { tool: 'confluence', action, key: result.id, url: result.url, at: new Date().toISOString() });
-        const updated = getActionItem(id)!;
-        this.broadcast({ type: 'action-item-updated', sessionId: item.sessionId, actionItem: updated });
-        res.json(updated);
       } catch (err: any) {
         res.status(502).json({ error: err.message });
       }
@@ -1547,64 +1397,6 @@ export class InterfaceServer {
     app.get('/api/action-items/:id/code-change', (req, res) => {
       const actionItemId = Number(req.params.id);
       const request = getLatestCodeChangeRequestForActionItem(actionItemId);
-      res.json(request ?? null);
-    });
-
-    // Same "Implement with Claude Code" engine as the action-item route
-    // above, just originating from a Jira Dashboard card instead of a
-    // meeting action item — startClaudeCodeTask/pollCodeChangeRequest and
-    // the approve/push/discard routes below are already origin-agnostic.
-    app.post('/api/plate/:id/implement', async (req, res) => {
-      const taskId = Number(req.params.id);
-      const task = getTaskById(taskId);
-      if (!task || task.source !== 'jira') {
-        res.status(404).json({ error: 'Unknown Jira task.' });
-        return;
-      }
-      const existing = getLatestCodeChangeRequestForTask(taskId);
-      if (existing && existing.status === 'running') {
-        res.json({ started: false, alreadyRunning: true, requestId: existing.id });
-        return;
-      }
-      if (!isClaudeCodeConfigured()) {
-        res.status(400).json({ error: 'No local codebase configured — see Settings > Local codebase indexing.' });
-        return;
-      }
-      const configuredRepos = config.codebaseLocalPaths;
-      const repoName =
-        typeof req.body?.repoName === 'string' && req.body.repoName
-          ? req.body.repoName
-          : configuredRepos.length === 1
-            ? configuredRepos[0].name
-            : null;
-      if (!repoName) {
-        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
-        return;
-      }
-      let repoPath: string;
-      try {
-        repoPath = resolveLocalRepoPath(repoName);
-      } catch (err: any) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-
-      try {
-        const prompt = `Implement this Jira ticket.\n\n${task.title}${task.description ? `\n\n${task.description}` : ''}`;
-        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath, 'sonnet');
-        const request = createCodeChangeRequest({ taskId, repoName, repoPath, cliSessionId });
-        this.pollCodeChangeRequest(request.id).catch((err: any) => console.error('[claude-code] polling failed:', err.message));
-        this.broadcast({ type: 'code-change-started', taskId, requestId: request.id });
-        res.json({ started: true, requestId: request.id });
-      } catch (err: any) {
-        console.error('[claude-code] failed to start task:', err.message);
-        res.status(500).json({ error: err.message });
-      }
-    });
-
-    app.get('/api/plate/:id/code-change', (req, res) => {
-      const taskId = Number(req.params.id);
-      const request = getLatestCodeChangeRequestForTask(taskId);
       res.json(request ?? null);
     });
 
@@ -2372,7 +2164,6 @@ export class InterfaceServer {
     });
 
     this.registerDraftRoutes(app);
-    this.registerDevCycleRoutes(app);
     this.registerJiraImplementRoutes(app);
 
     this.httpServer = http.createServer(app);
@@ -2884,12 +2675,9 @@ export class InterfaceServer {
     this.orchestratorSyncInProgress = true;
     syncTasks()
       .then((result) => {
-        this.orchestratorLastRunAt = new Date().toISOString();
-        this.orchestratorLastError = result.failed.length ? `Sources failed: ${result.failed.join(', ')}` : null;
         this.broadcast({ type: 'plate-updated' });
       })
       .catch((err: any) => {
-        this.orchestratorLastError = err.message;
         console.error('[orchestrator] sync failed:', err.message);
       })
       .finally(() => {
@@ -2918,7 +2706,7 @@ export class InterfaceServer {
       });
   }
 
-  /** Thin wrapper so existing call sites keep working unchanged — the actual polling loop now lives in src/integrations/codeChangePoller.ts, extracted so a draft kind's execute() (src/drafts/kinds/devPlanDraft.ts) can trigger the same loop without needing access to this instance. */
+  /** Thin wrapper so existing call sites keep working unchanged — the actual polling loop now lives in src/integrations/codeChangePoller.ts, extracted so a draft kind's execute() (src/drafts/kinds/jenkinsFixDraft.ts) can trigger the same loop without needing access to this instance. */
   private pollCodeChangeRequest(requestId: number): Promise<void> {
     return pollCodeChangeRequest(requestId, (event) => this.broadcast(event));
   }
@@ -3243,80 +3031,6 @@ export class InterfaceServer {
   }
 
   /**
-   * The Jira -> branch -> plan -> implement dev cycle (src/dev/). Branch
-   * creation and the plan-before-code step themselves are generic draft
-   * kinds (git_branch_create/dev_plan, src/drafts/kinds/) reachable through
-   * the routes registered above — these two routes are just for creating a
-   * cycle in the first place and reading its current state back for the UI.
-   */
-  private registerDevCycleRoutes(app: express.Express): void {
-    app.post('/api/dev-cycles', async (req, res) => {
-      const ticketKey = typeof req.body?.ticketKey === 'string' ? req.body.ticketKey.trim() : '';
-      const taskId = typeof req.body?.taskId === 'number' ? req.body.taskId : undefined;
-      const branchType: BranchType = (['feature', 'bugfix', 'hotfix', 'chore'] as const).includes(req.body?.branchType) ? req.body.branchType : 'feature';
-      if (!ticketKey) {
-        res.status(400).json({ error: 'ticketKey is required.' });
-        return;
-      }
-      const configuredRepos = config.codebaseLocalPaths;
-      const repoName =
-        typeof req.body?.repoName === 'string' && req.body.repoName
-          ? req.body.repoName
-          : configuredRepos.length === 1
-            ? configuredRepos[0].name
-            : null;
-      if (!repoName) {
-        res.status(400).json({ error: 'Multiple local codebases configured — specify which one via repoName.', options: configuredRepos.map((r) => r.name) });
-        return;
-      }
-      const existing = getActiveDevCycleForTicket(ticketKey);
-      if (existing) {
-        res.json(existing);
-        return;
-      }
-      if (!isJiraConfigured()) {
-        res.status(400).json({ error: 'Jira is not configured — see NOTES.md.' });
-        return;
-      }
-      let repoPath: string;
-      try {
-        repoPath = resolveLocalRepoPath(repoName);
-      } catch (err: any) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      try {
-        const ticket = await getJiraIssueDetail(ticketKey);
-        if (!ticket) {
-          res.status(404).json({ error: `Jira issue ${ticketKey} was not found.` });
-          return;
-        }
-        // A cycle only ever gets created to start work on a ticket — the
-        // real lifecycle-state enforcement (validating this against the
-        // ticket's actual live status/transitions) is the Jira lifecycle
-        // engine's job (src/dev/lifecycle.ts).
-        const cycle = createDevCycle({ ticketKey, taskId, repoName, repoPath, branchType, baseBranch: config.devTrunkBranch, lifecycleState: 'Dev Ready' });
-        res.json(cycle);
-      } catch (err: any) {
-        res.status(502).json({ error: err.message });
-      }
-    });
-
-    app.get('/api/dev-cycles/:id', (req, res) => {
-      const cycle = getDevCycle(Number(req.params.id));
-      if (!cycle) {
-        res.status(404).json({ error: 'Unknown dev cycle.' });
-        return;
-      }
-      res.json(cycle);
-    });
-
-    app.get('/api/dev-cycles/for-ticket/:ticketKey', (req, res) => {
-      res.json(getActiveDevCycleForTicket(req.params.ticketKey) ?? null);
-    });
-  }
-
-  /**
    * The Jira-implement tab's own step list (replaces the old popup-driven
    * "Dev cycle…" flow's per-draft-panel UX) — mirrors buildPrReviewPhases's
    * "seed the whole checklist as pending up front" shape. Branch creation and
@@ -3481,9 +3195,8 @@ export class InterfaceServer {
         worktreePathClaude = await createTicketBranchWorktree(cycle.repoPath, branchName, cycle.baseBranch);
         setDevCycleBranch(cycle.id, { branchName, worktreePath: worktreePathClaude });
 
-        // "Branch created + implementation work starts" is one approval, same
-        // as gitBranchCreateDraft.ts's existing convention — the Jira write
-        // itself is still its own separately-gated draft.
+        // "Branch created + implementation work starts" is one approval — the
+        // Jira write itself is still its own separately-gated draft.
         startDraft({ kind: 'jira_transition', subjectId: lifecycleTransitionSubjectId(cycle.id, 'In Progress') }).catch((err: any) => {
           console.error(`[jira-implement] failed to auto-start the Dev Ready -> In Progress transition for cycle ${cycle!.id}:`, err.message);
         });

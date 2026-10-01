@@ -3,7 +3,7 @@ import { db } from './db';
 /** 'awaiting_clarification' is a reply-draft-specific state: the assistant asked the user a clarifying question (a `kind: 'question'` revision) and is waiting on their answer before it can draft — distinct from 'ready' so Approve stays impossible to hit mid-clarification. See src/drafts/kinds/replyDraftShared.ts. */
 export type DraftStatus = 'generating' | 'ready' | 'refining' | 'executing' | 'completed' | 'failed' | 'discarded' | 'awaiting_clarification';
 
-export type DraftSubjectKind = 'action_item' | 'task' | 'session' | 'jira_issue' | 'pr_review_request' | 'dev_cycle' | 'dev_plan' | 'jenkins_build';
+export type DraftSubjectKind = 'action_item' | 'task' | 'session' | 'jira_issue' | 'pr_review_request' | 'dev_cycle' | 'jenkins_build';
 
 export type DraftRevisionRole = 'user' | 'assistant';
 /** 'question' is the assistant proactively asking the user something (see DraftGenerateResult's 'question' mode) — distinct from 'answer', which is the assistant responding to a question the USER asked. */

@@ -4,7 +4,7 @@ import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCod
 /**
  * Polls a background Claude Code agent until it settles, then captures its
  * diff. Extracted out of InterfaceServer (where this originally lived as a
- * private method) so a draft kind's execute() (src/drafts/kinds/devPlanDraft.ts)
+ * private method) so a draft kind's execute() (src/drafts/kinds/jenkinsFixDraft.ts)
  * can kick off the same polling loop that action-item/task-triggered code
  * changes already use, without needing access to the server instance itself
  * — takes a plain broadcast callback instead, same convention as draftService.ts.

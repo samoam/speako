@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { runAntigravityAgent, isAntigravityCliConfigured } from '../src/integrations/antigravityCli';
 
-// Same ENOENT-forcing technique as tests/geminiCli.test.ts — deterministic
+// Forces ENOENT by blanking PATH — deterministic
 // regardless of whether `agy` happens to be installed on the machine
 // running this test, and confirms the documented fallback contract
 // (ENOENT -> isError:true with a progress log, never a thrown/rejected

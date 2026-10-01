@@ -1,21 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { recordGeminiUsage, getGeminiUsageTotals } from '../src/storage/geminiUsageRepository';
+import { recordGeminiUsage } from '../src/storage/geminiUsageRepository';
 import { logGeminiUsage } from '../src/gemini/logUsage';
 import { recordAiUsage, getAiUsageSince } from '../src/storage/aiUsageRepository';
 
-test('geminiUsageRepository: recordGeminiUsage accumulates into all-time totals for a feature', () => {
+const today = () => new Date().toISOString().slice(0, 10);
+const geminiRow = (feature: string) => getAiUsageSince(today()).find((r) => r.provider === 'gemini' && r.feature === feature);
+
+test('geminiUsageRepository: recordGeminiUsage accumulates per feature (thinking tokens count as output)', () => {
   const feature = `test-feature-${Date.now()}`;
   recordGeminiUsage(feature, { promptTokens: 100, outputTokens: 20, thinkingTokens: 5 });
   recordGeminiUsage(feature, { promptTokens: 50, outputTokens: 10, thinkingTokens: 0 });
 
-  const totals = getGeminiUsageTotals();
-  const row = totals.find((r) => r.feature === feature);
+  const row = geminiRow(feature);
   assert.ok(row, 'expected a row for the recorded feature');
-  assert.equal(row!.callCount, 2);
-  assert.equal(row!.promptTokens, 150);
-  assert.equal(row!.outputTokens, 30);
-  assert.equal(row!.thinkingTokens, 5);
+  assert.equal(row!.calls, 2);
+  assert.equal(row!.inputTokens, 150);
+  assert.equal(row!.outputTokens, 35);
 });
 
 test('logGeminiUsage: extracts usageMetadata and records it under the given feature', () => {
@@ -24,12 +25,11 @@ test('logGeminiUsage: extracts usageMetadata and records it under the given feat
     usageMetadata: { promptTokenCount: 42, candidatesTokenCount: 8, thoughtsTokenCount: 3, totalTokenCount: 53 },
   });
 
-  const row = getGeminiUsageTotals().find((r) => r.feature === feature);
+  const row = geminiRow(feature);
   assert.ok(row);
-  assert.equal(row!.callCount, 1);
-  assert.equal(row!.promptTokens, 42);
-  assert.equal(row!.outputTokens, 8);
-  assert.equal(row!.thinkingTokens, 3);
+  assert.equal(row!.calls, 1);
+  assert.equal(row!.inputTokens, 42);
+  assert.equal(row!.outputTokens, 11);
 });
 
 test('logGeminiUsage: does nothing (does not throw) when the response has no usageMetadata', () => {

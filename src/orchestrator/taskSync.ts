@@ -108,7 +108,7 @@ function actionItemImportance(confidence: ActionItemWithSession['confidence']): 
  * 'urgent' forces the max regardless of age, 'soon' guarantees at least a
  * 4. Recomputed live every sync, not frozen at classification time.
  */
-function teamsMessageUrgency(occurredAt: string, urgencySignal: MessageUrgencySignal): number {
+function messageUrgency(occurredAt: string, urgencySignal: MessageUrgencySignal): number {
   if (urgencySignal === 'urgent') return 5;
   const ageMs = Date.now() - new Date(occurredAt).getTime();
   const ageHours = ageMs / (60 * 60 * 1000);
@@ -116,16 +116,7 @@ function teamsMessageUrgency(occurredAt: string, urgencySignal: MessageUrgencySi
   return urgencySignal === 'soon' ? Math.max(recency, 4) : recency;
 }
 
-/** Same recency+urgencySignal combination as teamsMessageUrgency — kept separate rather than a shared helper to match this file's existing one-function-per-source style. */
-function emailMessageUrgency(occurredAt: string, urgencySignal: MessageUrgencySignal): number {
-  if (urgencySignal === 'urgent') return 5;
-  const ageMs = Date.now() - new Date(occurredAt).getTime();
-  const ageHours = ageMs / (60 * 60 * 1000);
-  const recency = ageHours < 1 ? 5 : ageHours < 6 ? 4 : ageHours < 24 ? 3 : 2;
-  return urgencySignal === 'soon' ? Math.max(recency, 4) : recency;
-}
-
-/** 3 (fresh) - 5 (stale) — a comment sitting unread longer is more urgent, not less; deliberately narrower than teamsMessageUrgency/emailMessageUrgency's 2-5 range since a Jira comment is inherently lower-urgency than a direct chat/email. */
+/** 3 (fresh) - 5 (stale) — a comment sitting unread longer is more urgent, not less; deliberately narrower than messageUrgency's 2-5 range since a Jira comment is inherently lower-urgency than a direct chat/email. */
 function jiraCommentUrgency(createdDate: string): number {
   const ageMs = Date.now() - new Date(createdDate).getTime();
   const ageDays = ageMs / (24 * 60 * 60 * 1000);
@@ -148,7 +139,7 @@ async function commentUrgencySignal(source: TaskSource, ref: string, text: strin
   }
 }
 
-/** Same override rule teamsMessageUrgency applies to its recency baseline: 'urgent' forces the max, 'soon' guarantees at least a 4. */
+/** Same override rule messageUrgency applies to its recency baseline: 'urgent' forces the max, 'soon' guarantees at least a 4. */
 function withUrgencySignal(base: number, signal: UrgencySignal | null): number {
   if (signal === 'urgent') return 5;
   if (signal === 'soon') return Math.max(base, 4);
@@ -338,7 +329,7 @@ export async function syncTeamsMessages(): Promise<void> {
       url: null,
       dueDate: null,
       importanceScore: withVipBump(directedAtMe ? 4 : 2, sender),
-      urgencyScore: teamsMessageUrgency(row.occurredAt, row.urgencySignal),
+      urgencyScore: messageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
       occurredAt: row.occurredAt,
     });
@@ -383,7 +374,7 @@ export async function syncEmailMessages(): Promise<void> {
       url: null,
       dueDate: null,
       importanceScore: withVipBump(needsReply ? 4 : 2, sender),
-      urgencyScore: emailMessageUrgency(row.occurredAt, row.urgencySignal),
+      urgencyScore: messageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
       occurredAt: row.occurredAt,
     });

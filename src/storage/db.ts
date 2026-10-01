@@ -536,26 +536,10 @@ db.exec(`
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_dev_cycles_ticket_active ON dev_cycles(ticket_key) WHERE status = 'active';
 
-  -- Plan-before-code: one row per plan attempt for a dev cycle. Refinement
-  -- supersedes with a new row (status 'superseded') rather than mutating in
-  -- place, so the history of what was proposed/rejected is never lost.
-  -- status: 'running'|'ready'|'approved'|'rejected'|'superseded'|'failed'.
-  CREATE TABLE IF NOT EXISTS dev_plans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dev_cycle_id INTEGER NOT NULL REFERENCES dev_cycles(id),
-    round INTEGER NOT NULL,
-    attempt INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'running',
-    plan TEXT,
-    seed_context TEXT,
-    feedback TEXT,
-    log TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    resolved_at TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_dev_plans_cycle ON dev_plans(dev_cycle_id);
+  -- dev_plans belonged to the retired plan-before-code draft chain; plans now
+  -- live on dev_cycles (plan_claude/plan_gemini/plan_merged). Nothing read or
+  -- wrote this table any more, so dropping it is the one non-additive step here.
+  DROP TABLE IF EXISTS dev_plans;
 
   -- Jenkins builds Speako has observed, one row per (job_path, build_number)
   -- so re-polling an already-seen build is an idempotent upsert. dev_cycle_id
@@ -672,7 +656,7 @@ if (!taskColumns.some((c) => c.name === 'occurred_at')) {
 const teamsMessageTriageColumns = db.prepare('PRAGMA table_info(teams_message_triage)').all() as { name: string }[];
 if (!teamsMessageTriageColumns.some((c) => c.name === 'urgency_signal')) {
   // A raw classification fact ('none'|'soon'|'urgent'), same status as
-  // directed_at_me — NOT a computed score. taskSync.ts's teamsMessageUrgency
+  // directed_at_me — NOT a computed score. taskSync.ts's messageUrgency
   // combines this with message recency live on every sync, matching this
   // table's existing "never store a priority score, only the facts behind
   // it" convention.

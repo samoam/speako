@@ -34,7 +34,7 @@ export async function createTicketBranchWorktree(repoPath: string, branch: strin
 /**
  * Adds a second worktree off a branch that already exists (created by
  * createTicketBranchWorktree above) — used by the Jira-implement pipeline to
- * give Gemini CLI its own worktree on the same branch as Claude's, so the two
+ * give Antigravity its own worktree on the same branch as Claude's, so the two
  * agents implement the same approved plan independently without either one
  * seeing the other's in-progress edits.
  *

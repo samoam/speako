@@ -504,5 +504,3 @@ export const config = {
     return num('prePrMaxChangedLines', 'PRE_PR_MAX_CHANGED_LINES', 400);
   },
 };
-
-export type SpeakoConfig = typeof config;

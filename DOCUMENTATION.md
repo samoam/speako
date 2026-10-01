@@ -31,7 +31,7 @@ Every feature that costs real API money or uploads real audio is **explicitly tr
 Features that only process text already visible/stored run **automatically while recording**, since an "analyze after the fact" button wouldn't serve their purpose:
 - Sentiment scoring, trigger detection → suggestions, the meeting-state rolling summary, the live waveform, RAG indexing (on session stop).
 
-Almost every automatic feature has its own `.env` toggle (`SENTIMENT_ENABLED`, `TRIGGER_DETECTION_ENABLED`, `RAG_ENABLED`, `LIVE_QA_ENABLED`, `MEETING_STATE_ENABLED`, `WAVEFORM_ENABLED`, `PREP_ENABLED`, `CALENDAR_IMPORT_ENABLED`) plus a per-session "heavy features" checklist in the New Session modal, so any one of them can be turned off without losing the rest.
+Almost every automatic feature has its own `.env` toggle (`SENTIMENT_ENABLED`, `TRIGGER_DETECTION_ENABLED`, `RAG_ENABLED`, `LIVE_QA_ENABLED`, `MEETING_STATE_ENABLED`, `WAVEFORM_ENABLED`, `CALENDAR_IMPORT_ENABLED`) plus a per-session "heavy features" checklist in the New Session modal, so any one of them can be turned off without losing the rest.
 
 ### Tool gating (`activeTools`)
 

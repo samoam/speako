@@ -33,10 +33,6 @@ onSettingsChanged(() => {
   mcpClient = null;
 });
 
-export function isJenkinsTestJobConfigured(): boolean {
-  return isJenkinsConfigured() && !!config.jenkinsTestJob;
-}
-
 /** The parsed `result` of one tool call; null when Jenkins reports nothing found. */
 async function callJenkinsTool(name: string, args: Record<string, unknown>): Promise<any | null> {
   const response = await getClient().callTool(name, args);

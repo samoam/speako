@@ -123,7 +123,7 @@ export function appendPrReviewLog(id: number, message: string): void {
   db.prepare('UPDATE pr_review_requests SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
 }
 
-/** Seeds the full step list as 'pending' right after the request is created — server.ts's buildPrReviewPhases decides which steps apply (e.g. the merge step only when Gemini CLI review is enabled) before the run actually starts, so the UI can render the whole planned pipeline immediately rather than steps popping in one at a time as they're reached. */
+/** Seeds the full step list as 'pending' right after the request is created — server.ts's buildPrReviewPhases decides which steps apply (e.g. the merge step only when the Antigravity second opinion is available) before the run actually starts, so the UI can render the whole planned pipeline immediately rather than steps popping in one at a time as they're reached. */
 export function initPrReviewPhases(id: number, phases: PrReviewPhase[]): void {
   db.prepare('UPDATE pr_review_requests SET phases = ? WHERE id = ?').run(JSON.stringify(phases), id);
 }

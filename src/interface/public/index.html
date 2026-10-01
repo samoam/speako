@@ -66,13 +66,13 @@
     #chatMuteBtn.muted { color: var(--rec); background: rgba(240,104,104,0.12); }
 
     /* ---------- Modals (settings, new session, session tools) ---------- */
-    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #extActionOverlay, #reviewQueueOverlay, #peopleOverlay, #taskEditOverlay, #plateAddOverlay {
+    #settingsOverlay, #newSessionOverlay, #sessionToolsOverlay, #insightsOverlay, #calendarOverlay, #logsOverlay, #reviewQueueOverlay, #peopleOverlay, #taskEditOverlay, #plateAddOverlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100;
     }
-    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #extActionOverlay[hidden], #reviewQueueOverlay[hidden], #peopleOverlay[hidden], #taskEditOverlay[hidden], #plateAddOverlay[hidden] { display: none; }
+    #settingsOverlay[hidden], #newSessionOverlay[hidden], #sessionToolsOverlay[hidden], #insightsOverlay[hidden], #calendarOverlay[hidden], #logsOverlay[hidden], #reviewQueueOverlay[hidden], #peopleOverlay[hidden], #taskEditOverlay[hidden], #plateAddOverlay[hidden] { display: none; }
     #plateAddModal { max-width: 480px; width: 480px; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-    #settingsModal, #insightsModal, #extActionModal { width: 640px; }
+    #settingsModal, #insightsModal { width: 640px; }
     #taskEditModal { max-width: 340px; width: 340px; }
     #plateAddForm { display: flex; flex-direction: column; gap: 0.5rem; }
     #plateAddForm label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; color: var(--muted); }
@@ -269,10 +269,6 @@
     .plate-task-edit-panel { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem; background: #1c1c1f; border: 1px solid var(--border); border-radius: 6px; }
     .plate-task-edit-panel label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.76rem; color: var(--muted); flex-wrap: wrap; }
     .plate-task-edit-panel select, .plate-task-edit-panel input[type="date"] { font-size: 0.78rem; background: #17171a; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.4rem; }
-    .plate-task-draft-toggle { margin-top: 0.35rem; background: none; border: none; color: var(--accent, #7aa2ff); font-size: 0.76rem; cursor: pointer; padding: 0; }
-    .plate-task-draft { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.35rem; }
-    .plate-task-draft textarea { width: 100%; resize: vertical; font-size: 0.8rem; background: #17171a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem; }
-    .plate-task-draft-actions { display: flex; gap: 0.4rem; }
     .plate-task-dismiss, .plate-task-edit-inline-btn { flex-shrink: 0; }
     .plate-review-btn, .plate-prep-btn { margin-top: 0.35rem; }
     .task-detail-draft-section { margin-top: 0.8rem; padding: 0.8rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.5rem; }
@@ -411,7 +407,7 @@
     .jira-implement-empty-step { color: var(--muted); font-size: 0.85rem; padding: 1rem 0; }
     .jira-implement-refine-row input { flex: 1; background: #17171a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.82rem; }
     #taskDetailPrReviewRecommendation.rec-comment { background: rgba(255,255,255,0.08); color: var(--muted); }
-    /* Severity badges — used both on finding cards and as diff gutter markers (see .pr-diff-gutter-marker below). */
+    /* Severity badges on finding cards. */
     .pr-finding-severity { flex-shrink: 0; display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; padding: 0.15rem 0.45rem; border-radius: 4px; min-width: 4.5em; text-align: center; }
     .pr-finding-severity-blocker { background: rgba(220,80,80,0.22); color: #f0a3a3; }
     .pr-finding-severity-major { background: rgba(230,150,60,0.2); color: #f0bd7f; }
@@ -454,7 +450,6 @@
     .pr-diff-marker.REMOVED { color: #e08a8a; }
     .pr-diff-add-comment { visibility: hidden; flex-shrink: 0; width: 1.6em; text-align: center; cursor: pointer; color: var(--accent); }
     .pr-diff-code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 0.8rem; }
-    .pr-diff-gutter-marker { flex-shrink: 0; align-self: center; cursor: pointer; margin-right: 0.3rem; }
     .pr-diff-annotation-row { padding: 0.5rem 0.8rem 0.5rem 4.2rem; border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); background: #17171a; }
     .pr-diff-finding-card { display: flex; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem; }
     .pr-diff-finding-card .pr-finding-comment-text { flex: 1; min-width: 0; font-size: 0.84rem; line-height: 1.4; }
@@ -1003,7 +998,6 @@
     #actionItemsAddForm input[name="owner"] { width: 140px; }
     #actionItemsAddForm input[name="dueDate"] { width: 160px; }
     .ai-external-ref { font-size: 0.78rem; color: var(--ok); }
-    #extActionBody { display: flex; flex-direction: column; gap: 0.6rem; }
     .ext-mode-toggle { display: flex; gap: 1.2rem; margin-bottom: 0.4rem; font-size: 0.85rem; }
     .ext-mode-fields { display: flex; flex-direction: column; gap: 0.5rem; }
     .ext-mode-fields[hidden] { display: none; }
@@ -1012,8 +1006,6 @@
       padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
       background: #1f1f23; color: var(--text); font: inherit; font-size: 0.85rem; resize: vertical;
     }
-    #extActionError { color: var(--rec); font-size: 0.82rem; padding: 0 1.25rem 0.5rem; }
-    #extActionAiStatus { color: var(--muted); font-size: 0.8rem; padding: 0.6rem 1.25rem 0; }
     .cc-cell { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; min-width: 160px; }
     .cc-cell button {
       font-size: 0.76rem; padding: 0.25rem 0.55rem; font-family: inherit; border-radius: 6px;
@@ -1163,7 +1155,7 @@
     <div id="mainHeader">
       <div id="mainHeaderText">
         <h2 id="mainTitle" contenteditable="true" spellcheck="false">No session selected</h2>
-        <div id="mainMeta">Start a new session or pick one from the list</div>
+        <div id="mainMeta">Start a new session or open one from Sessions</div>
       </div>
       <canvas id="waveformCanvas" title="Live audio input — confirms capture is active"></canvas>
       <div id="mainHeaderActions">
@@ -1753,22 +1745,6 @@
     <div id="dashboardBoard"></div>
   </div>
 
-  <div id="extActionOverlay" hidden>
-    <div id="extActionModal" class="modal">
-      <div class="modal-header">
-        <h2 id="extActionTitle">Jira</h2>
-        <button id="extActionModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
-      </div>
-      <div id="extActionAiStatus" hidden></div>
-      <div class="modal-body" id="extActionBody"></div>
-      <div id="extActionError" hidden></div>
-      <div class="modal-footer">
-        <button id="extActionCancelBtn" class="tool-btn" type="button">Cancel</button>
-        <button id="extActionSubmitBtn" class="tool-btn" type="button">Submit</button>
-      </div>
-    </div>
-  </div>
-
   <!-- ---------- Draft Panel: the generic draft -> refine -> approve -> execute -> redo gate (src/drafts/) — a full main-frame view, like Dashboard/Sessions/PR Review, not a modal ---------- -->
   <div id="draftView">
     <div id="draftModal" class="modal">
@@ -2213,14 +2189,6 @@
     const prDiffViewer = document.getElementById('taskDetailPrDiffViewer');
     const prDiffEmpty = document.getElementById('taskDetailPrDiffEmpty');
     const prReviewRedoBtn = document.getElementById('taskDetailPrReviewRedoBtn');
-    const extActionOverlay = document.getElementById('extActionOverlay');
-    const extActionModalClose = document.getElementById('extActionModalClose');
-    const extActionTitle = document.getElementById('extActionTitle');
-    const extActionAiStatus = document.getElementById('extActionAiStatus');
-    const extActionBody = document.getElementById('extActionBody');
-    const extActionError = document.getElementById('extActionError');
-    const extActionCancelBtn = document.getElementById('extActionCancelBtn');
-    const extActionSubmitBtn = document.getElementById('extActionSubmitBtn');
     const draftView = document.getElementById('draftView');
     const taskDetailView = document.getElementById('taskDetailView');
     const taskDetailBackBtn = document.getElementById('taskDetailBackBtn');
@@ -4045,13 +4013,6 @@
       logEntries = [];
       renderLogsList();
     });
-
-    extActionModalClose.addEventListener('click', closeExtActionDialog);
-    extActionCancelBtn.addEventListener('click', closeExtActionDialog);
-    extActionOverlay.addEventListener('click', (e) => {
-      if (e.target === extActionOverlay) closeExtActionDialog();
-    });
-    extActionSubmitBtn.addEventListener('click', submitExtActionDialog);
 
     // ---------- Dashboard (formerly "My Plate") ----------
 
@@ -7893,146 +7854,6 @@
       }
     }
 
-    // ---------- Jira/Confluence "create or update" dialog ----------
-
-    let extActionContext = null; // { item, tool: 'jira' | 'confluence' }
-
-    function detectJiraKey(text) {
-      const m = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/);
-      return m ? m[0] : '';
-    }
-
-    function extModeFieldsHtml(mode, activeMode, html) {
-      return `<div class="ext-mode-fields" data-mode="${mode}" ${mode !== activeMode ? 'hidden' : ''}>${html}</div>`;
-    }
-
-    function jiraDialogBodyHtml(item) {
-      const detectedKey = detectJiraKey(item.description);
-      const activeMode = detectedKey ? 'update' : 'create';
-      const createHtml = `
-        <label>Project key</label><input name="projectKey" placeholder="e.g. PROJ" />
-        <label>Issue type</label><input name="issueType" value="Task" placeholder="Task / Bug / Story / Epic" />
-        <label>Summary</label><input name="summary" value="${escapeHtml(item.description)}" />
-        <label>Description (optional)</label><textarea name="description" rows="3"></textarea>
-      `;
-      const updateHtml = `
-        <label>Issue key</label><input name="issueKey" value="${escapeHtml(detectedKey)}" placeholder="e.g. PROJ-123" />
-        <label>Transition to status (optional)</label><input name="transition" placeholder="e.g. In Progress, Done" />
-        <label>Comment (optional)</label><textarea name="comment" rows="3">${escapeHtml(item.description)}</textarea>
-      `;
-      return `
-        <div class="ext-mode-toggle">
-          <label><input type="radio" name="extMode" value="create" ${activeMode === 'create' ? 'checked' : ''}> Create new issue</label>
-          <label><input type="radio" name="extMode" value="update" ${activeMode === 'update' ? 'checked' : ''}> Update existing issue</label>
-        </div>
-        ${extModeFieldsHtml('create', activeMode, createHtml)}
-        ${extModeFieldsHtml('update', activeMode, updateHtml)}
-      `;
-    }
-
-    function confluenceDialogBodyHtml(item) {
-      const title = escapeHtml(item.description.slice(0, 120));
-      const content = escapeHtml(item.description);
-      const createHtml = `
-        <label>Space key</label><input name="spaceKey" placeholder="e.g. DEV" />
-        <label>Title</label><input name="title" value="${title}" />
-        <label>Content (markdown)</label><textarea name="content" rows="4">${content}</textarea>
-        <label>Parent page ID (optional)</label><input name="parentId" />
-      `;
-      const updateHtml = `
-        <label>Page ID</label><input name="pageId" placeholder="e.g. 12345678" />
-        <label>Title</label><input name="title" value="${title}" />
-        <label>Content (markdown)</label><textarea name="content" rows="4">${content}</textarea>
-      `;
-      return `
-        <div class="ext-mode-toggle">
-          <label><input type="radio" name="extMode" value="create" checked> Create new page</label>
-          <label><input type="radio" name="extMode" value="update"> Update existing page</label>
-        </div>
-        ${extModeFieldsHtml('create', 'create', createHtml)}
-        ${extModeFieldsHtml('update', 'create', updateHtml)}
-      `;
-    }
-
-    function openExtActionDialog(item, tool) {
-      extActionContext = { item, tool };
-      extActionTitle.textContent = tool === 'jira' ? 'Jira' : 'Confluence';
-      extActionError.hidden = true;
-      extActionAiStatus.hidden = true;
-      extActionBody.innerHTML = tool === 'jira' ? jiraDialogBodyHtml(item) : confluenceDialogBodyHtml(item);
-      extActionBody.querySelectorAll('input[name="extMode"]').forEach((radio) => {
-        radio.addEventListener('change', () => {
-          extActionBody.querySelectorAll('.ext-mode-fields').forEach((div) => {
-            div.hidden = div.dataset.mode !== radio.value;
-          });
-        });
-      });
-      // Fields the user starts typing into are left alone once the AI
-      // suggestion below comes back — never overwrite something they're
-      // already editing.
-      extActionBody.querySelectorAll('input, textarea').forEach((el) => {
-        el.addEventListener('input', () => { el.dataset.dirty = '1'; }, { once: true });
-      });
-      extActionOverlay.hidden = false;
-      loadAiFieldSuggestion(item, tool);
-    }
-
-    function closeExtActionDialog() {
-      extActionOverlay.hidden = true;
-      extActionContext = null;
-    }
-
-    function setExtFieldIfClean(name, value) {
-      if (!value) return;
-      extActionBody.querySelectorAll(`[name="${name}"]`).forEach((el) => {
-        if (!el.dataset.dirty) el.value = value;
-      });
-    }
-
-    // Fires once per dialog open — drafts Jira/Confluence fields from the
-    // action item's description via Gemini (src/summarization/
-    // actionItemDrafts.ts) so the user reviews/edits an AI-written starting
-    // point instead of a blank or copy-pasted-verbatim one. Never itself
-    // decides create-vs-update mode, and never submits anything — see
-    // NOTES.md.
-    async function loadAiFieldSuggestion(item, tool) {
-      extActionAiStatus.hidden = false;
-      extActionAiStatus.textContent = 'Asking AI for suggestions…';
-      const stillRelevant = () => extActionContext && extActionContext.item.id === item.id && extActionContext.tool === tool;
-      try {
-        const res = await fetch(`/api/action-items/${item.id}/${tool}/suggest`);
-        const data = await res.json();
-        if (!stillRelevant()) return;
-        if (!res.ok) {
-          extActionAiStatus.textContent = data.error || 'AI suggestion failed — fill in manually.';
-          return;
-        }
-        if (tool === 'jira') {
-          setExtFieldIfClean('issueType', data.issueType);
-          setExtFieldIfClean('summary', data.summary);
-          setExtFieldIfClean('description', data.description);
-          setExtFieldIfClean('transition', data.transition);
-          setExtFieldIfClean('comment', data.comment);
-        } else {
-          setExtFieldIfClean('title', data.title);
-          setExtFieldIfClean('content', data.content);
-        }
-        extActionAiStatus.hidden = true;
-      } catch {
-        if (stillRelevant()) extActionAiStatus.textContent = 'AI suggestion failed — fill in manually.';
-      }
-    }
-
-    function activeExtModeFields() {
-      const mode = extActionBody.querySelector('input[name="extMode"]:checked').value;
-      return { mode, fields: extActionBody.querySelector(`.ext-mode-fields[data-mode="${mode}"]`) };
-    }
-
-    function fieldValue(fields, name) {
-      const el = fields.querySelector(`[name="${name}"]`);
-      return el ? el.value.trim() : '';
-    }
-
     // ---------- Draft Panel: generic draft -> refine -> approve -> execute -> redo gate (src/drafts/) ----------
 
     let draftPanelState = null; // { draft, revisions }
@@ -8045,8 +7866,6 @@
       jira_action: 'Jira',
       confluence_page: 'Confluence',
       confluence_dev_cycle_update: 'Document (Confluence)',
-      git_branch_create: 'Start dev cycle: branch',
-      dev_plan: 'Dev cycle: plan',
       bitbucket_pr_comment: 'PR review comment',
       pr_review_decision: 'PR review decision',
       pr_open: 'Open PR',
@@ -8132,47 +7951,6 @@
             const mode = modeEl.value;
             const field = (name) => { const el = draftContentBody.querySelector(`.ext-mode-fields[data-mode="${mode}"] [name="${name}"]`); return el ? el.value.trim() : ''; };
             return { mode, spaceKey: field('spaceKey'), parentId: field('parentId'), pageId: field('pageId'), title: field('title'), content: field('content') };
-          },
-        };
-      }
-      if (kind === 'git_branch_create') {
-        return {
-          render(content) {
-            return `
-              <label>Branch name</label><input name="branchName" value="${escapeHtml(content.branchName || '')}" />
-              <label>Base branch</label><input name="baseBranch" value="${escapeHtml(content.baseBranch || 'main')}" />
-            `;
-          },
-          collect() {
-            const field = (name) => { const el = draftContentBody.querySelector(`[name="${name}"]`); return el ? el.value.trim() : ''; };
-            return { branchName: field('branchName'), baseBranch: field('baseBranch') };
-          },
-        };
-      }
-      if (kind === 'dev_plan') {
-        return {
-          // Read-only structured summary — a plan's shape (files/tests/risks
-          // arrays) doesn't lend itself to inline field editing the way a
-          // short Jira/Confluence form does; go/no-go is the gate here, not
-          // per-field edits. Refine via chat still fully applies.
-          render(content) {
-            const list = (items, render) => (items && items.length ? `<ul>${items.map(render).join('')}</ul>` : '<p><em>None.</em></p>');
-            return `
-              <p><strong>Understanding:</strong> ${escapeHtml(content.understanding || '')}</p>
-              <p><strong>Approach:</strong> ${escapeHtml(content.approach || '')}</p>
-              <p><strong>Estimated size:</strong> ${escapeHtml(content.estimatedSize || '')}</p>
-              <p><strong>Files:</strong></p>
-              ${list(content.files, (f) => `<li><code>${escapeHtml(f.path)}</code> (${escapeHtml(f.action)}) — ${escapeHtml(f.why)}</li>`)}
-              <p><strong>Tests:</strong></p>
-              ${list(content.tests, (t) => `<li>${escapeHtml(t)}</li>`)}
-              <p><strong>Risks:</strong></p>
-              ${list(content.risks, (r) => `<li><strong>${escapeHtml(r.severity)}:</strong> ${escapeHtml(r.risk)} — ${escapeHtml(r.mitigation)}</li>`)}
-              <p><strong>Open questions:</strong></p>
-              ${list(content.openQuestions, (q) => `<li>${escapeHtml(q)}</li>`)}
-            `;
-          },
-          collect() {
-            return null; // never treated as manually edited — refine via chat instead
           },
         };
       }
@@ -8612,37 +8390,6 @@
     draftApproveBtn.addEventListener('click', submitDraftApprove);
     draftDiscardBtn.addEventListener('click', submitDraftDiscard);
     draftRedoBtn.addEventListener('click', submitDraftRedo);
-
-    async function submitExtActionDialog() {
-      const { item, tool } = extActionContext;
-      const { mode, fields } = activeExtModeFields();
-      const body =
-        tool === 'jira'
-          ? mode === 'create'
-            ? { mode, projectKey: fieldValue(fields, 'projectKey'), issueType: fieldValue(fields, 'issueType'), summary: fieldValue(fields, 'summary'), description: fieldValue(fields, 'description') }
-            : { mode, issueKey: fieldValue(fields, 'issueKey'), transition: fieldValue(fields, 'transition'), comment: fieldValue(fields, 'comment') }
-          : mode === 'create'
-            ? { mode, spaceKey: fieldValue(fields, 'spaceKey'), title: fieldValue(fields, 'title'), content: fieldValue(fields, 'content'), parentId: fieldValue(fields, 'parentId') }
-            : { mode, pageId: fieldValue(fields, 'pageId'), title: fieldValue(fields, 'title'), content: fieldValue(fields, 'content') };
-      extActionSubmitBtn.disabled = true;
-      extActionError.hidden = true;
-      try {
-        const res = await fetch(`/api/action-items/${item.id}/${tool}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Request failed.');
-        closeExtActionDialog();
-        renderActionItems(currentActionItems.map((i) => (i.id === data.id ? data : i)));
-      } catch (err) {
-        extActionError.textContent = err.message;
-        extActionError.hidden = false;
-      } finally {
-        extActionSubmitBtn.disabled = false;
-      }
-    }
 
     // Browser Notification API only — no server/OS-level reminder exists, so
     // this only fires while the tab stays open. Best-effort at 9am local time
@@ -9606,9 +9353,6 @@
           msg.type === 'dev-cycle-plan-ready' ||
           msg.type === 'dev-cycle-merge-ready' ||
           msg.type === 'dev-cycle-updated' ||
-          msg.type === 'dev-cycle-implement-log' ||
-          msg.type === 'dev-cycle-implement-ready' ||
-          msg.type === 'dev-cycle-implement-failed' ||
           msg.type === 'jenkins-build-updated' ||
           msg.type === 'jenkins-build-failed' ||
           msg.type === 'jenkins-build-recovered' ||
