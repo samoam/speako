@@ -17,6 +17,7 @@ import {
   appendPrReviewLog,
   markPrReviewReady,
   markPrReviewFailed,
+  failInterruptedPrReviews,
   initPrReviewPhases,
   setPrReviewPhase,
 } from '../src/storage/prReviewRequestRepository';
@@ -159,4 +160,15 @@ test('setPrReviewPhase: is a no-op (does not throw) for an unknown key', () => {
   initPrReviewPhases(request.id, [{ key: 'context', label: 'Gather context', status: 'pending', detail: null }]);
   assert.doesNotThrow(() => setPrReviewPhase(request.id, 'nonexistent', 'done'));
   assert.deepEqual(getPrReviewRequest(request.id)!.phases, [{ key: 'context', label: 'Gather context', status: 'pending', detail: null }]);
+});
+
+test('failInterruptedPrReviews: fails every still-running review (orphaned by a restart) and leaves finished ones alone', () => {
+  const running = createPrReviewRequest({ taskId: seedTask('restart-running'), repoName: 'officercc', branchName: 'feature/x' });
+  const done = createPrReviewRequest({ taskId: seedTask('restart-done'), repoName: 'officercc', branchName: 'feature/y' });
+  markPrReviewReady(done.id, { summary: 's', recommendation: 'approve', findings: [] });
+  const reset = failInterruptedPrReviews('Interrupted — Speako restarted while this review was running.');
+  assert.ok(reset >= 1);
+  assert.equal(getPrReviewRequest(running.id)!.status, 'failed');
+  assert.match(getPrReviewRequest(running.id)!.error ?? '', /restarted/);
+  assert.equal(getPrReviewRequest(done.id)!.status, 'ready');
 });

@@ -184,6 +184,7 @@ import {
   appendPrReviewLog,
   markPrReviewReady,
   markPrReviewFailed,
+  failInterruptedPrReviews,
   initPrReviewPhases,
   setPrReviewPhase,
   PrReviewPhase,
@@ -2734,6 +2735,9 @@ export class InterfaceServer {
       }
       process.exit(1);
     });
+
+    const interruptedReviews = failInterruptedPrReviews('Interrupted — Speako restarted while this review was running.');
+    if (interruptedReviews) console.log(`[pr-review] marked ${interruptedReviews} interrupted review(s) as failed`);
 
     this.httpServer.listen(config.httpPort, () => {
       console.log(`Live transcript view: http://localhost:${config.httpPort}`);

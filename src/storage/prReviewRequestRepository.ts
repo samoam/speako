@@ -152,6 +152,11 @@ export function markPrReviewReady(id: number, review: StructuredReview): void {
   db.prepare("UPDATE pr_review_requests SET status = 'ready', review = ?, resolved_at = datetime('now') WHERE id = ?").run(JSON.stringify(sanitizeStructuredReview(review)), id);
 }
 
+/** At startup every 'running' row is orphaned — the process that ran it is gone — so they're failed up front rather than showing "Running" (with no way to retry) until someone happens to start a new review. Returns how many were reset. */
+export function failInterruptedPrReviews(error: string): number {
+  return db.prepare("UPDATE pr_review_requests SET status = 'failed', error = ?, resolved_at = datetime('now') WHERE status = 'running'").run(error).changes;
+}
+
 export function markPrReviewFailed(id: number, error: string): void {
   db.prepare("UPDATE pr_review_requests SET status = 'failed', error = ?, resolved_at = datetime('now') WHERE id = ?").run(error, id);
 }
