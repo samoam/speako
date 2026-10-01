@@ -5,6 +5,10 @@ import { createDevCycle, setDevCycleBranch, setDevCycleJenkinsJob, getDevCycle }
 import * as devCycleRepositoryModule from '../src/storage/devCycleRepository';
 import * as jenkinsClientModule from '../src/integrations/jenkinsClient';
 import { pollJenkinsBuilds } from '../src/dev/jenkinsMonitor';
+import * as jenkinsMcpModule from '../src/integrations/jenkinsMcp';
+import * as buildRequestRepositoryModule from '../src/storage/jenkinsBuildRequestRepository';
+import { createJenkinsBuildRequest, getJenkinsBuildRequest } from '../src/storage/jenkinsBuildRequestRepository';
+import { upsertJenkinsBuild, getJenkinsBuildByJobAndNumber } from '../src/storage/jenkinsBuildRepository';
 
 function seedCycleWithBranch(ticketKey: string, repoName = 'officercc') {
   const cycle = createDevCycle({ ticketKey, repoName, repoPath: 'C:\\repo', branchType: 'feature', lifecycleState: 'In Progress' });
@@ -159,5 +163,104 @@ test('pollJenkinsBuilds: polling the same unchanged build twice broadcasts nothi
   } finally {
     scopeSpy.mock.restore();
     lastBuildSpy.mock.restore();
+  }
+});
+
+/** Same isolation reason as onlyCycle: open build requests are global across the shared in-memory DB. */
+function onlyRequests(...ids: number[]) {
+  return mock.method(buildRequestRepositoryModule, 'getOpenJenkinsBuildRequests', () => ids.map((id) => getJenkinsBuildRequest(id)!));
+}
+
+function sharedJobRequest(ticketKey: string, queueId: number) {
+  const cycle = seedCycleWithBranch(ticketKey, 'no-folder-mapping');
+  const request = createJenkinsBuildRequest({ devCycleId: cycle.id, jobPath: '/job/Branch-Tests', jobFullName: 'Branch-Tests', branchName: cycle.branchName!, queueId });
+  return { cycle, request };
+}
+
+test('pollJenkinsBuilds: a queued shared-job run is followed to its own build number and recorded while building', async () => {
+  configureJenkins();
+  const { cycle, request } = sharedJobRequest('PROJ-20', 900);
+  const scopeSpy = onlyCycle(cycle);
+  const requestsSpy = onlyRequests(request.id);
+  const queueSpy = mock.method(jenkinsMcpModule, 'getQueueState', async (id: number) => {
+    assert.equal(id, 900);
+    return { state: 'started', buildNumber: 31 };
+  });
+  const buildSpy = mock.method(jenkinsMcpModule, 'getBuildByNumber', async (job: string, n: number) => {
+    assert.deepEqual([job, n], ['Branch-Tests', 31]);
+    return { jobPath: '/job/Branch-Tests', number: 31, result: null, building: true, timestamp: Date.now(), durationMs: 0, url: 'https://jenkins/31', displayName: '#31' };
+  });
+  const events: any[] = [];
+  try {
+    await pollJenkinsBuilds((e) => events.push(e));
+    assert.equal(getJenkinsBuildRequest(request.id)!.status, 'started');
+    assert.equal(getJenkinsBuildRequest(request.id)!.buildNumber, 31);
+    const row = getJenkinsBuildByJobAndNumber('/job/Branch-Tests', 31)!;
+    assert.equal(row.building, true);
+    assert.equal(row.devCycleId, cycle.id);
+    assert.equal(row.branchName, cycle.branchName);
+    assert.ok(events.some((e) => e.type === 'jenkins-build-updated' && e.buildNumber === 31));
+  } finally {
+    scopeSpy.mock.restore();
+    requestsSpy.mock.restore();
+    queueSpy.mock.restore();
+    buildSpy.mock.restore();
+  }
+});
+
+test('pollJenkinsBuilds: a failed shared-job run is classified using only the same branch\'s earlier builds', async () => {
+  configureJenkins();
+  const { cycle, request } = sharedJobRequest('PROJ-21', 901);
+  // Another branch's build on the same shared job — must NOT be used as a flaky-comparison build.
+  upsertJenkinsBuild({ devCycleId: null, jobPath: '/job/Branch-Tests', branchName: 'feature/OTHER-1-z', buildNumber: 40, result: 'FAILURE', building: false });
+  // This branch's own earlier build — the one comparison build that should be used.
+  upsertJenkinsBuild({ devCycleId: cycle.id, jobPath: '/job/Branch-Tests', branchName: cycle.branchName!, buildNumber: 38, result: 'SUCCESS', building: false });
+  const scopeSpy = onlyCycle(cycle);
+  const requestsSpy = onlyRequests(request.id);
+  const queueSpy = mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'started', buildNumber: 41 }));
+  const buildSpy = mock.method(jenkinsMcpModule, 'getBuildByNumber', async () => ({
+    jobPath: '/job/Branch-Tests', number: 41, result: 'UNSTABLE', building: false, timestamp: Date.now(), durationMs: 1000, url: 'https://jenkins/41', displayName: '#41',
+  }));
+  const reportedBuilds: number[] = [];
+  const consoleSpy = mock.method(jenkinsClientModule, 'getConsoleTail', async () => 'Tests run: 10, Failures: 1');
+  const reportSpy = mock.method(jenkinsClientModule, 'getTestReport', async (_job: string, n: number) => {
+    reportedBuilds.push(n);
+    return { total: 10, failCount: n === 41 ? 1 : 0, skipCount: 0, failures: n === 41 ? [{ className: 'a.B', name: 't', errorDetails: 'boom', errorStackTrace: null, age: 1 }] : [] };
+  });
+  const stagesSpy = mock.method(jenkinsClientModule, 'getPipelineStages', async () => []);
+  const events: any[] = [];
+  try {
+    const result = await pollJenkinsBuilds((e) => events.push(e));
+    assert.equal(result.newFailures, 1);
+    assert.deepEqual(reportedBuilds.sort((a, b) => a - b), [38, 41]);
+    assert.equal(getJenkinsBuildRequest(request.id)!.status, 'finished');
+    assert.ok(getJenkinsBuildByJobAndNumber('/job/Branch-Tests', 41)!.classification);
+    assert.ok(events.some((e) => e.type === 'jenkins-build-failed' && e.buildNumber === 41 && e.devCycleId === cycle.id));
+  } finally {
+    scopeSpy.mock.restore();
+    requestsSpy.mock.restore();
+    queueSpy.mock.restore();
+    buildSpy.mock.restore();
+    consoleSpy.mock.restore();
+    reportSpy.mock.restore();
+    stagesSpy.mock.restore();
+  }
+});
+
+test('pollJenkinsBuilds: a run Jenkins dropped from its queue is marked lost, not left open forever', async () => {
+  configureJenkins();
+  const { cycle, request } = sharedJobRequest('PROJ-22', 902);
+  const scopeSpy = onlyCycle(cycle);
+  const requestsSpy = onlyRequests(request.id);
+  const queueSpy = mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'gone' }));
+  const events: any[] = [];
+  try {
+    await pollJenkinsBuilds((e) => events.push(e));
+    assert.equal(getJenkinsBuildRequest(request.id)!.status, 'lost');
+    assert.ok(events.some((e) => e.type === 'jenkins-build-request-updated' && e.status === 'lost'));
+  } finally {
+    scopeSpy.mock.restore();
+    requestsSpy.mock.restore();
+    queueSpy.mock.restore();
   }
 });

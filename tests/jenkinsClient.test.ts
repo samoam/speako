@@ -1,6 +1,6 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { jobPathFor, isJenkinsConfigured } from '../src/integrations/jenkinsClient';
+import { jobPathFor, isJenkinsConfigured, getTestReport } from '../src/integrations/jenkinsClient';
 import { updateSettings } from '../src/settingsStore';
 
 test.afterEach(() => updateSettings({ jenkinsUrl: '', jenkinsUser: '', jenkinsApiToken: '' }));
@@ -29,4 +29,27 @@ test('jobPathFor: encodes special characters in folder/branch segments', () => {
 
 test('jobPathFor: strips empty segments from a folder path with leading/trailing/double slashes', () => {
   assert.equal(jobPathFor('/Team//officercc/'), '/job/Team/job/officercc');
+});
+
+test('getTestReport: reads a Maven job\'s per-module childReports, not just top-level suites', async () => {
+  updateSettings({ jenkinsUrl: 'https://jenkins.example.com', jenkinsUser: 'u', jenkinsApiToken: 't' });
+  // Shape confirmed live on a real hudson.maven.MavenModuleSetBuild: no top-level suites at all.
+  const body = {
+    totalCount: 633,
+    failCount: 1,
+    skipCount: 2,
+    childReports: [
+      { result: { suites: [{ cases: [{ className: 'com.x.Ok', name: 'ok', status: 'PASSED', age: 0 }] }] } },
+      { result: { suites: [{ cases: [{ className: 'com.gti.cc.IntegrationTestSuite', name: 'com.gti.cc.IntegrationTestSuite', status: 'FAILED', errorDetails: 'boom', age: 2 }] }] } },
+    ],
+  };
+  const fetchSpy = mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  try {
+    const report = await getTestReport('/job/ETICK-9298', 4);
+    assert.equal(report!.failCount, 1);
+    assert.deepEqual(report!.failures.map((f) => [f.className, f.age]), [['com.gti.cc.IntegrationTestSuite', 2]]);
+    assert.match(String((fetchSpy.mock.calls[0].arguments as any[])[0]), /childReports/);
+  } finally {
+    fetchSpy.mock.restore();
+  }
 });

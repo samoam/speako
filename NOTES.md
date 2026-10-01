@@ -2010,3 +2010,34 @@ the value if disconnects are more/less frequent than expected.
   description/content defaults (`server.ts`) already fall back to the real
   action item description whenever the client sends nothing — there wasn't
   actually a validation gap there on closer inspection.
+
+## Jenkins over TLS: Node needs the Windows certificate store (`--use-system-ca`)
+
+- **Every Jenkins call from Speako was failing**, REST and MCP alike:
+  `automation.gtechna.net` resolves to an internal Acceo host whose
+  certificate chains to an internal CA. curl (schannel → Windows store)
+  connects fine; Node's own bundled CA list doesn't include it, so `fetch`
+  failed with `SELF_SIGNED_CERT_IN_CHAIN` (confirmed live, 2026-09-30). That,
+  plus no `JENKINS_JOB_FOLDERS` mapping, is why `jenkins_builds` had 0 rows.
+- **Fix:** `npm start` / `npm run dev` now run Node with `--use-system-ca`
+  (available since Node 22.15; this machine runs 22.18) — confirmed live that
+  `fetch` then reaches the server (403 unauthenticated root, i.e. TLS OK).
+  `NODE_EXTRA_CA_CERTS` would also work but must be set before the process
+  starts, which `.env` can't do. Don't "fix" this with
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` — that disables verification for every
+  host, not just this one.
+- **Jenkins MCP server** (`/mcp-server/mcp`, streamable HTTP) accepts Basic
+  auth with the same `JENKINS_USER` + `JENKINS_API_TOKEN` the REST client
+  uses — confirmed live (`whoAmI` → the user's full name); no password needs
+  storing. It exposes 19 tools (getBuild/getBuildLog/searchBuildLog,
+  getTestResults, getFlakyFailures, findJobsWithScmUrl, triggerBuild,
+  rebuildBuild, replayBuild, getJobs/getJob, ...). Responses are a text block
+  holding `{"message", "result", "status":"COMPLETED"}`; "not found" is
+  `status: COMPLETED` with no `result`, not an error. `getJobs` returned at
+  most 10 jobs per page even with a higher `limit`.
+- **Job layout doesn't match `findBranchJob`'s multibranch assumption:**
+  there are no per-branch jobs. Some older tickets have a copied Maven job
+  named after the ticket key (`ETICK-9298`, parameterized, no SCM block —
+  `getJobScm` returns nothing), recent tickets (ETICK-10173/10176/10230) have
+  none, and `findJobsWithScmUrl(officercc.git, branch)` returns
+  integration/template jobs rather than feature-branch builds.

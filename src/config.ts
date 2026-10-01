@@ -473,6 +473,21 @@ export const config = {
   get jenkinsJobFolders(): { name: string; folderPath: string }[] {
     return parseCodebaseLocalPaths(str('jenkinsJobFolders', 'JENKINS_JOB_FOLDERS', '')).map((p) => ({ name: p.name, folderPath: p.path }));
   },
+  /**
+   * One Jenkins job (full name, e.g. "Folder/Branch-Tests") that builds and
+   * tests whatever branch it's handed through a string build parameter — this
+   * Jenkins has no per-branch jobs (see NOTES.md), so every dev cycle's
+   * "Build & tests" run goes through this single job. A parameter rather than
+   * editing the job's branch setting per run: runs can overlap without one
+   * branch's run silently building another's code.
+   */
+  get jenkinsTestJob(): string {
+    return str('jenkinsTestJob', 'JENKINS_TEST_JOB', '');
+  },
+  /** The test job's string parameter holding the branch to check out (the job's Git branch spec should be `${BRANCH}` or `*\/${BRANCH}`). */
+  get jenkinsTestBranchParam(): string {
+    return str('jenkinsTestBranchParam', 'JENKINS_TEST_BRANCH_PARAM', 'BRANCH');
+  },
   get jenkinsPollMinutes(): number {
     return num('jenkinsPollMinutes', 'JENKINS_POLL_MINUTES', 10);
   },

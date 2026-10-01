@@ -9,6 +9,7 @@ import {
   setBuildClassification,
   markBuildNotified,
   getUnnotifiedFailures,
+  getCurrentFailingBuilds,
 } from '../src/storage/jenkinsBuildRepository';
 
 test('upsertJenkinsBuild: inserts a new (job_path, build_number) row', () => {
@@ -75,4 +76,16 @@ test('setBuildClassification / markBuildNotified / getUnnotifiedFailures', () =>
   // A SUCCESS build must never show up as an unnotified failure.
   const success = upsertJenkinsBuild({ jobPath: '/job/g', buildNumber: 1, result: 'SUCCESS', building: false });
   assert.ok(!getUnnotifiedFailures().some((b) => b.id === success.id));
+});
+
+test('getCurrentFailingBuilds: on a job shared by several branches, judges each branch by its own latest build', () => {
+  const job = `/job/shared-${Date.now()}`;
+  upsertJenkinsBuild({ jobPath: job, branchName: 'feature/A', buildNumber: 1, result: 'FAILURE', building: false });
+  upsertJenkinsBuild({ jobPath: job, branchName: 'feature/B', buildNumber: 2, result: 'SUCCESS', building: false });
+  upsertJenkinsBuild({ jobPath: job, branchName: 'feature/C', buildNumber: 3, result: 'FAILURE', building: false });
+  upsertJenkinsBuild({ jobPath: job, branchName: 'feature/C', buildNumber: 4, result: 'SUCCESS', building: false });
+
+  const failing = getCurrentFailingBuilds().filter((b) => b.jobPath === job);
+  // A is still red (B's newer green build on the same job must not hide it); C recovered.
+  assert.deepEqual(failing.map((b) => b.branchName), ['feature/A']);
 });

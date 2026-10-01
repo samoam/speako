@@ -13,7 +13,8 @@ const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/cli
 
 export type McpServerConfig =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
-  | { transport: 'http'; url: string; apiKey: string };
+  /** `authorization` overrides the default `Bearer <apiKey>` header — Jenkins' MCP server wants Basic auth. */
+  | { transport: 'http'; url: string; apiKey: string; authorization?: string };
 
 export interface McpTool {
   name: string;
@@ -44,7 +45,7 @@ export class McpServerClient {
       const transport =
         this.config.transport === 'http'
           ? new StreamableHTTPClientTransport(new URL(this.config.url), {
-              requestInit: { headers: { Authorization: `Bearer ${this.config.apiKey}` } },
+              requestInit: { headers: { Authorization: this.config.authorization ?? `Bearer ${this.config.apiKey}` } },
             })
           : new StdioClientTransport({
               command: this.config.command,

@@ -123,18 +123,39 @@ export function getUnnotifiedFailures(): JenkinsBuildRow[] {
   return rows.map(mapRow);
 }
 
-/** The LATEST build per job_path, filtered to those currently red — this is "what's failing right now," distinct from getUnnotifiedFailures (a live-broadcast dedup flag) which a task board can't use since it's cleared the moment a failure is first observed. Used by taskSync.ts's syncJenkins() to surface red builds on My Plate. */
+/**
+ * The LATEST build per (job_path, branch_name), filtered to those currently
+ * red — this is "what's failing right now," distinct from
+ * getUnnotifiedFailures (a live-broadcast dedup flag) which a task board
+ * can't use since it's cleared the moment a failure is first observed. Per
+ * branch, not per job: on the shared build-and-test job (config.jenkinsTestJob)
+ * every branch's builds land on one job_path, and one branch going red must
+ * not mask (or be masked by) another branch's newer green build. Used by
+ * taskSync.ts's syncJenkins() to surface red builds on My Plate.
+ */
 export function getCurrentFailingBuilds(): JenkinsBuildRow[] {
   const rows = db
     .prepare(
       `SELECT jb.* FROM jenkins_builds jb
        INNER JOIN (
-         SELECT job_path, MAX(build_number) AS max_build_number
+         SELECT job_path, COALESCE(branch_name, '') AS branch_key, MAX(build_number) AS max_build_number
          FROM jenkins_builds
-         GROUP BY job_path
-       ) latest ON jb.job_path = latest.job_path AND jb.build_number = latest.max_build_number
+         GROUP BY job_path, COALESCE(branch_name, '')
+       ) latest ON jb.job_path = latest.job_path AND COALESCE(jb.branch_name, '') = latest.branch_key AND jb.build_number = latest.max_build_number
        WHERE jb.result IN ('FAILURE', 'UNSTABLE')`
     )
     .all() as any[];
+  return rows.map(mapRow);
+}
+
+/** Newest first — the dev cycle's "Build & tests" tab history. */
+export function getBuildsForDevCycle(devCycleId: number, limit = 10): JenkinsBuildRow[] {
+  const rows = db.prepare('SELECT * FROM jenkins_builds WHERE dev_cycle_id = ? ORDER BY id DESC LIMIT ?').all(devCycleId, limit) as any[];
+  return rows.map(mapRow);
+}
+
+/** Same branch's earlier builds on a job — the flaky-vs-regression comparison set on the shared job, where the job's other recent builds are other branches. */
+export function getRecentBuildsForJobBranch(jobPath: string, branchName: string, limit: number): JenkinsBuildRow[] {
+  const rows = db.prepare('SELECT * FROM jenkins_builds WHERE job_path = ? AND branch_name = ? ORDER BY build_number DESC LIMIT ?').all(jobPath, branchName, limit) as any[];
   return rows.map(mapRow);
 }

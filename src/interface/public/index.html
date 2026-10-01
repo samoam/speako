@@ -745,6 +745,14 @@
 
     #summaryWrap, #actionItemsWrap, #overviewWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
+    .jenkins-run-list { list-style: none; padding: 0; margin: 0.8rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
+    .jenkins-run { padding: 0.5rem 0.7rem; border-radius: 6px; border-left: 3px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.03); font-size: 0.85rem; }
+    .jenkins-run-success { border-left-color: #7fd99a; }
+    .jenkins-run-failure, .jenkins-run-unstable { border-left-color: #e08a8a; }
+    .jenkins-run-building, .jenkins-run-queued { border-left-color: #8ab4f8; }
+    .jenkins-run-aborted, .jenkins-run-cancelled, .jenkins-run-lost { border-left-color: #d8c07a; }
+    .jenkins-run-meta { color: var(--muted); font-size: 0.78rem; }
+    .jenkins-run-summary { margin-top: 0.3rem; }
     #aiUsageBox { font-size: 0.8rem; }
     .ai-usage-totals { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-bottom: 0.6rem; color: var(--muted); }
     .ai-usage-totals strong { color: var(--text); }
@@ -1442,6 +1450,8 @@
             <div class="settings-field"><label>Username</label><input type="text" data-key="jenkinsUser" /></div>
             <div class="settings-field"><label>API token</label><input type="password" data-key="jenkinsApiToken" /></div>
             <div class="settings-field"><label>Job folders (codebase=folder/job/path, comma-separated)</label><input type="text" data-key="jenkinsJobFolders" /></div>
+            <div class="settings-field"><label>Build &amp; test job (full name, builds any branch)</label><input type="text" data-key="jenkinsTestJob" /></div>
+            <div class="settings-field"><label>Branch parameter name</label><input type="text" data-key="jenkinsTestBranchParam" /></div>
             <div class="settings-field"><label>Poll interval (minutes)</label><input type="number" data-key="jenkinsPollMinutes" /></div>
           </div>
         </fieldset>
@@ -1923,6 +1933,7 @@
               <button class="jira-implement-tab" data-tab="plan" type="button">Plan</button>
               <button class="jira-implement-tab" data-tab="diff" type="button">Diff</button>
               <button class="jira-implement-tab" data-tab="pr" type="button">Open PR</button>
+              <button class="jira-implement-tab" data-tab="tests" type="button">Build &amp; tests</button>
               <button class="jira-implement-tab" data-tab="docs" type="button">Document</button>
             </div>
             <div class="jira-implement-content">
@@ -1973,6 +1984,9 @@
               </div>
               <div class="jira-implement-tab-panel" id="jiraImplementDocsSection" hidden>
                 <div id="jiraImplementDocsBody"></div>
+              </div>
+              <div class="jira-implement-tab-panel" id="jiraImplementTestsSection" hidden>
+                <div id="jiraImplementTestsBody"></div>
               </div>
             </div>
           </div>
@@ -6213,6 +6227,40 @@
     const jiraImplementPrBody = document.getElementById('jiraImplementPrBody');
     const jiraImplementDocsSection = document.getElementById('jiraImplementDocsSection');
     const jiraImplementDocsBody = document.getElementById('jiraImplementDocsBody');
+    const jiraImplementTestsSection = document.getElementById('jiraImplementTestsSection');
+    const jiraImplementTestsBody = document.getElementById('jiraImplementTestsBody');
+    // Wired right here next to its const (not near the renderer below) — see
+    // the TDZ note on index.html script ordering: a listener attached before
+    // its const is initialized throws and takes the whole page down.
+    jiraImplementTestsBody.addEventListener('click', async (e) => {
+      if (e.target.id !== 'jiraImplementTestsRunBtn') return;
+      const btn = e.target;
+      btn.disabled = true;
+      try {
+        // Same generic draft gate as every other write: create the
+        // jenkins_rebuild draft, show what it will do, approve on confirm.
+        const draft = await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'jenkins_rebuild', subjectId: currentJiraImplementCycleId }),
+        }).then((r) => r.json());
+        if (draft.error) {
+          alert(draft.error);
+          return;
+        }
+        const job = draft.content?.testJob?.fullName || draft.content?.jobPath || 'Jenkins';
+        if (!confirm(`Run build & tests for ${draft.content?.branchName || 'this branch'} on ${job}?`)) return;
+        const res = await fetch(`/api/drafts/${draft.id}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gate: 'rebuild' }),
+        }).then((r) => r.json());
+        if (res.error) alert(res.error);
+        await loadJiraImplement(currentJiraImplementCycleId);
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     // Steps a user can manually re-run on demand (POST .../rerun-step),
     // regardless of whether they already succeeded — distinct from the
@@ -6456,13 +6504,14 @@
       }
     }
 
-    const JIRA_IMPLEMENT_TAB_ORDER = ['log', 'context', 'plan', 'diff', 'pr', 'docs'];
+    const JIRA_IMPLEMENT_TAB_ORDER = ['log', 'context', 'plan', 'diff', 'pr', 'tests', 'docs'];
     const JIRA_IMPLEMENT_TAB_PANELS = {
       log: jiraImplementLogPanel,
       context: jiraImplementAnalyzeSection,
       plan: jiraImplementPlanSection,
       diff: jiraImplementMergeSection,
       pr: jiraImplementPrSection,
+      tests: jiraImplementTestsSection,
       docs: jiraImplementDocsSection,
     };
     let activeJiraImplementTab = 'log';
@@ -6482,6 +6531,7 @@
         // the user to leave and use the plate card's separate buttons.
         pr: !!currentJiraImplementPrDraft || cycle.currentStep === 'done',
         docs: !!currentJiraImplementDocsDraft || cycle.currentStep === 'done',
+        tests: !!cycle.branchName,
       };
     }
 
@@ -6578,6 +6628,37 @@
           <button id="jiraImplementDocsSubmitBtn" class="tool-btn" type="button"${draft.status === 'ready' ? '' : ' disabled'}>Submit</button>
         </div>
         ${completed && draft.resultRef?.url ? `<p><a class="pr-review-link" href="${escapeHtml(draft.resultRef.url)}" target="_blank" rel="noopener">View page ↗</a></p>` : ''}`;
+    }
+
+    const JENKINS_RESULT_LABELS = { SUCCESS: 'Passed', FAILURE: 'Failed', UNSTABLE: 'Tests failing', ABORTED: 'Aborted' };
+    const JENKINS_REQUEST_LABELS = { queued: 'Waiting in the Jenkins queue…', cancelled: 'Cancelled in Jenkins', lost: 'Lost — Jenkins dropped the queued build before it started' };
+
+    /** "Build & tests" tab: runs the shared build-and-test job (Settings > Jenkins) on this cycle's branch and lists its builds — queued requests first (no build number yet), then real builds newest first. */
+    function jiraImplementTestsHtml(cycle, builds, buildRequests, testJob) {
+      if (!testJob && !cycle.jenkinsJobPath) {
+        return `<div class="jira-implement-empty-step">No Jenkins job configured — set the "Build &amp; test job" in Settings &gt; Jenkins.</div>`;
+      }
+      const pending = (buildRequests || []).filter((r) => r.status !== 'started' && r.status !== 'finished');
+      const pendingHtml = pending
+        .map((r) => `<li class="jenkins-run jenkins-run-${escapeHtml(r.status)}">${escapeHtml(JENKINS_REQUEST_LABELS[r.status] || r.status)} <span class="jenkins-run-meta">(requested ${escapeHtml(new Date(r.createdAt.replace(' ', 'T') + 'Z').toLocaleString())})</span></li>`)
+        .join('');
+      const buildsHtml = (builds || [])
+        .map((b) => {
+          const state = b.building ? 'building' : (b.result || 'unknown').toLowerCase();
+          const label = b.building ? 'Building…' : JENKINS_RESULT_LABELS[b.result] || b.result || 'Unknown';
+          const analysis = b.classificationJson;
+          const detail = analysis?.summary ? `<div class="jenkins-run-summary">${escapeHtml(analysis.summary)}</div>` : '';
+          const tests = analysis?.suspectTests?.length ? `<div class="jenkins-run-meta">Failing: ${analysis.suspectTests.map(escapeHtml).join(', ')}</div>` : '';
+          const link = b.url ? ` <a class="pr-review-link" href="${escapeHtml(b.url)}" target="_blank" rel="noopener">#${b.buildNumber} ↗</a>` : ` #${b.buildNumber}`;
+          return `<li class="jenkins-run jenkins-run-${escapeHtml(state)}"><strong>${escapeHtml(label)}</strong>${link}${b.classification ? ` <span class="jenkins-run-meta">· ${escapeHtml(b.classification.replace(/_/g, ' '))}</span>` : ''}${detail}${tests}</li>`;
+        })
+        .join('');
+      const pushHint = cycle.prUrl ? '' : '<p class="jenkins-run-meta">Jenkins builds from Bitbucket — the branch must be pushed (opening the PR does that) before a run can check it out.</p>';
+      return `
+        <p>Job: <code>${escapeHtml(testJob || cycle.jenkinsJobPath)}</code> · Branch: <code>${escapeHtml(cycle.branchName || '')}</code></p>
+        ${pushHint}
+        <button id="jiraImplementTestsRunBtn" class="tool-btn" type="button">Run build &amp; tests</button>
+        ${pendingHtml || buildsHtml ? `<ul class="jenkins-run-list">${pendingHtml}${buildsHtml}</ul>` : '<div class="jira-implement-empty-step">No runs yet.</div>'}`;
     }
 
     async function fetchJiraImplementDraft(cycleId, kind) {
@@ -6708,7 +6789,7 @@
       }
     });
 
-    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft) {
+    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft, builds, buildRequests, testJob) {
       jiraImplementTitle.textContent = cycle.ticketKey;
       jiraImplementMeta.textContent = cycle.branchName ? `Branch: ${cycle.branchName}` : 'Gathering context…';
       renderJiraImplementPhases(cycle.phases);
@@ -6718,6 +6799,7 @@
       renderJiraImplementMerge(cycle, mergeRequest);
       renderJiraImplementPr(prDraft);
       renderJiraImplementDocs(docsDraft);
+      jiraImplementTestsBody.innerHTML = cycle.branchName ? jiraImplementTestsHtml(cycle, builds, buildRequests, testJob) : '';
       renderJiraImplementTabs(cycle, mergeRequest);
       // "New requirement added to the ticket" is only meaningful once
       // there's a plan to redo, and once the cycle isn't already finished.
@@ -6731,7 +6813,7 @@
         fetchJiraImplementDraft(cycleId, 'confluence_dev_cycle_update'),
       ]);
       if (body.error) return;
-      renderJiraImplement(body.cycle, body.implementations, body.mergeRequest, prDraft, docsDraft);
+      renderJiraImplement(body.cycle, body.implementations, body.mergeRequest, prDraft, docsDraft, body.builds, body.buildRequests, body.testJob);
     }
 
     /** Entry point for the "Implement ticket…" button — a dev cycle started
@@ -7849,7 +7931,7 @@
       pr_review_decision: 'PR review decision',
       pr_open: 'Open PR',
       jenkins_fix: 'Propose Jenkins fix',
-      jenkins_rebuild: 'Rebuild',
+      jenkins_rebuild: 'Run build & tests',
       jira_comment_reply: 'Jira comment reply',
       bitbucket_pr_comment_reply: 'PR comment reply',
     };
@@ -8038,7 +8120,8 @@
       if (kind === 'jenkins_rebuild') {
         return {
           render(content) {
-            return `<p>Trigger a fresh build for <code>${escapeHtml(content.branchName || content.jobPath || '')}</code>?</p>`;
+            const job = content.testJob ? content.testJob.fullName : content.jobPath;
+            return `<p>Run build &amp; tests for <code>${escapeHtml(content.branchName || '')}</code> on <code>${escapeHtml(job || '')}</code>?</p>`;
           },
           collect() {
             return null;
@@ -9405,7 +9488,11 @@
           msg.type === 'dev-cycle-updated' ||
           msg.type === 'dev-cycle-implement-log' ||
           msg.type === 'dev-cycle-implement-ready' ||
-          msg.type === 'dev-cycle-implement-failed'
+          msg.type === 'dev-cycle-implement-failed' ||
+          msg.type === 'jenkins-build-updated' ||
+          msg.type === 'jenkins-build-failed' ||
+          msg.type === 'jenkins-build-recovered' ||
+          msg.type === 'jenkins-build-request-updated'
         ) {
           if (String(msg.devCycleId) === String(currentJiraImplementCycleId)) loadJiraImplement(currentJiraImplementCycleId);
         } else if (msg.type === 'draft-updated' || msg.type === 'draft-revision' || msg.type === 'draft-log') {

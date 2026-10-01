@@ -159,6 +159,8 @@ import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequ
 import { gatherReviewContext, buildReviewPrompt, mergeReviews, recommendWithJev, buildPrReviewPhases, REVIEW_JSON_SCHEMA } from '../summarization/prReviewContext';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
+import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
+import { getJenkinsBuildRequestsForCycle } from '../storage/jenkinsBuildRequestRepository';
 import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, disableGitPush, getWorktreeDiffSinceBase } from '../integrations/antigravityCli';
 import { gatherJiraImplementContext } from '../dev/jiraImplementContext';
 import { buildPlanPrompt, mergeDevPlans, DEV_PLAN_JSON_SCHEMA, StructuredDevPlan } from '../dev/devPlan';
@@ -233,6 +235,8 @@ const SETTINGS_FIELDS = [
   'jenkinsUser',
   'jenkinsApiToken',
   'jenkinsJobFolders',
+  'jenkinsTestJob',
+  'jenkinsTestBranchParam',
   'jenkinsPollMinutes',
   'devTrunkBranch',
   'prePrMaxChangedFiles',
@@ -3821,7 +3825,14 @@ ${JSON.stringify(approvedPlan, null, 2)}`;
       }
       const implementations = getDevCycleImplementationsForCycle(cycle.id, cycle.round);
       const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
-      res.json({ cycle, implementations, mergeRequest: mergeRequest ?? null });
+      res.json({
+        cycle,
+        implementations,
+        mergeRequest: mergeRequest ?? null,
+        builds: getBuildsForDevCycle(cycle.id),
+        buildRequests: getJenkinsBuildRequestsForCycle(cycle.id),
+        testJob: config.jenkinsTestJob || null,
+      });
     });
 
     app.post('/api/jira-implement/:id/plan/refine', async (req, res) => {

@@ -1,20 +1,29 @@
 import { config } from '../config';
 import { getActiveDevCycles, setDevCycleJenkinsJob } from '../storage/devCycleRepository';
-import { upsertJenkinsBuild, getLatestBuildForJob, setBuildClassification, markBuildNotified, JenkinsBuildResult } from '../storage/jenkinsBuildRepository';
-import { isJenkinsConfigured, findBranchJob, getLastBuild, getConsoleTail, getTestReport, getPipelineStages, getRecentBuilds } from '../integrations/jenkinsClient';
+import {
+  upsertJenkinsBuild,
+  getLatestBuildForJob,
+  getJenkinsBuildByJobAndNumber,
+  getRecentBuildsForJobBranch,
+  setBuildClassification,
+  markBuildNotified,
+  JenkinsBuildResult,
+  JenkinsBuildRow,
+} from '../storage/jenkinsBuildRepository';
+import { getOpenJenkinsBuildRequests, markJenkinsBuildRequestStarted, setJenkinsBuildRequestStatus } from '../storage/jenkinsBuildRequestRepository';
+import { isJenkinsConfigured, findBranchJob, getLastBuild, getConsoleTail, getTestReport, getPipelineStages, getRecentBuilds, JenkinsBuildStatus } from '../integrations/jenkinsClient';
+import { getQueueState, getBuildByNumber } from '../integrations/jenkinsMcp';
 import { extractSignals, classifyBuildFailure } from './buildFailureClassification';
 import { extractTicketKeyFromBranch } from './branchNaming';
 
 type Broadcast = (event: Record<string, unknown>) => void;
 
 /**
- * One poll tick — targets active dev-cycle branches only for now (a
- * reviewed-PR-branch source, matching branches from Bitbucket's REVIEWER/
- * AUTHOR dashboards, is a natural extension once that consumer exists;
- * nothing here prevents adding `dev_cycle_id: null` rows for those the same
- * way). Resolves each cycle's Jenkins job path lazily and caches it on the
- * cycle once found — Jenkins indexes multibranch-pipeline branches lazily,
- * so "not found yet" just means try again next poll, not an error.
+ * One poll tick, two sources: (1) dev cycles whose repo maps to a per-branch
+ * job folder (config.jenkinsJobFolders — multibranch layouts), resolved
+ * lazily and cached on the cycle; (2) builds Speako itself triggered on the
+ * shared build-and-test job (jenkins_build_requests), each followed by its
+ * own build number since that job's latest build may be another branch's.
  */
 export async function pollJenkinsBuilds(broadcast: Broadcast): Promise<{ checked: number; newFailures: number }> {
   if (!isJenkinsConfigured()) return { checked: 0, newFailures: 0 };
@@ -41,7 +50,8 @@ export async function pollJenkinsBuilds(broadcast: Broadcast): Promise<{ checked
     }
   }
 
-  return { checked, newFailures };
+  const fromRequests = await pollBuildRequests(broadcast);
+  return { checked: checked + fromRequests.checked, newFailures: newFailures + fromRequests.newFailures };
 }
 
 /** Returns true if this tick found (and classified) a fresh failure. */
@@ -60,7 +70,80 @@ async function checkOneJob(jobPath: string, branch: string, devCycleId: number, 
   if (previousLatest && previousLatest.buildNumber === last.number && previousLatest.result === last.result && previousLatest.building === last.building) {
     return false; // already recorded, nothing changed since the last poll
   }
+  return recordBuild({
+    jobPath,
+    build: last,
+    branch,
+    devCycleId,
+    previousLatest,
+    comparisonBuildNumbers: async () => (await getRecentBuilds(jobPath, 6)).map((b) => b.number),
+  }, broadcast);
+}
 
+/**
+ * Follows each open request on the shared job: queue item -> build number ->
+ * that specific build until it settles. Errors are per-request so one bad
+ * request never stalls the rest.
+ */
+async function pollBuildRequests(broadcast: Broadcast): Promise<{ checked: number; newFailures: number }> {
+  let checked = 0;
+  let newFailures = 0;
+  for (const request of getOpenJenkinsBuildRequests()) {
+    try {
+      let buildNumber = request.buildNumber;
+      if (request.status === 'queued' || buildNumber == null) {
+        const queue = await getQueueState(request.queueId);
+        if (queue.state === 'waiting') continue;
+        if (queue.state === 'cancelled' || queue.state === 'gone') {
+          setJenkinsBuildRequestStatus(request.id, queue.state === 'cancelled' ? 'cancelled' : 'lost');
+          broadcast({ type: 'jenkins-build-request-updated', devCycleId: request.devCycleId, requestId: request.id, status: queue.state === 'cancelled' ? 'cancelled' : 'lost' });
+          continue;
+        }
+        buildNumber = queue.buildNumber;
+        markJenkinsBuildRequestStarted(request.id, buildNumber);
+      }
+
+      const build = await getBuildByNumber(request.jobFullName, buildNumber);
+      if (!build) continue; // Jenkins hasn't materialized it yet — next poll
+      checked++;
+
+      const already = getJenkinsBuildByJobAndNumber(request.jobPath, buildNumber);
+      if (!already || already.result !== build.result || already.building !== build.building) {
+        // Same branch only: on the shared job the previous build and the
+        // flaky-comparison builds must be this branch's, not whichever branch
+        // happened to build last.
+        const branchHistory = getRecentBuildsForJobBranch(request.jobPath, request.branchName, 7).filter((b) => b.buildNumber !== buildNumber);
+        const failed = await recordBuild({
+          jobPath: request.jobPath,
+          build,
+          branch: request.branchName,
+          devCycleId: request.devCycleId,
+          previousLatest: branchHistory[0],
+          comparisonBuildNumbers: async () => branchHistory.slice(0, 5).map((b) => b.buildNumber),
+        }, broadcast);
+        if (failed) newFailures++;
+      }
+      if (!build.building) setJenkinsBuildRequestStatus(request.id, 'finished');
+    } catch (err: any) {
+      console.error(`[jenkins-monitor] failed to follow build request ${request.id}:`, err.message);
+    }
+  }
+  return { checked, newFailures };
+}
+
+/** Upserts one observed build, broadcasts it, and classifies it if it failed. Returns true for a freshly classified failure. */
+async function recordBuild(
+  params: {
+    jobPath: string;
+    build: JenkinsBuildStatus;
+    branch: string;
+    devCycleId: number | null;
+    previousLatest: JenkinsBuildRow | undefined;
+    comparisonBuildNumbers: () => Promise<number[]>;
+  },
+  broadcast: Broadcast
+): Promise<boolean> {
+  const { jobPath, build: last, branch, devCycleId, previousLatest } = params;
   const row = upsertJenkinsBuild({
     devCycleId,
     jobPath,
@@ -83,14 +166,14 @@ async function checkOneJob(jobPath: string, branch: string, devCycleId: number, 
   }
 
   if (last.result === 'FAILURE' || last.result === 'UNSTABLE') {
-    const [log, report, stages, recentBuilds] = await Promise.all([
+    const [log, report, stages, comparisonNumbers] = await Promise.all([
       getConsoleTail(jobPath, last.number),
       getTestReport(jobPath, last.number),
       getPipelineStages(jobPath, last.number),
-      getRecentBuilds(jobPath, 6),
+      params.comparisonBuildNumbers(),
     ]);
     const recentReports = (
-      await Promise.all(recentBuilds.filter((b) => b.number !== last.number).map((b) => getTestReport(jobPath, b.number)))
+      await Promise.all(comparisonNumbers.filter((n) => n !== last.number).map((n) => getTestReport(jobPath, n)))
     ).filter((r): r is NonNullable<typeof r> => !!r);
 
     const signals = extractSignals(log, report, stages, recentReports);

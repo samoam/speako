@@ -11,10 +11,11 @@ import { config } from '../config';
  * no OAuth/complex-auth reason to reach for MCP. The Jenkins instance itself
  * (https://automation.gtechna.net) and credentials are real/live-configured;
  * the response shapes below follow Jenkins' own long-stable, well-documented
- * REST API (core job/build tree, testReport, Pipeline Stage View's /wfapi) —
- * not independently confirmed live from this codebase the way Bitbucket
- * Server's less-documented diff-anchor shape was, so verify against one real
- * job/build here before depending on anything non-obvious.
+ * REST API (core job/build tree, testReport, Pipeline Stage View's /wfapi).
+ * Confirmed live 2026-09-30 against a real failed Maven build: lastBuild,
+ * consoleText and testReport (which needed the Maven childReports fix below);
+ * /wfapi returned nothing there, as expected for a non-Pipeline job.
+ * jenkinsMcp.ts covers what REST can't (following a triggered build).
  */
 
 export function isJenkinsConfigured(): boolean {
@@ -162,15 +163,26 @@ export interface JenkinsTestReport {
   failures: JenkinsTestFailure[];
 }
 
-/** Null if this build has no test report at all (a build stage failed before tests ran, or the job doesn't publish one) — a normal outcome, not an error. */
+const CASE_FIELDS = 'cases[className,name,status,errorDetails,errorStackTrace,age]';
+
+/**
+ * Null if this build has no test report at all (a build stage failed before
+ * tests ran, or the job doesn't publish one) — a normal outcome, not an
+ * error. Confirmed live (2026-09-30, a hudson.maven.MavenModuleSetBuild on
+ * automation.gtechna.net): a Maven job's report has NO top-level `suites` —
+ * the cases live under `childReports[].result.suites`, one child per module —
+ * so reading only `suites` reported failCount 1 with an empty failure list.
+ * Both layouts are read.
+ */
 export async function getTestReport(jobPath: string, buildNumber: number): Promise<JenkinsTestReport | null> {
   requireConfigured();
   const raw = await apiGetOrNull(
-    `${jobPath}/${buildNumber}/testReport/api/json?tree=totalCount,failCount,skipCount,suites[cases[className,name,status,errorDetails,errorStackTrace,age]]`
+    `${jobPath}/${buildNumber}/testReport/api/json?tree=totalCount,failCount,skipCount,suites[${CASE_FIELDS}],childReports[result[suites[${CASE_FIELDS}]]]`
   );
   if (!raw) return null;
   const failures: JenkinsTestFailure[] = [];
-  for (const suite of raw.suites ?? []) {
+  const suites = [...(raw.suites ?? []), ...(raw.childReports ?? []).flatMap((c: any) => c?.result?.suites ?? [])];
+  for (const suite of suites) {
     for (const c of suite.cases ?? []) {
       if (c.status === 'FAILED' || c.status === 'REGRESSION') {
         failures.push({ className: c.className, name: c.name, errorDetails: c.errorDetails ?? null, errorStackTrace: c.errorStackTrace ?? null, age: c.age ?? 0 });

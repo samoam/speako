@@ -580,6 +580,26 @@ db.exec(`
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_builds_job_number ON jenkins_builds(job_path, build_number);
 
+  -- A build Speako asked for on the shared build-and-test job
+  -- (config.jenkinsTestJob), followed from its Jenkins queue item to its own
+  -- build number — needed because on a job shared by every branch, "the
+  -- job's latest build" may be someone else's branch. Once build_number is
+  -- known the build itself is tracked in jenkins_builds like any other.
+  CREATE TABLE IF NOT EXISTS jenkins_build_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_cycle_id INTEGER REFERENCES dev_cycles(id),
+    job_path TEXT NOT NULL,
+    job_full_name TEXT NOT NULL,
+    branch_name TEXT NOT NULL,
+    queue_id INTEGER NOT NULL,
+    build_number INTEGER,
+    -- queued -> started -> finished; or cancelled/lost (queue item cancelled,
+    -- or expired from Jenkins' queue before a build number was seen).
+    status TEXT NOT NULL DEFAULT 'queued',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
