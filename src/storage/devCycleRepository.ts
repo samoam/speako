@@ -1,4 +1,5 @@
 import { db } from './db';
+import { stampLogLine } from './logLine';
 import type { StructuredDevPlan } from '../dev/devPlan';
 
 /** Semantic Jira lifecycle state this cycle is currently in — see src/dev/lifecycle.ts for the fixed transition graph this must stay within. */
@@ -191,7 +192,7 @@ export function setDevCyclePhase(id: number, key: string, status: DevCyclePhaseS
 /** Appends one progress line — same convention as appendPrReviewLog. */
 export function appendDevCycleLog(id: number, message: string): void {
   const existing = getDevCycle(id)?.log ?? [];
-  const updated = [...existing, message];
+  const updated = [...existing, stampLogLine(message)];
   db.prepare("UPDATE dev_cycles SET log = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(updated), id);
 }
 

@@ -1,5 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { unstampLogLine } from '../src/storage/logLine';
+
+/** Log lines carry a "[<ISO time>] " prefix (src/storage/logLine.ts) — checks it's there, then compares the messages. */
+function assertStampedLog(log: string[] | undefined, expected: string[]): void {
+  assert.ok(log && log.every((line) => /^\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] /.test(line)), `every line should be time-stamped: ${JSON.stringify(log)}`);
+  assert.deepEqual(log!.map(unstampLogLine), expected);
+}
+
 import { createDevCycle } from '../src/storage/devCycleRepository';
 import {
   createDevPlan,
@@ -41,7 +49,7 @@ test('appendDevPlanLog: appends progress lines in order', () => {
   const plan = createDevPlan({ devCycleId: cycleId, round: 1 });
   appendDevPlanLog(plan.id, 'Searching codebase...');
   appendDevPlanLog(plan.id, 'Reading Jira ticket...');
-  assert.deepEqual(getDevPlan(plan.id)?.log, ['Searching codebase...', 'Reading Jira ticket...']);
+  assertStampedLog(getDevPlan(plan.id)?.log, ['Searching codebase...', 'Reading Jira ticket...']);
 });
 
 test('markDevPlanReady / markDevPlanApproved / markDevPlanRejected / markDevPlanFailed', () => {

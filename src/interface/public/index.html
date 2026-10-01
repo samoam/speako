@@ -249,6 +249,7 @@
     .plate-task-title { font-size: 0.88rem; }
     .plate-task-title a { color: var(--text); }
     .plate-task-meta { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
+    .task-time { font-variant-numeric: tabular-nums; cursor: default; }
     .plate-task-priority { flex-shrink: 0; font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; align-self: flex-start; }
     .plate-task-priority-high { background: rgba(220,80,80,0.18); color: #e08a8a; }
     .plate-task-priority-med { background: rgba(220,180,60,0.18); color: #d8c07a; }
@@ -354,6 +355,7 @@
     #taskDetailPrReviewStatus { font-size: 0.9rem; }
     #taskDetailPrReviewLog { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #17171a; border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; margin-top: 0.5rem; max-height: 220px; overflow-y: auto; }
     .pr-review-log-line { color: var(--muted); }
+    .log-stamp { display: inline-block; min-width: 4.6em; margin-right: 0.6em; color: var(--muted); opacity: 0.7; font-variant-numeric: tabular-nums; }
     .pr-review-log-line:last-child { color: var(--text); }
     #taskDetailPrReviewLogDetails summary { cursor: pointer; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
     #taskDetailPrReviewLogDetails summary:hover { color: var(--text); }
@@ -4103,7 +4105,7 @@
     function plateTaskSlaInfo(task, cls) {
       const slaHours = PRIORITY_TIER_SLA_HOURS[cls];
       if (!slaHours || !task.createdAt) return null;
-      const deadlineMs = new Date(task.createdAt).getTime() + slaHours * 3600 * 1000;
+      const deadlineMs = parseServerTime(task.createdAt).getTime() + slaHours * 3600 * 1000;
       const diffMs = deadlineMs - Date.now();
       const overdue = diffMs < 0;
       const diffHours = Math.abs(diffMs) / 3600000;
@@ -4244,6 +4246,53 @@
      * source-specific actions) lives in Task Detail (renderTaskDetail),
      * opened by clicking the card itself.
      */
+    /**
+     * Server times come in two shapes: ISO strings (JS-written, e.g.
+     * occurred_at) and SQLite datetime('now') values ("YYYY-MM-DD HH:MM:SS",
+     * no zone, but UTC). new Date() reads the second as LOCAL time, which
+     * shifts it by the UTC offset — so it's normalized here first.
+     */
+    function parseServerTime(value) {
+      if (!value) return null;
+      const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(value) ? `${value.replace(' ', 'T')}Z` : value;
+      const date = new Date(normalized);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    /** "just now" / "5m ago" / "3h ago" / "Yesterday 14:05" / "Sep 28 14:05" / "Sep 28, 2025". */
+    function relativeTimeText(date) {
+      const diffMs = Date.now() - date.getTime();
+      const minutes = Math.round(diffMs / 60000);
+      const hm = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      if (minutes >= 0 && minutes < 1) return 'just now';
+      if (minutes >= 0 && minutes < 60) return `${minutes}m ago`;
+      if (minutes >= 0 && minutes < 6 * 60) return `${Math.round(minutes / 60)}h ago`;
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      if (date >= startOfToday) return `Today ${hm}`;
+      if (date >= new Date(startOfToday.getTime() - 86400000)) return `Yesterday ${hm}`;
+      if (date.getFullYear() === new Date().getFullYear()) return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${hm}`;
+      return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    /** When the item happened at its source (falls back to when Speako first saw it), labeled per source, full timestamp on hover. */
+    function taskTimeHtml(task) {
+      const TASK_TIME_LABELS = {
+        email_message: 'Received',
+        teams_message: 'Sent',
+        jira: 'Updated',
+        bitbucket_pr: 'Posted',
+        jenkins_build: 'Started',
+      };
+      const occurred = parseServerTime(task.occurredAt);
+      const date = occurred || parseServerTime(task.createdAt);
+      if (!date) return '';
+      let label = occurred ? TASK_TIME_LABELS[task.source] || 'At' : 'Added';
+      // Review cards are the PR itself, not a comment on it.
+      if (occurred && task.source === 'bitbucket_pr' && !String(task.externalRef).includes(':comment:')) label = 'Opened';
+      return `<span class="task-time" title="${escapeHtml(`${label} ${date.toLocaleString()}`)}">${escapeHtml(relativeTimeText(date))}</span>`;
+    }
+
     function plateTaskCompactHtml(task, variant) {
       variant = variant || 'open';
       const REVIEW_STATE_LABELS = {
@@ -4253,6 +4302,8 @@
       };
       const label = PLATE_SOURCE_LABELS[task.source] || task.source;
       const meta = [];
+      const timeHtml = taskTimeHtml(task);
+      if (timeHtml) meta.push(timeHtml);
       if (task.dueDate) meta.push(`Due ${new Date(task.dueDate).toLocaleDateString()}${task.dueDateIsManual ? ' (manual)' : ''}`);
       if (task.snoozedUntil) meta.push(`Postponed until ${new Date(task.snoozedUntil).toLocaleDateString()}`);
       const priority = plateTaskPriorityLabel(task.priorityScore);
@@ -4525,6 +4576,8 @@
       taskDetailTitle.innerHTML = `${plateSourceIconHtml(task.source)}${escapeHtml(label)}: ${escapeHtml(task.title)}`;
 
       const meta = [];
+      const timeHtml = taskTimeHtml(task);
+      if (timeHtml) meta.push(timeHtml);
       if (task.dueDate) meta.push(`Due ${new Date(task.dueDate).toLocaleDateString()}${task.dueDateIsManual ? ' (manual)' : ''}`);
       if (task.snoozedUntil) meta.push(`Postponed until ${new Date(task.snoozedUntil).toLocaleDateString()}`);
       const priority = plateTaskPriorityLabel(task.priorityScore);
@@ -5523,8 +5576,29 @@
       return `<span class="pr-review-doc-chip">${escapeHtml(page.title)}</span>`;
     }
 
-    function prReviewLogLineHtml(message) {
-      return `<div class="pr-review-log-line">${escapeHtml(message)}</div>`;
+    /**
+     * Stored progress-log lines look like "[<ISO time>] message"
+     * (src/storage/logLine.ts); lines from before that existed have no prefix
+     * and render without a time.
+     */
+    function logLineParts(line) {
+      const match = /^\[(\d{4}-\d{2}-\d{2}T[^\]]+Z)\] ([\s\S]*)$/.exec(line);
+      return match ? { at: new Date(match[1]), text: match[2] } : { at: null, text: line };
+    }
+
+    /** Live WebSocket lines arrive as the bare message — stamp them with the arrival time so they read the same as the stored lines around them. */
+    function stampLogLineNow(line) {
+      return logLineParts(line).at ? line : `[${new Date().toISOString()}] ${line}`;
+    }
+
+    function logStampHtml(at) {
+      if (!at) return '';
+      return `<span class="log-stamp" title="${escapeHtml(at.toLocaleString())}">${escapeHtml(at.toLocaleTimeString(undefined, { hour12: false }))}</span>`;
+    }
+
+    function prReviewLogLineHtml(line) {
+      const { at, text } = logLineParts(line);
+      return `<div class="pr-review-log-line">${logStampHtml(at)}${escapeHtml(text)}</div>`;
     }
 
     // Icon shown per phase status — a checkmark/x/dot rather than text, so
@@ -5566,7 +5640,7 @@
     /** Appends one line without a full re-render — used for live WS-driven progress updates so the log visibly "tails" as each step happens, rather than looking stuck until the whole run finishes. */
     function appendPrReviewLogLine(message) {
       prReviewLogSection.hidden = false;
-      prReviewLog.insertAdjacentHTML('beforeend', prReviewLogLineHtml(message));
+      prReviewLog.insertAdjacentHTML('beforeend', prReviewLogLineHtml(stampLogLineNow(message)));
       prReviewLog.scrollTop = prReviewLog.scrollHeight;
     }
 
@@ -6320,7 +6394,7 @@
     }
 
     function appendJiraImplementLogLine(message) {
-      jiraImplementLogEl.insertAdjacentHTML('beforeend', prReviewLogLineHtml(message));
+      jiraImplementLogEl.insertAdjacentHTML('beforeend', prReviewLogLineHtml(stampLogLineNow(message)));
       jiraImplementLogEl.scrollTop = jiraImplementLogEl.scrollHeight;
     }
 
@@ -7463,7 +7537,12 @@
     // post-mortem, same as the PR review log's persisted-lines convention.
     function codeChangeLogHtml(log) {
       if (!log || !log.length) return '';
-      return `<pre class="cc-log">${log.map((line) => `<span class="cc-log-line">${escapeHtml(line)}</span>`).join('\n')}</pre>`;
+      return `<pre class="cc-log">${log
+        .map((line) => {
+          const { at, text } = logLineParts(line);
+          return `<span class="cc-log-line">${logStampHtml(at)}${escapeHtml(text)}</span>`;
+        })
+        .join('\n')}</pre>`;
     }
 
     function codeChangeCellHtml(request) {

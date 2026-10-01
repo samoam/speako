@@ -403,3 +403,27 @@ test('deriveReviewState: UNAPPROVED with no prior change request is NEW, even if
 test('deriveReviewState: clearing your own NEEDS_WORK with no push goes back to NEW', () => {
   assert.equal(deriveReviewState({ myApprovalStatus: 'UNAPPROVED', myLastReviewedCommit: 'abc', fromLatestCommit: 'abc' }, 'NEEDS_WORK'), 'NEW');
 });
+
+test('syncTasks: replies to my comments and comments on my PRs become bitbucket_pr tasks, each under its own title', async () => {
+  const reply = { prId: 61, prTitle: 'Escalation fix', projectKey: 'PROJ', repoSlug: 'repo', commentId: 6101, rootCommentId: 6100, authorName: 'Steve Hamel', authorUsername: 'sh87702', text: 'Fixed in 5e51db85db.', createdDate: '2026-09-30T18:33:00.000Z', anchor: null };
+  const onMine = { prId: 62, prTitle: 'My refactor', projectKey: 'PROJ', repoSlug: 'repo', commentId: 6201, rootCommentId: 6201, authorName: 'Alice', authorUsername: 'alice', text: 'please rename', createdDate: '2026-09-30T18:00:00.000Z', anchor: null };
+  const spies = [
+    mock.method(jiraMcp, 'isJiraConfigured', () => false),
+    mock.method(bitbucketServer, 'isBitbucketConfigured', () => true),
+    mock.method(bitbucketReviews, 'getPullRequestActivity', async () => ({ reviewRequests: [], mentionsOfMe: [], repliesToMe: [reply], commentsOnMyPRs: [onMine] })),
+    mock.method(summaryRepository, 'getAllOpenActionItems', () => []),
+  ];
+  try {
+    await syncTasks();
+    const tasks = getOpenTasks().filter((t) => t.source === 'bitbucket_pr');
+    const replyTask = tasks.find((t) => t.externalRef === 'PROJ/repo#61:comment:6101');
+    const mineTask = tasks.find((t) => t.externalRef === 'PROJ/repo#62:comment:6201');
+    assert.equal(replyTask?.title, 'Reply on: Escalation fix');
+    assert.match(replyTask!.description ?? '', /Steve Hamel: Fixed in 5e51db85db/);
+    assert.equal(mineTask?.title, 'Comment on your PR: My refactor');
+    // The card shows when the comment was posted, not when Speako synced it.
+    assert.equal(replyTask?.occurredAt, '2026-09-30T18:33:00.000Z');
+  } finally {
+    spies.forEach((s) => s.mock.restore());
+  }
+});

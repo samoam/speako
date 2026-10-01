@@ -1,4 +1,5 @@
 import { db } from './db';
+import { stampLogLine } from './logLine';
 
 export type CodeChangeStatus = 'running' | 'ready' | 'applied' | 'pushed' | 'discarded' | 'failed';
 export type CodeChangeOrigin = 'action_item' | 'task' | 'dev_plan' | 'jenkins_fix' | 'dev_cycle_implement' | 'dev_cycle_merge';
@@ -125,7 +126,7 @@ export function getRunningCodeChangeRequests(): CodeChangeRequest[] {
 /** Appends one progress line — read-modify-write on the small JSON array, same convention as prReviewRequestRepository.ts's appendPrReviewLog. */
 export function appendCodeChangeLog(id: number, message: string): void {
   const existing = getCodeChangeRequest(id)?.log ?? [];
-  const updated = [...existing, message];
+  const updated = [...existing, stampLogLine(message)];
   db.prepare('UPDATE code_change_requests SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
 }
 

@@ -1,4 +1,5 @@
 import { db } from './db';
+import { stampLogLine } from './logLine';
 
 export type DevCycleImplementationVariant = 'claude' | 'gemini';
 export type DevCycleImplementationStatus = 'running' | 'ready' | 'failed';
@@ -89,7 +90,7 @@ export function getDevCycleImplementationsForCycle(devCycleId: number, round: nu
 /** Read-modify-write on the small JSON array — same convention as appendCodeChangeLog/appendPrReviewLog. */
 export function appendDevCycleImplementationLog(id: number, message: string): void {
   const existing = getDevCycleImplementation(id)?.log ?? [];
-  const updated = [...existing, message];
+  const updated = [...existing, stampLogLine(message)];
   db.prepare('UPDATE dev_cycle_implementations SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
 }
 

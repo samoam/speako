@@ -1,4 +1,5 @@
 import { db } from './db';
+import { stampLogLine } from './logLine';
 
 export type PrReviewStatus = 'running' | 'ready' | 'failed';
 
@@ -118,7 +119,7 @@ export function setPrReviewContext(id: number, context: PrReviewContext): void {
 /** Appends one progress line — read-modify-write on the small JSON array rather than a separate table, since a review only ever has a handful of steps (not an unbounded stream). */
 export function appendPrReviewLog(id: number, message: string): void {
   const existing = getPrReviewRequest(id)?.log ?? [];
-  const updated = [...existing, message];
+  const updated = [...existing, stampLogLine(message)];
   db.prepare('UPDATE pr_review_requests SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
 }
 

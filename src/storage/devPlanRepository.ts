@@ -1,4 +1,5 @@
 import { db } from './db';
+import { stampLogLine } from './logLine';
 
 export type DevPlanStatus = 'running' | 'ready' | 'approved' | 'rejected' | 'superseded' | 'failed';
 
@@ -72,7 +73,7 @@ export function getLatestDevPlanForCycle(devCycleId: number): DevPlan | undefine
 
 export function appendDevPlanLog(id: number, message: string): void {
   const existing = getDevPlan(id)?.log ?? [];
-  const updated = [...existing, message];
+  const updated = [...existing, stampLogLine(message)];
   db.prepare('UPDATE dev_plans SET log = ? WHERE id = ?').run(JSON.stringify(updated), id);
 }
 

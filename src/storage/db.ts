@@ -662,6 +662,12 @@ if (!taskColumns.some((c) => c.name === 'urgency_signal')) {
   // never changes, so it's asked once per comment rather than every sync.
   db.exec('ALTER TABLE tasks ADD COLUMN urgency_signal TEXT');
 }
+if (!taskColumns.some((c) => c.name === 'occurred_at')) {
+  // When the thing itself happened at the source (email/Teams message sent,
+  // comment posted, PR opened, Jira issue last updated, build started) —
+  // distinct from created_at, which is only when Speako first synced it.
+  db.exec('ALTER TABLE tasks ADD COLUMN occurred_at TEXT');
+}
 
 const teamsMessageTriageColumns = db.prepare('PRAGMA table_info(teams_message_triage)').all() as { name: string }[];
 if (!teamsMessageTriageColumns.some((c) => c.name === 'urgency_signal')) {

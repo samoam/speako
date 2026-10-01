@@ -63,6 +63,7 @@ export function jiraIssueToTask(issue: JiraTaskMatch): UpsertTaskInput {
     dueDate: issue.dueDate,
     importanceScore: jiraImportance(issue.priorityName),
     urgencyScore: urgencyFromDueDate(issue.dueDate),
+    occurredAt: issue.updated ?? null,
   };
 }
 
@@ -171,6 +172,7 @@ async function syncJira(): Promise<void> {
         importanceScore: withVipBump(jiraImportance(mention.priorityName), mention.authorName),
         urgencyScore: withUrgencySignal(jiraCommentUrgency(mention.createdDate), urgencySignal),
         urgencySignal,
+        occurredAt: mention.createdDate,
       });
     }
   }
@@ -221,6 +223,7 @@ async function syncBitbucket(): Promise<void> {
       importanceScore: 4,
       urgencyScore: reviewRequestUrgency(pr.createdDate),
       myReviewStatus: reviewState,
+      occurredAt: pr.createdDate,
     });
   }
 
@@ -246,7 +249,8 @@ async function syncBitbucket(): Promise<void> {
       importanceScore: withVipBump(3, comment.authorName),
       urgencyScore: withUrgencySignal(3, urgencySignal),
       urgencySignal,
-      // A mention card shows its PR's review state too — null only when that
+      occurredAt: comment.createdDate,
+      // A comment card shows its PR's review state too — null only when that
       // PR isn't one of your open review requests (e.g. your own PR).
       myReviewStatus: reviewStateByPr.get(`${comment.projectKey}/${comment.repoSlug}#${comment.prId}`) ?? null,
     });
@@ -317,6 +321,7 @@ async function syncTeamsMessages(): Promise<void> {
       importanceScore: withVipBump(directedAtMe ? 4 : 2, sender),
       urgencyScore: teamsMessageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
+      occurredAt: row.occurredAt,
     });
   }
   pruneTasksForSource('teams_message', refs);
@@ -360,6 +365,7 @@ async function syncEmailMessages(): Promise<void> {
       importanceScore: withVipBump(needsReply ? 4 : 2, sender),
       urgencyScore: emailMessageUrgency(row.occurredAt, row.urgencySignal),
       draftReply: row.draftReply,
+      occurredAt: row.occurredAt,
     });
   }
   pruneTasksForSource('email_message', refs);
@@ -390,6 +396,7 @@ async function syncJenkins(): Promise<void> {
       dueDate: null,
       importanceScore: build.devCycleId ? 5 : 3,
       urgencyScore: 4,
+      occurredAt: build.startedAt,
     });
   }
   pruneTasksForSource('jenkins_build', refs);

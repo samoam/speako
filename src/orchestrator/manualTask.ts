@@ -84,6 +84,7 @@ export async function addManualTask(raw: string): Promise<Task> {
     urgencyScore: reviewRequestUrgency(pr.createdDate),
     manuallyAdded: true,
     myReviewStatus: deriveReviewState(pr, getTaskByExternalRef('bitbucket_pr', externalRef)?.myReviewStatus),
+    occurredAt: pr.createdDate,
   });
   return getTaskByExternalRef('bitbucket_pr', externalRef)!;
 }

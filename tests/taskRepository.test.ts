@@ -277,3 +277,18 @@ test('taskRepository: clearing a manual due date (null) lets the next sync repop
   assert.equal(getTaskById(task.id)?.dueDate, '2027-01-01');
 });
 
+
+test('taskRepository: occurredAt follows the source on re-sync, but a sync without one keeps the last known time', () => {
+  const externalRef = `occurred-${Date.now()}`;
+  upsertTask(baseTask({ externalRef, occurredAt: '2026-09-29T10:00:00.000Z' }));
+  const id = getOpenTasks().find((t) => t.externalRef === externalRef)!.id;
+  assert.equal(getTaskById(id)!.occurredAt, '2026-09-29T10:00:00.000Z');
+
+  // A Jira issue's "updated" moves forward — the card should too.
+  upsertTask(baseTask({ externalRef, occurredAt: '2026-09-30T12:00:00.000Z' }));
+  assert.equal(getTaskById(id)!.occurredAt, '2026-09-30T12:00:00.000Z');
+
+  // A source that momentarily reports no time must not erase the one already known.
+  upsertTask(baseTask({ externalRef }));
+  assert.equal(getTaskById(id)!.occurredAt, '2026-09-30T12:00:00.000Z');
+});

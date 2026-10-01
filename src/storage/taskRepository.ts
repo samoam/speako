@@ -24,6 +24,8 @@ export interface Task {
   manuallyAdded: boolean;
   myReviewStatus: string | null;
   urgencySignal: string | null;
+  /** When it happened at the source (message sent, comment posted, issue updated…); null when the source has no such time. */
+  occurredAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -44,6 +46,8 @@ export interface UpsertTaskInput {
   myReviewStatus?: string | null;
   /** Comment mentions only — first non-null value sticks (see upsertStmt). */
   urgencySignal?: string | null;
+  /** ISO time the item happened at its source — refreshed on every sync (a Jira issue's "updated" moves). */
+  occurredAt?: string | null;
 }
 
 function mapRow(r: any): Task {
@@ -67,14 +71,15 @@ function mapRow(r: any): Task {
     manuallyAdded: !!r.manually_added,
     myReviewStatus: r.my_review_status ?? null,
     urgencySignal: r.urgency_signal ?? null,
+    occurredAt: r.occurred_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }
 
 const upsertStmt = db.prepare(`
-  INSERT INTO tasks (source, external_ref, title, description, url, due_date, urgency_score, importance_score, priority_score, draft_reply, manually_added, my_review_status, urgency_signal)
-  VALUES (@source, @externalRef, @title, @description, @url, @dueDate, @urgencyScore, @importanceScore, @priorityScore, @draftReply, @manuallyAdded, @myReviewStatus, @urgencySignal)
+  INSERT INTO tasks (source, external_ref, title, description, url, due_date, urgency_score, importance_score, priority_score, draft_reply, manually_added, my_review_status, urgency_signal, occurred_at)
+  VALUES (@source, @externalRef, @title, @description, @url, @dueDate, @urgencyScore, @importanceScore, @priorityScore, @draftReply, @manuallyAdded, @myReviewStatus, @urgencySignal, @occurredAt)
   ON CONFLICT(source, external_ref) DO UPDATE SET
     title = excluded.title,
     description = excluded.description,
@@ -119,6 +124,7 @@ const upsertStmt = db.prepare(`
     manually_added = CASE WHEN excluded.manually_added = 1 THEN 1 ELSE manually_added END,
     my_review_status = excluded.my_review_status,
     urgency_signal = COALESCE(urgency_signal, excluded.urgency_signal),
+    occurred_at = COALESCE(excluded.occurred_at, occurred_at),
     updated_at = datetime('now')
 `);
 
@@ -142,6 +148,7 @@ export function upsertTask(task: UpsertTaskInput): void {
     manuallyAdded: task.manuallyAdded ? 1 : 0,
     myReviewStatus: task.myReviewStatus ?? null,
     urgencySignal: task.urgencySignal ?? null,
+    occurredAt: task.occurredAt ?? null,
   });
 }
 
