@@ -60,7 +60,7 @@ export async function mergeImplementations(
   onProgress?: (message: string) => void
 ): Promise<MergedImplementation> {
   const prompt = buildMergePrompt(plan, claudeDiff, geminiDiff, baseBranch);
-  const result = await runClaudeCodeReview(prompt, worktreePath, { jsonSchema: MERGE_IMPLEMENTATIONS_JSON_SCHEMA, onProgress });
+  const result = await runClaudeCodeReview(prompt, worktreePath, { jsonSchema: MERGE_IMPLEMENTATIONS_JSON_SCHEMA, onProgress, model: 'sonnet' });
   if (!result.structuredOutput?.mergedDiff) {
     throw new Error('The merge agent did not return a mergedDiff.');
   }
@@ -87,7 +87,7 @@ export async function refineMergedDiff(
     `The developer reviewing it has this feedback${scopeText}: ${instruction}`,
     `Produce an updated merged diff addressing this feedback. Read the real files in your working directory (they already reflect the diff above) before making further changes — verify anything you're unsure of rather than guessing. Do not write or edit any files yourself — express the result entirely as the mergedDiff string in your structured answer.`,
   ].join('\n\n');
-  const result = await runClaudeCodeReview(prompt, worktreePath, { jsonSchema: MERGE_IMPLEMENTATIONS_JSON_SCHEMA, onProgress });
+  const result = await runClaudeCodeReview(prompt, worktreePath, { jsonSchema: MERGE_IMPLEMENTATIONS_JSON_SCHEMA, onProgress, model: 'sonnet' });
   if (!result.structuredOutput?.mergedDiff) {
     throw new Error('The refine agent did not return a mergedDiff.');
   }

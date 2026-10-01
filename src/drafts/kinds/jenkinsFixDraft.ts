@@ -87,7 +87,7 @@ export const jenkinsFixDraft: DraftHandler<JenkinsFixSubject> = {
   async execute(_gateKey, ctx) {
     const { cycle } = ctx.subject;
     const content = ctx.content as JenkinsFixContent;
-    const { cliSessionId } = await startClaudeCodeTask(content.prompt, cycle.worktreePath!);
+    const { cliSessionId } = await startClaudeCodeTask(content.prompt, cycle.worktreePath!, 'sonnet');
     const request = createCodeChangeRequest({
       devCycleId: cycle.id,
       taskId: cycle.taskId ?? undefined,

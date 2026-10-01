@@ -119,12 +119,24 @@ function trustClaudeWorkspace(dirPath: string): void {
  * pollable via getTaskInfo() instead of blocking Speako's process for
  * however long the task takes.
  */
-export async function startClaudeCodeTask(prompt: string, repoPath: string): Promise<ClaudeCodeTaskHandle> {
+/**
+ * Which subscription model an agentic run uses — picked per call site rather
+ * than left to the CLI's default, so quota goes to the strongest model only
+ * where judgment matters most (review, planning) and implementation work
+ * runs on a cheaper tier. Omitted = CLI default.
+ */
+export type ClaudeAgentModel = 'opus' | 'sonnet' | 'haiku';
+
+export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel): Promise<ClaudeCodeTaskHandle> {
   trustClaudeWorkspace(repoPath);
   const { stdout } = await execFileAsync(
     'claude',
     [
       '--bg', prompt, '--worktree',
+      // Confirmed live that --bg accepts --model (a background session
+      // started and completed with it); the session listing doesn't report
+      // which model actually ran.
+      ...(model ? ['--model', model] : []),
       '--permission-mode', 'acceptEdits',
       '--allowedTools', ...ALLOWED_TOOLS,
       '--disallowedTools', ...DISALLOWED_TOOLS,
@@ -303,7 +315,7 @@ function describeToolUse(name: string, input: any): string {
 export function runClaudeCodeReview(
   prompt: string,
   worktreePath: string,
-  options?: { jsonSchema?: object; onProgress?: (message: string) => void }
+  options?: { jsonSchema?: object; onProgress?: (message: string) => void; model?: ClaudeAgentModel }
 ): Promise<ClaudeCodeReviewResult> {
   const onProgress = options?.onProgress;
   return new Promise((resolve, reject) => {
@@ -317,6 +329,7 @@ export function runClaudeCodeReview(
         '--permission-mode', 'plan',
         '--disallowedTools', ...REVIEW_DISALLOWED_TOOLS,
         ...(options?.jsonSchema ? ['--json-schema', JSON.stringify(options.jsonSchema)] : []),
+        ...(options?.model ? ['--model', options.model] : []),
       ],
       { cwd: worktreePath }
     );

@@ -745,6 +745,16 @@
 
     #summaryWrap, #actionItemsWrap, #overviewWrap { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; display: none; }
 
+    #aiUsageBox { font-size: 0.8rem; }
+    .ai-usage-totals { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-bottom: 0.6rem; color: var(--muted); }
+    .ai-usage-totals strong { color: var(--text); }
+    .ai-usage-table { width: 100%; border-collapse: collapse; }
+    .ai-usage-table th, .ai-usage-table td { padding: 0.25rem 0.4rem; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .ai-usage-table th:first-child, .ai-usage-table td:first-child { text-align: left; }
+    .ai-usage-table th { color: var(--muted); font-weight: 600; }
+    .ai-usage-table td.ai-usage-zero { color: var(--muted); opacity: 0.5; }
+    .ai-usage-table td.ai-usage-gemini { color: #e8b04a; font-weight: 600; }
+    .ai-usage-empty { color: var(--muted); }
     #codebaseIndexBox, #communicationsIndexBox, #emailSyncBox { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
     #codebaseIndexBox button, #communicationsIndexBox button, #emailSyncBox button { font-size: 0.8rem; padding: 0.3rem 0.7rem; white-space: nowrap; flex-shrink: 0; }
     #codebaseIndexStatus, #communicationsIndexStatus, #emailSyncStatus, #teamsSyncStatus { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -1387,6 +1397,10 @@
         <button id="settingsModalClose"><svg class="icon"><use href="#icon-x"></use></svg></button>
       </div>
       <div id="settingsModalBody">
+        <fieldset>
+          <legend>AI usage (last 7 days)</legend>
+          <div id="aiUsageBox"><span class="ai-usage-empty">Loading…</span></div>
+        </fieldset>
         <fieldset>
           <legend>Gemini</legend>
           <div class="settings-grid">
@@ -3390,9 +3404,64 @@
 
     // ---------- Settings modal ----------
 
+    /**
+     * Calls per feature per provider, from GET /api/ai-usage. Gemini is the
+     * only metered provider, so any Gemini count is highlighted — for a
+     * feature routed to Claude/Antigravity/Jev first, it means that route
+     * failed over. Looks its element up at call time (not a top-level const)
+     * so script ordering can't break it.
+     */
+    function refreshAiUsage() {
+      const box = document.getElementById('aiUsageBox');
+      const PROVIDERS = [
+        { key: 'claude', label: 'Claude' },
+        { key: 'antigravity', label: 'Antigravity' },
+        { key: 'jev', label: 'Jev' },
+        { key: 'gemini', label: 'Gemini (metered)' },
+      ];
+      fetch('/api/ai-usage?days=7')
+        .then((res) => res.json())
+        .then(({ rows }) => {
+          if (!rows.length) {
+            box.innerHTML = '<span class="ai-usage-empty">No AI calls recorded in the last 7 days.</span>';
+            return;
+          }
+          const byFeature = new Map();
+          const totals = {};
+          for (const row of rows) {
+            if (!byFeature.has(row.feature)) byFeature.set(row.feature, {});
+            byFeature.get(row.feature)[row.provider] = row.calls;
+            totals[row.provider] = (totals[row.provider] || 0) + row.calls;
+          }
+          const totalsHtml = PROVIDERS.map((p) => `<span>${p.label}: <strong>${totals[p.key] || 0}</strong> calls</span>`).join('');
+          const features = [...byFeature.keys()].sort((a, b) => (byFeature.get(b).gemini || 0) - (byFeature.get(a).gemini || 0) || a.localeCompare(b));
+          const bodyHtml = features
+            .map((feature) => {
+              const counts = byFeature.get(feature);
+              const cells = PROVIDERS.map((p) => {
+                const n = counts[p.key] || 0;
+                const cls = n === 0 ? 'ai-usage-zero' : p.key === 'gemini' ? 'ai-usage-gemini' : '';
+                return `<td class="${cls}">${n}</td>`;
+              }).join('');
+              return `<tr><td>${escapeHtml(feature)}</td>${cells}</tr>`;
+            })
+            .join('');
+          box.innerHTML = `
+            <div class="ai-usage-totals">${totalsHtml}</div>
+            <table class="ai-usage-table">
+              <thead><tr><th>Feature</th>${PROVIDERS.map((p) => `<th>${p.label}</th>`).join('')}</tr></thead>
+              <tbody>${bodyHtml}</tbody>
+            </table>`;
+        })
+        .catch(() => {
+          box.innerHTML = '<span class="ai-usage-empty">Failed to load AI usage.</span>';
+        });
+    }
+
     function openSettingsModal() {
       settingsOverlay.hidden = false;
       settingsStatus.textContent = 'Loading…';
+      refreshAiUsage();
       refreshCodebaseStatus();
       refreshCommunicationsStatus();
       refreshEmailSyncStatus();

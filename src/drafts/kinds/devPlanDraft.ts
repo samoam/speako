@@ -41,6 +41,7 @@ export const devPlanDraft: DraftHandler<DevCycle> = {
     const result = await runClaudeCodeReview(prompt, cycle.worktreePath, {
       jsonSchema: DEV_PLAN_JSON_SCHEMA,
       onProgress: log,
+      model: 'opus',
     });
     if (result.isError || !result.structuredOutput) {
       throw new Error(result.resultText || 'The plan agent did not return a usable plan.');
@@ -57,7 +58,7 @@ export const devPlanDraft: DraftHandler<DevCycle> = {
 Plan:
 ${JSON.stringify(plan, null, 2)}`;
 
-    const { cliSessionId } = await startClaudeCodeTask(prompt, cycle.worktreePath);
+    const { cliSessionId } = await startClaudeCodeTask(prompt, cycle.worktreePath, 'sonnet');
     const task = cycle.taskId ? getTaskById(cycle.taskId) : undefined;
     const request = createCodeChangeRequest({
       taskId: task?.id,

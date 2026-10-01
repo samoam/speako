@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT_MS = 3 * 60 * 1000;
  */
 export function runClaudeText(
   prompt: string,
-  options: { model: ClaudeTextModel; jsonSchema?: object; systemPrompt?: string; timeoutMs?: number }
+  options: { model: ClaudeTextModel; jsonSchema?: object; systemPrompt?: string; timeoutMs?: number; webSearch?: boolean }
 ): Promise<ClaudeTextResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -34,7 +34,10 @@ export function runClaudeText(
       [
         '-p',
         '--model', options.model,
-        '--tools', '',
+        // Confirmed live: `--tools WebSearch --allowedTools WebSearch` with the
+        // rest of this lean setup ran one web search and still returned
+        // --json-schema output (haiku, ~13s, ~17k input tokens incl. results).
+        ...(options.webSearch ? ['--tools', 'WebSearch', '--allowedTools', 'WebSearch'] : ['--tools', '']),
         '--strict-mcp-config',
         '--setting-sources', '',
         '--disable-slash-commands',

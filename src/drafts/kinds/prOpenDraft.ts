@@ -58,7 +58,7 @@ export const prOpenDraft: DraftHandler<DevCycle> = {
 
     log('Running self-review…');
     const prompt = buildPrePrPrompt({ ticketSummary: ticket.summary, ticketDescription: ticket.description, deterministic });
-    const result = await runClaudeCodeReview(prompt, cycle.worktreePath, { jsonSchema: PRE_PR_JSON_SCHEMA, onProgress: log });
+    const result = await runClaudeCodeReview(prompt, cycle.worktreePath, { jsonSchema: PRE_PR_JSON_SCHEMA, onProgress: log, model: 'sonnet' });
     const agent = !result.isError && result.structuredOutput ? (result.structuredOutput as PrePrAgentResult) : null;
 
     const diffStat = await getBranchDiffStat(cycle.worktreePath, cycle.baseBranch);

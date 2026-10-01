@@ -2,6 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateJson, generateText, toJsonSchema } from '../src/ai/aiRouter';
 import * as claudeTextModule from '../src/ai/claudeText';
+import * as antigravityTextModule from '../src/ai/antigravityText';
 import * as geminiClientModule from '../src/gemini/geminiClient';
 import * as jevModule from '../src/integrations/typesafeJev';
 import { _setConfigOverrides } from '../src/config';
@@ -171,6 +172,45 @@ test('aiRouter: with no Gemini key and Claude routing off, it throws without mak
     await assert.rejects(() => generateText('chat', 'test-router-none', 'prompt'), /GEMINI_API_KEY/);
     assert.equal(gemini.calls.length, 0);
   } finally {
+    gemini.spy.mock.restore();
+  }
+});
+
+test('aiRouter: when Claude fails, Antigravity answers before Gemini is tried', async () => {
+  _setConfigOverrides({ claudeTextRouting: 'true', antigravityTextRouting: 'true', geminiApiKey: 'fake-key-for-test' });
+  const claudeSpy = mock.method(claudeTextModule, 'runClaudeText', async () => {
+    throw new Error('rate limited');
+  });
+  const agySpy = mock.method(antigravityTextModule, 'runAntigravityText', async () => ({ text: 'from antigravity', structured: null, inputTokens: 1, outputTokens: 1 }));
+  const gemini = mockGemini('from gemini');
+  try {
+    assert.equal(await generateText('chat', 'test-router-agy', 'prompt'), 'from antigravity');
+    assert.equal(claudeSpy.mock.calls.length, 1);
+    assert.equal(agySpy.mock.calls.length, 1);
+    assert.equal(gemini.calls.length, 0);
+  } finally {
+    _setConfigOverrides({});
+    claudeSpy.mock.restore();
+    agySpy.mock.restore();
+    gemini.spy.mock.restore();
+  }
+});
+
+test('aiRouter: web research never goes through Antigravity (unverified web search)', async () => {
+  _setConfigOverrides({ claudeTextRouting: 'true', antigravityTextRouting: 'true', geminiApiKey: 'fake-key-for-test' });
+  const claudeSpy = mock.method(claudeTextModule, 'runClaudeText', async () => {
+    throw new Error('rate limited');
+  });
+  const agySpy = mock.method(antigravityTextModule, 'runAntigravityText', async () => ({ text: 'from antigravity', structured: null, inputTokens: 1, outputTokens: 1 }));
+  const gemini = mockGemini('from gemini');
+  try {
+    assert.equal(await generateText('webResearch', 'test-router-web', 'prompt', { webSearch: true }), 'from gemini');
+    assert.equal(agySpy.mock.calls.length, 0);
+    assert.deepEqual(gemini.calls[0].config.tools, [{ googleSearch: {} }]);
+  } finally {
+    _setConfigOverrides({});
+    claudeSpy.mock.restore();
+    agySpy.mock.restore();
     gemini.spy.mock.restore();
   }
 });

@@ -16,7 +16,8 @@ test('runAntigravityAgent: resolves with isError:true (not a rejection) when the
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speako-antigravity-cli-test-'));
   const originalEnv: Record<string, string | undefined> = {};
   for (const key of Object.keys(process.env)) {
-    if (key.toLowerCase() === 'path') {
+    // LOCALAPPDATA too: resolveAgyBinary() checks agy's default install folder before PATH.
+    if (key.toLowerCase() === 'path' || key.toLowerCase() === 'localappdata') {
       originalEnv[key] = process.env[key];
       process.env[key] = '';
     }

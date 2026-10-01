@@ -36,3 +36,4 @@ for (const key of [
 }
 // config.bool() treats '' as "use the default" (true here), so this one needs an explicit 'false'.
 process.env.CLAUDE_TEXT_ROUTING = 'false';
+process.env.ANTIGRAVITY_TEXT_ROUTING = 'false';

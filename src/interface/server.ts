@@ -158,6 +158,7 @@ import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
 import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequestComment, PrRef } from '../integrations/bitbucketServer';
 import { gatherReviewContext, buildReviewPrompt, mergeReviews, recommendWithJev, buildPrReviewPhases, REVIEW_JSON_SCHEMA } from '../summarization/prReviewContext';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
+import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, disableGitPush, getWorktreeDiffSinceBase } from '../integrations/antigravityCli';
 import { gatherJiraImplementContext } from '../dev/jiraImplementContext';
 import { buildPlanPrompt, mergeDevPlans, DEV_PLAN_JSON_SCHEMA, StructuredDevPlan } from '../dev/devPlan';
@@ -362,6 +363,13 @@ export class InterfaceServer {
       const settings: Record<string, string> = {};
       for (const key of SETTINGS_FIELDS) settings[key] = serializeSettingValue(key);
       res.json(settings);
+    });
+
+    // Settings > AI usage panel: calls/tokens per feature per provider.
+    app.get('/api/ai-usage', (req, res) => {
+      const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 365);
+      const since = new Date(Date.now() - (days - 1) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      res.json({ since, days, rows: getAiUsageSince(since) });
     });
 
     app.put('/api/settings', (req, res) => {
@@ -1504,7 +1512,7 @@ export class InterfaceServer {
 
       try {
         const prompt = `Implement this action item from a meeting. Description: ${item.description}${item.owner ? ` (owner: ${item.owner})` : ''}`;
-        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath);
+        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath, 'sonnet');
         const request = createCodeChangeRequest({ actionItemId, sessionId: item.sessionId, repoName, repoPath, cliSessionId });
         this.pollCodeChangeRequest(request.id).catch((err: any) => console.error('[claude-code] polling failed:', err.message));
         this.broadcast({ type: 'code-change-started', actionItemId, requestId: request.id });
@@ -1562,7 +1570,7 @@ export class InterfaceServer {
 
       try {
         const prompt = `Implement this Jira ticket.\n\n${task.title}${task.description ? `\n\n${task.description}` : ''}`;
-        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath);
+        const { cliSessionId } = await startClaudeCodeTask(prompt, repoPath, 'sonnet');
         const request = createCodeChangeRequest({ taskId, repoName, repoPath, cliSessionId });
         this.pollCodeChangeRequest(request.id).catch((err: any) => console.error('[claude-code] polling failed:', err.message));
         this.broadcast({ type: 'code-change-started', taskId, requestId: request.id });
@@ -1886,7 +1894,7 @@ export class InterfaceServer {
                 : 'Worktree ready — running the Claude Code review (this can take a few minutes)…'
             );
             const [result, geminiResult] = await Promise.all([
-              runClaudeCodeReview(prompt, worktreePath, { jsonSchema: REVIEW_JSON_SCHEMA, onProgress: claudeProgress }),
+              runClaudeCodeReview(prompt, worktreePath, { jsonSchema: REVIEW_JSON_SCHEMA, onProgress: claudeProgress, model: 'opus' }),
               secondOpinionEnabled ? runSecondOpinionReview(prompt, worktreePath, secondOpinionProgress) : Promise.resolve(null),
             ]);
             if (secondOpinionEnabled) {
@@ -3342,7 +3350,7 @@ export class InterfaceServer {
         trackedPhase('plan', 'running', message);
       };
       const [claudeResult, geminiResult] = await Promise.all([
-        runClaudeCodeReview(prompt, cycle.repoPath, { jsonSchema: DEV_PLAN_JSON_SCHEMA, onProgress: claudeProgress }),
+        runClaudeCodeReview(prompt, cycle.repoPath, { jsonSchema: DEV_PLAN_JSON_SCHEMA, onProgress: claudeProgress, model: 'opus' }),
         secondOpinionEnabled ? runSecondOpinionReview(prompt, cycle.repoPath, (message) => log(`Antigravity: ${message}`)) : Promise.resolve(null),
       ]);
       if (claudeResult.isError || !claudeResult.structuredOutput) {
@@ -3454,7 +3462,7 @@ export class InterfaceServer {
   ): Promise<{ status: 'ready' | 'failed'; diff: string | null; error: string | null }> {
     const log = this.jiraImplementLogger(cycle.id);
     try {
-      const { cliSessionId } = await startClaudeCodeTask(implementPrompt, worktreePathClaude);
+      const { cliSessionId } = await startClaudeCodeTask(implementPrompt, worktreePathClaude, 'sonnet');
       const codeChangeRequest = createCodeChangeRequest({
         taskId: cycle.taskId ?? undefined,
         devCycleId: cycle.id,

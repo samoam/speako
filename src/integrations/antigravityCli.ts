@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { git } from './claudeCodeCli';
 
 /**
@@ -21,15 +23,12 @@ import { git } from './claudeCodeCli';
  * shell workaround.
  *
  * Confirmed live (this session, against a real installed `agy` 1.2.10):
- * - `-p <prompt> --output-format json` returns one JSON object,
- *   `{conversation_id, status, response, duration_seconds, usage}` — `status`
- *   is `"SUCCESS"` on a normal completion. Unlike claudeCodeCli.ts/geminiCli.ts,
- *   this file deliberately uses the non-streaming `json` format, not
- *   `stream-json` — `stream-json`'s event shape (`{event:"init"|"step_update",
- *   step_update:{step_type, state, tool_name, tool_info, text_delta, ...}}`)
- *   was observed but its terminal/completion event was never confirmed live,
- *   so onProgress here is necessarily coarser (no per-tool-call detail) than
- *   the other two CLIs until that's verified.
+ * - Every turn now goes through runAgyTurn below (prompt on stdin via
+ *   `--input-format stream-json`, confirmed live against agy 1.2.14); its
+ *   final `{event:"result", result:{status, response, ...}}` line carries the
+ *   same fields `-p <prompt> --output-format json` used to return, `status`
+ *   `"SUCCESS"` on a normal completion. The intermediate `step_update` events
+ *   aren't parsed yet, so onProgress stays coarser than the Claude CLI's.
  * - **Workspace trust is NOT automatic** (confirmed live, and matches
  *   antigravity-cli GitHub issue #507, an open feature request): without
  *   `--add-dir <path>`, tool calls run against `agy`'s own internal
@@ -57,6 +56,82 @@ export interface AntigravityRunResult {
 
 let antigravityAvailable: boolean | null = null;
 
+/**
+ * `agy`'s own installer puts the binary at %LOCALAPPDATA%\agy\bin\agy.exe and
+ * leaves PATH to a separate `agy install` step — confirmed on this dev
+ * machine, where that step never ran, so a bare spawn('agy') ENOENT'd and
+ * silently disabled every second opinion. Falls back to the bare name (PATH).
+ */
+export function resolveAgyBinary(): string {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData) {
+    const installed = path.join(localAppData, 'agy', 'bin', 'agy.exe');
+    if (fs.existsSync(installed)) return installed;
+  }
+  return 'agy';
+}
+
+export interface AgyTurnOutcome {
+  /** The final `{"event":"result","result":{...}}` payload, or null if agy never produced one. */
+  result: any | null;
+  stderr: string;
+  code: number | null;
+  spawnError?: Error;
+}
+
+/**
+ * One headless agy turn with the prompt on stdin instead of argv — argv caps
+ * out around 32k chars on Windows, well under a real PR-review prompt with a
+ * Jira ticket and Confluence pages inlined. Confirmed live (agy 1.2.14):
+ * plain-text stdin isn't read; `--input-format stream-json` (which requires
+ * `--output-format stream-json`) reads one `{"event":"user","message":{"role":
+ * "user","content":"..."}}` line, and `--print=` must come last with an empty
+ * value (a bare `-p` swallows the next flag as its prompt). The last stdout
+ * line is `{"event":"result","result":{status, response, structured_output?,
+ * usage}}`; `--json-schema` fills `structured_output`.
+ */
+export function runAgyTurn(prompt: string, args: string[], cwd: string, timeoutMs: number): Promise<AgyTurnOutcome> {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(resolveAgyBinary(), ['--input-format', 'stream-json', '--output-format', 'stream-json', ...args, '--print='], { cwd });
+    } catch (err: any) {
+      resolve({ result: null, stderr: '', code: null, spawnError: err });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (outcome: AgyTurnOutcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ result: { status: 'ERROR', response: 'Antigravity CLI (agy) timed out.' }, stderr, code: null });
+    }, timeoutMs);
+    child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
+    child.stderr?.on('data', (c: Buffer) => (stderr += c.toString('utf8')));
+    child.on('error', (err: any) => finish({ result: null, stderr, code: null, spawnError: err }));
+    child.on('close', (code) => {
+      let result: any = null;
+      for (const line of stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
+        try {
+          const event = JSON.parse(line);
+          if (event.event === 'result') result = event.result;
+        } catch {
+          // incidental non-JSON output — only the result event matters
+        }
+      }
+      finish({ result, stderr, code });
+    });
+    child.stdin?.write(`${JSON.stringify({ event: 'user', message: { role: 'user', content: prompt } })}\n`);
+    child.stdin?.end();
+  });
+}
+
 /** Best-effort presence check, cached for the process lifetime — a spawn ENOENT is the authoritative signal either way (see runAntigravityAgent), this just avoids a wasted spawn on every call once we already know it's missing. */
 export function isAntigravityCliConfigured(): boolean {
   return antigravityAvailable !== false;
@@ -71,79 +146,25 @@ export function isAntigravityCliConfigured(): boolean {
  * fall back to the surviving implementation) instead of the whole pipeline
  * failing.
  */
-export function runAntigravityAgent(
+export async function runAntigravityAgent(
   prompt: string,
   dirPath: string,
   options: { mode: 'plan' | 'accept-edits'; onProgress?: (message: string) => void }
 ): Promise<AntigravityRunResult> {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn(
-        'agy',
-        ['-p', prompt, '--mode', options.mode, '--output-format', 'json', '--add-dir', dirPath, '--dangerously-skip-permissions'],
-        { cwd: dirPath }
-      );
-    } catch (err: any) {
-      antigravityAvailable = false;
-      resolve({ resultText: err?.message ?? String(err), isError: true });
-      return;
-    }
-
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const timeoutHandle = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      resolve({ resultText: 'Antigravity CLI (agy) timed out.', isError: true });
-    }, AGY_TIMEOUT_MS);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
-    });
-
-    child.on('error', (err: any) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
-      // ENOENT (agy not installed) lands here — the fallback path every call site expects.
-      antigravityAvailable = false;
-      options.onProgress?.(`Antigravity CLI unavailable (${err.message}).`);
-      resolve({ resultText: err.message, isError: true });
-    });
-
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
-      antigravityAvailable = true;
-      try {
-        // agy's own stdout can carry incidental non-JSON lines ahead of the
-        // final result (confirmed live it doesn't in `--output-format json`
-        // mode, but this is defensive against a future version that does) —
-        // the actual result is a single JSON object, so take the last
-        // non-empty line rather than assuming stdout is exactly one line.
-        const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-        const parsed = JSON.parse(lines[lines.length - 1] ?? '{}');
-        if (parsed.status === 'SUCCESS') {
-          options.onProgress?.(parsed.response ? `Antigravity: ${String(parsed.response).slice(0, 500)}` : 'Antigravity: done.');
-          resolve({ resultText: parsed.response ?? '', isError: false });
-        } else {
-          resolve({ resultText: parsed.response || stderr.trim() || `agy exited with code ${code}`, isError: true });
-        }
-      } catch {
-        resolve({ resultText: stderr.trim() || stdout.trim() || `agy exited with code ${code}`, isError: true });
-      }
-    });
-
-    child.stdin?.end();
-  });
+  const outcome = await runAgyTurn(prompt, ['--mode', options.mode, '--add-dir', dirPath, '--dangerously-skip-permissions'], dirPath, AGY_TIMEOUT_MS);
+  if (outcome.spawnError) {
+    // ENOENT (agy not installed) lands here — the fallback path every call site expects.
+    antigravityAvailable = false;
+    options.onProgress?.(`Antigravity CLI unavailable (${outcome.spawnError.message}).`);
+    return { resultText: outcome.spawnError.message, isError: true };
+  }
+  antigravityAvailable = true;
+  const result = outcome.result;
+  if (result?.status === 'SUCCESS') {
+    options.onProgress?.(result.response ? `Antigravity: ${String(result.response).slice(0, 500)}` : 'Antigravity: done.');
+    return { resultText: result.response ?? '', isError: false };
+  }
+  return { resultText: result?.error || result?.response || outcome.stderr.trim() || `agy exited with code ${outcome.code}`, isError: true };
 }
 
 /**

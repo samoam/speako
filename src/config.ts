@@ -108,6 +108,10 @@ export const config = {
   get claudeTextRouting(): boolean {
     return bool('claudeTextRouting', 'CLAUDE_TEXT_ROUTING', true);
   },
+  /** Same idea for the Antigravity CLI (Google subscription) as the router's overflow route before Gemini. Off in tests for the same reason. */
+  get antigravityTextRouting(): boolean {
+    return bool('antigravityTextRouting', 'ANTIGRAVITY_TEXT_ROUTING', true);
+  },
   /** TypeSafe's Jev (docs.typesafe.ai) — takes over the classification-only decisions (triage, comment urgency, PR recommendation) when set; those fall back to Gemini/heuristics if unset. */
   get typesafeApiKey(): string {
     return str('typesafeApiKey', 'TYPESAFE_API_KEY', '');
