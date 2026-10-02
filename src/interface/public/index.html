@@ -225,6 +225,12 @@
     /* ---------- Dashboard (formerly "My Plate") ---------- */
     #dashboardView { flex: 1; flex-direction: column; height: 100vh; min-width: 0; display: none; }
     #dashboardHeader { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+    #activeDevCycles { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 1.25rem; border-bottom: 1px solid var(--border); }
+    .active-dev-cycle { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
+    .active-dev-cycle:hover { border-color: var(--accent); }
+    .active-dev-cycle.needs-you { border-color: var(--accent); }
+    .active-dev-cycle .active-dev-cycle-key { font-weight: 600; }
+    .active-dev-cycle .active-dev-cycle-state { color: var(--muted); }
     #dashboardHeader h2 { margin: 0; }
     #dashboardHeaderActions { display: flex; align-items: center; gap: 0.5rem; }
     #plateSyncStatus { font-size: 0.78rem; color: var(--muted); }
@@ -1739,6 +1745,10 @@
         <button id="plateSyncBtn" class="tool-btn" type="button">Sync now</button>
       </div>
     </div>
+    <!-- Active dev cycles, independent of plate tasks: a cycle outlives its
+         task (the Jira ticket closes, the task is dismissed) while its PR is
+         still in review, and this is the only way back into it then. -->
+    <div id="activeDevCycles" hidden></div>
     <div id="dashboardTabs">
       <button class="dash-tab-btn" data-tab="today"><svg class="icon dash-tab-icon plate-task-source-icon-brand"><use href="#icon-clock"></use></svg>Today</button>
       <button class="dash-tab-btn active" data-tab="meetings"><svg class="icon dash-tab-icon plate-task-source-icon-brand"><use href="#icon-mic"></use></svg>Meetings</button>
@@ -4966,6 +4976,31 @@
       renderDashboardBoard();
       renderDashboardTabBadges();
       renderSidebarQueue();
+      loadActiveDevCycles();
+    }
+
+    const activeDevCyclesEl = document.getElementById('activeDevCycles');
+    activeDevCyclesEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.active-dev-cycle');
+      if (!btn) return;
+      openJiraImplementTab({ ticketKey: btn.dataset.ticketKey, taskId: btn.dataset.taskId ? Number(btn.dataset.taskId) : undefined });
+    });
+
+    async function loadActiveDevCycles() {
+      let cycles = [];
+      try {
+        cycles = await fetch('/api/jira-implement').then((r) => r.json());
+      } catch {
+        cycles = [];
+      }
+      activeDevCyclesEl.hidden = !cycles.length;
+      activeDevCyclesEl.innerHTML = cycles
+        .map((c) => {
+          const needsYou = c.run?.status === 'waiting_approval' || c.run?.status === 'failed';
+          const state = c.run ? jiraImplementMetaText({ branchName: null }, c.run) : c.prId ? `PR #${c.prId} in review` : 'Started';
+          return `<button class="active-dev-cycle${needsYou ? ' needs-you' : ''}" type="button" data-ticket-key="${escapeHtml(c.ticketKey)}"${c.taskId ? ` data-task-id="${c.taskId}"` : ''} title="Open the dev cycle"><span class="active-dev-cycle-key">${escapeHtml(c.ticketKey)}</span><span class="active-dev-cycle-state">${escapeHtml(state)}</span></button>`;
+        })
+        .join('');
     }
 
     // The sidebar's persistent, always-visible task queue — a compact flat
@@ -9592,11 +9627,13 @@
       else if (msg.kind === 'dev_cycle' && msg.subjectId === String(currentJiraImplementCycleId)) updateJiraImplementPhase(msg.step);
     });
     onWsMessage(['run-status'], (msg) => {
+      loadActiveDevCycles();
       const run = msg.run;
       const settled = run.status !== 'queued' && run.status !== 'running';
       if (run.kind === 'pr_review' && run.subjectId === currentPrReviewTaskId && settled) loadPrReview(run.subjectId);
       // A dev-cycle run that parked for approval, finished or failed — the tab re-reads the cycle (plans, merged diff) rather than patching pieces.
-      else if (run.kind === 'dev_cycle' && run.subjectId === String(currentJiraImplementCycleId) && settled) loadJiraImplement(currentJiraImplementCycleId);
+      // Fix and review-feedback rounds park and settle the same way — before they were included here the tab kept a stale checklist until a manual reload.
+      else if (['dev_cycle', 'dev_cycle_fix', 'pr_feedback'].includes(run.kind) && run.subjectId === String(currentJiraImplementCycleId) && settled) loadJiraImplement(currentJiraImplementCycleId);
     });
 
     function connect() {

@@ -181,6 +181,7 @@ import {
   createDevCycle,
   getDevCycle,
   getActiveDevCycleForTicket,
+  getActiveDevCycles,
   BranchType,
   setDevCycleCurrentStep,
   setDevCyclePlans,
@@ -2911,12 +2912,16 @@ export class InterfaceServer {
             if (!cycle) throw err;
           }
         }
-        if (cycle.currentStep) {
+        if (cycle.currentStep && getLatestDevCycleRun(cycle.id)) {
           // Already started (or a redo) under this pipeline — just hand back
           // its current state rather than restarting from scratch.
           res.json({ cycleId: cycle.id });
           return;
         }
+        // A cycle with a current_step but no run predates the run engine
+        // (confirmed live: ETICK-10173's cycle from 2026-09-24 showed a
+        // "plan: running" that nothing was running). It starts over under
+        // the engine; an existing branch/worktree is reused by its step.
         setDevCycleCurrentStep(cycle.id, 'analyze');
         res.json({ cycleId: cycle.id });
         // The pipeline itself is src/orchestration/kinds/devCycleRun.ts; its
@@ -2929,6 +2934,22 @@ export class InterfaceServer {
         console.error('[jira-implement] failed to start:', err.message);
         res.status(500).json({ error: err.message });
       }
+    });
+
+    // Every active cycle with where it stands — the dashboard's way back
+    // into a cycle whose plate task is gone (confirmed live: a ticket's task
+    // closed while its PR's review-feedback round was parked at the gate,
+    // and nothing else opened the Jira-implement view).
+    app.get('/api/jira-implement', (_req, res) => {
+      res.json(
+        getActiveDevCycles()
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .map((cycle) => ({ id: cycle.id, ticketKey: cycle.ticketKey, taskId: cycle.taskId, branchName: cycle.branchName, prId: cycle.prId, prUrl: cycle.prUrl, currentStep: cycle.currentStep, run: devCycleRunSummary(cycle.id) }))
+          // Cycles from before the run engine that never got a run or a PR
+          // are stale leftovers (five of them on the dev machine) — they stay
+          // reachable from their plate task, not from here.
+          .filter((cycle) => cycle.run || cycle.prId)
+      );
     });
 
     app.get('/api/jira-implement/:id', (req, res) => {
