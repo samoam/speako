@@ -150,8 +150,8 @@ import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
 import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequestComment, PrRef } from '../integrations/bitbucketServer';
 import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, dev_cycle) with src/orchestration/engine.ts
 import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
-import { startPrReviewRun, prReviewRequestView, PR_REVIEW_RUN_KIND } from '../orchestration/kinds/prReviewRun';
-import { startDevCycleRun, retryDevCycleRun, approveDevCyclePlan, isDevCycleAwaitingPlanApproval, logDevCycle, devCycleView, DEV_CYCLE_RUN_KIND } from '../orchestration/kinds/devCycleRun';
+import { startPrReviewRun, prReviewRequestView } from '../orchestration/kinds/prReviewRun';
+import { startDevCycleRun, retryDevCycleRun, approveDevCyclePlan, isDevCycleAwaitingPlanApproval, logDevCycle, devCycleView } from '../orchestration/kinds/devCycleRun';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
@@ -1980,35 +1980,9 @@ export class InterfaceServer {
     this.wss = new WebSocketServer({ server: this.httpServer });
 
     setDraftBroadcast((event) => this.broadcast(event));
-    setRunBroadcast((event) => {
-      this.broadcast(event);
-      // index.html's PR review and Jira-implement views still listen to the
-      // pre-engine pr-review-* / dev-cycle-* messages; translate until they
-      // move to the generic run view.
-      const kind = event.type === 'run-status' ? event.run.kind : event.kind;
-      if (kind === DEV_CYCLE_RUN_KIND) {
-        if (event.type === 'run-status') {
-          // Parked for plan approval / finished / failed — the tab reloads itself on dev-cycle-updated.
-          if (event.run.status !== 'queued' && event.run.status !== 'running') this.broadcast({ type: 'dev-cycle-updated', devCycleId: Number(event.run.subjectId) });
-        } else if (event.type === 'run-step') {
-          this.broadcast({ type: 'dev-cycle-phase', devCycleId: Number(event.subjectId), key: event.step.key, status: event.step.status, detail: event.step.detail });
-        } else {
-          this.broadcast({ type: 'dev-cycle-log', devCycleId: Number(event.subjectId), message: event.message });
-        }
-        return;
-      }
-      if (kind !== PR_REVIEW_RUN_KIND) return;
-      if (event.type === 'run-status') {
-        const { run } = event;
-        const requestId = run.state?.requestId;
-        if (run.status === 'done') this.broadcast({ type: 'pr-review-ready', taskId: Number(run.subjectId), requestId });
-        else if (run.status === 'failed' || run.status === 'cancelled') this.broadcast({ type: 'pr-review-failed', taskId: Number(run.subjectId), requestId });
-      } else if (event.type === 'run-step') {
-        this.broadcast({ type: 'pr-review-phase', taskId: Number(event.subjectId), runId: event.runId, key: event.step.key, status: event.step.status, detail: event.step.detail });
-      } else {
-        this.broadcast({ type: 'pr-review-log', taskId: Number(event.subjectId), runId: event.runId, message: event.message });
-      }
-    });
+    // run-status / run-step / run-log go to the UI as-is — index.html's
+    // onWsMessage(['run-*']) handlers route them by kind + subjectId.
+    setRunBroadcast((event) => this.broadcast(event));
     reconcileStuckDrafts().catch((err: any) => console.error('[drafts] failed to reconcile stuck drafts on startup:', err.message));
 
     this.wss.on('connection', (client) => {

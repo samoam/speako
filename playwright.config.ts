@@ -27,7 +27,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'npx ts-node src/index.ts start',
-    url: `http://localhost:${E2E_PORT}/api/status`,
+    url: `http://localhost:${E2E_PORT}/api/plate`,
     reuseExistingServer: !process.env.CI,
     // ts-node has to type-check + transpile the whole src/ tree cold (no
     // build cache) before the server can even start listening — the

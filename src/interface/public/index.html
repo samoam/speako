@@ -357,7 +357,7 @@
     .pr-review-log-line:last-child { color: var(--text); }
     #taskDetailPrReviewLogDetails summary { cursor: pointer; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
     #taskDetailPrReviewLogDetails summary:hover { color: var(--text); }
-    /* Step tracker — the coarse "which step are we on" view (see buildPrReviewPhases, server.ts), a checklist companion to the raw #taskDetailPrReviewLog transcript below it. */
+    /* Step tracker — the coarse "which step are we on" view (an orchestration run's steps, see src/orchestration/), a checklist companion to the raw #taskDetailPrReviewLog transcript below it. */
     .pr-review-phases { display: flex; flex-direction: column; gap: 0.7rem; }
     .pr-review-phase { display: flex; align-items: flex-start; gap: 0.6rem; }
     .pr-review-phase-icon { flex-shrink: 0; width: 1.3em; height: 1.3em; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; margin-top: 0.05rem; }
@@ -1898,7 +1898,7 @@
               <h3>Progress</h3>
               <!-- Rerun controls (⟳) appear on the Implement/Merge & review
                    rows once that step has produced something to redo — see
-                   jiraImplementPhaseHtml/JIRA_IMPLEMENT_RERUNNABLE_STEPS. -->
+                   runStepHtml/JIRA_IMPLEMENT_RERUNNABLE_STEPS. -->
               <div id="jiraImplementPhases" class="pr-review-phases"></div>
             </div>
           </div>
@@ -5605,33 +5605,48 @@
       return `<div class="pr-review-log-line">${logStampHtml(at)}${escapeHtml(text)}</div>`;
     }
 
-    // Icon shown per phase status — a checkmark/x/dot rather than text, so
+    // ---- Orchestration-run checklist + log, shared by the PR review view and the Jira-implement tab ----
+
+    // Icon shown per step status — a checkmark/x/dash rather than text, so
     // the whole pipeline reads at a glance (see .pr-review-phase-* CSS for
     // the color/pulse per status).
-    const PR_REVIEW_PHASE_ICONS = { pending: '', running: '', done: '✓', failed: '✕', skipped: '–' };
+    const RUN_STEP_ICONS = { pending: '', running: '', done: '✓', failed: '✕', skipped: '–' };
 
-    function prReviewPhaseHtml(p) {
+    /** One checklist row for a run step ({key,label,status,detail}); `rerunnable` (a Set of step keys) adds the ⟳ button the Jira-implement tab offers. */
+    function runStepHtml(p, rerunnable = null) {
+      const canRerun = !!rerunnable && rerunnable.has(p.key) && p.status !== 'pending';
       return `
         <div class="pr-review-phase pr-review-phase-${p.status}" data-phase-key="${escapeHtml(p.key)}">
-          <div class="pr-review-phase-icon">${PR_REVIEW_PHASE_ICONS[p.status] ?? ''}</div>
+          <div class="pr-review-phase-icon">${RUN_STEP_ICONS[p.status] ?? ''}</div>
           <div class="pr-review-phase-body">
             <div class="pr-review-phase-label">${escapeHtml(p.label)}</div>
             ${p.detail ? `<div class="pr-review-phase-detail">${escapeHtml(p.detail)}</div>` : ''}
           </div>
+          ${canRerun ? `<button class="jira-implement-phase-rerun" type="button" data-rerun-step="${escapeHtml(p.key)}" title="Rerun this step">⟳</button>` : ''}
         </div>`;
+    }
+
+    /** Live WS-driven single-step update — swaps just that step's element rather than re-rendering the whole list, same "tail without a jump" reasoning as appendRunLogLine. No-ops if the list hasn't been rendered yet (e.g. a stray late event after navigating away). */
+    function updateRunStepIn(container, step, rerunnable = null) {
+      const el = container.querySelector(`[data-phase-key="${CSS.escape(step.key)}"]`);
+      if (!el) return;
+      el.outerHTML = runStepHtml({ ...step, label: el.querySelector('.pr-review-phase-label').textContent }, rerunnable);
+    }
+
+    /** Appends one log line without a full re-render, so the log visibly "tails" as each step happens rather than looking stuck until the whole run finishes. */
+    function appendRunLogLine(container, message) {
+      container.insertAdjacentHTML('beforeend', prReviewLogLineHtml(stampLogLineNow(message)));
+      container.scrollTop = container.scrollHeight;
     }
 
     function renderPrReviewPhases(phases) {
       const list = phases ?? [];
       prReviewPhasesSection.hidden = list.length === 0;
-      prReviewPhases.innerHTML = list.map(prReviewPhaseHtml).join('');
+      prReviewPhases.innerHTML = list.map((p) => runStepHtml(p)).join('');
     }
 
-    /** Live WS-driven single-phase update — swaps just that phase's element rather than re-rendering the whole list, same "tail without a jump" reasoning as appendPrReviewLogLine. No-ops if the phase list hasn't been rendered yet (e.g. a stray late event after navigating away). */
-    function updatePrReviewPhase(key, status, detail) {
-      const el = prReviewPhases.querySelector(`[data-phase-key="${CSS.escape(key)}"]`);
-      if (!el) return;
-      el.outerHTML = prReviewPhaseHtml({ key, label: el.querySelector('.pr-review-phase-label').textContent, status, detail });
+    function updatePrReviewPhase(step) {
+      updateRunStepIn(prReviewPhases, step);
     }
 
     function renderPrReviewLog(log) {
@@ -5641,11 +5656,9 @@
       prReviewLog.scrollTop = prReviewLog.scrollHeight;
     }
 
-    /** Appends one line without a full re-render — used for live WS-driven progress updates so the log visibly "tails" as each step happens, rather than looking stuck until the whole run finishes. */
     function appendPrReviewLogLine(message) {
       prReviewLogSection.hidden = false;
-      prReviewLog.insertAdjacentHTML('beforeend', prReviewLogLineHtml(stampLogLineNow(message)));
-      prReviewLog.scrollTop = prReviewLog.scrollHeight;
+      appendRunLogLine(prReviewLog, message);
     }
 
     function renderPrReview(task, request) {
@@ -6351,43 +6364,24 @@
     // plan. Branch & worktrees has no meaningful "redo" once created.
     const JIRA_IMPLEMENT_RERUNNABLE_STEPS = new Set(['plan', 'implement', 'merge_and_review']);
 
-    // Same status-icon convention as PR review's phase checklist (PR_REVIEW_PHASE_ICONS) — reused verbatim since the shape is identical.
-    // 'running' is still rerunnable (not just 'done'/'failed') — a server
-    // restart mid-step orphans the in-process poller with no supervisory
-    // "resume on restart" logic, leaving the phase stuck at 'running' forever
-    // with no live process behind it (confirmed live: the underlying `claude
-    // logs <id>` came back "job not found" for a phase the UI still showed
-    // as running). Hiding the button in that state left no recovery path
-    // short of the API directly.
-    function jiraImplementPhaseHtml(p) {
-      const canRerun = JIRA_IMPLEMENT_RERUNNABLE_STEPS.has(p.key) && p.status !== 'pending';
-      return `
-        <div class="pr-review-phase pr-review-phase-${p.status}" data-phase-key="${escapeHtml(p.key)}">
-          <div class="pr-review-phase-icon">${PR_REVIEW_PHASE_ICONS[p.status] ?? ''}</div>
-          <div class="pr-review-phase-body">
-            <div class="pr-review-phase-label">${escapeHtml(p.label)}</div>
-            ${p.detail ? `<div class="pr-review-phase-detail">${escapeHtml(p.detail)}</div>` : ''}
-          </div>
-          ${canRerun ? `<button class="jira-implement-phase-rerun" type="button" data-rerun-step="${escapeHtml(p.key)}" title="Rerun this step">⟳</button>` : ''}
-        </div>`;
-    }
+    // A 'running' step is still rerunnable (not just 'done'/'failed'): the
+    // engine fails interrupted runs on restart, but a step whose agent hung
+    // can sit at 'running' until its timeout, and ⟳ is the only recovery
+    // path short of the API.
 
-    // Retry is offered whenever any phase is showing 'failed' — regardless
-    // of which one, since the /retry route itself figures out which step to
-    // resume from based on the cycle's current_step (see registerJiraImplementRoutes).
+    // Retry is offered whenever any step shows 'failed' — the /retry route
+    // resumes from the failed step itself (engine.ts's retryRun).
     function updateJiraImplementRetryVisibility() {
       jiraImplementRetryBtn.hidden = !jiraImplementPhasesEl.querySelector('.pr-review-phase-failed');
     }
 
     function renderJiraImplementPhases(phases) {
-      jiraImplementPhasesEl.innerHTML = (phases ?? []).map(jiraImplementPhaseHtml).join('');
+      jiraImplementPhasesEl.innerHTML = (phases ?? []).map((p) => runStepHtml(p, JIRA_IMPLEMENT_RERUNNABLE_STEPS)).join('');
       updateJiraImplementRetryVisibility();
     }
 
-    function updateJiraImplementPhase(key, status, detail) {
-      const el = jiraImplementPhasesEl.querySelector(`[data-phase-key="${CSS.escape(key)}"]`);
-      if (!el) return;
-      el.outerHTML = jiraImplementPhaseHtml({ key, label: el.querySelector('.pr-review-phase-label').textContent, status, detail });
+    function updateJiraImplementPhase(step) {
+      updateRunStepIn(jiraImplementPhasesEl, step, JIRA_IMPLEMENT_RERUNNABLE_STEPS);
       updateJiraImplementRetryVisibility();
     }
 
@@ -6398,8 +6392,7 @@
     }
 
     function appendJiraImplementLogLine(message) {
-      jiraImplementLogEl.insertAdjacentHTML('beforeend', prReviewLogLineHtml(stampLogLineNow(message)));
-      jiraImplementLogEl.scrollTop = jiraImplementLogEl.scrollHeight;
+      appendRunLogLine(jiraImplementLogEl, message);
     }
 
     function jiraImplementPlanHtml(label, plan) {
@@ -9064,6 +9057,426 @@
 
     // ---------- WebSocket live updates ----------
 
+    // One handler per message type, looked up by name in connect() below —
+    // a map rather than a 300-line if/else chain so a new message type is
+    // one onWsMessage() call next to the feature that owns it, and a typo in
+    // a type name is a silently-ignored message rather than a shifted branch.
+    const WS_HANDLERS = {};
+    function onWsMessage(types, handler) {
+      for (const type of types) WS_HANDLERS[type] = handler;
+    }
+
+    onWsMessage(['status'], (msg) => {
+      liveSessionId = msg.recording ? msg.sessionId : null;
+      sessionPaused = !!msg.paused;
+      setRecordingUiState(msg.recording);
+      if (msg.recording && !activeSessionId) openSession(msg.sessionId);
+      updateWaveformVisibility();
+      refreshSessions();
+    });
+
+    onWsMessage(['session-start'], (msg) => {
+      liveSessionId = msg.sessionId;
+      sessionPaused = false;
+      setRecordingUiState(true);
+      clearWaveform();
+      updateWaveformVisibility();
+      // Every other start path (new-session modal, sidebar's manual
+      // "Start recording" button) already calls openSession() itself,
+      // which re-renders the sidebar — but the schedule poller starts a
+      // session with no client-side driver at all, so without this the
+      // sidebar would never show it's now recording or that its
+      // schedule badge cleared. If that auto-started session also
+      // happens to be the one already open in the main panel, its
+      // header needs the same refresh — otherwise it stays stuck on
+      // whatever "ready — not yet started"/"preparing…" label it had
+      // before recording actually began.
+      refreshSessions().then(() => {
+        if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
+      });
+    });
+
+    onWsMessage(['session-stop'], (msg) => {
+      liveSessionId = null;
+      sessionPaused = false;
+      setRecordingUiState(false);
+      updateWaveformVisibility();
+      // openSession() reads the session's endedAt from the in-memory
+      // `sessions` array via sessions.find(...) — refreshSessions() must
+      // resolve first, or openSession() sees a stale endedAt:null and
+      // the main panel's "recording" state never clears.
+      refreshSessions().then(() => {
+        if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
+      });
+    });
+
+    onWsMessage(['session-pause'], (msg) => {
+      sessionPaused = true;
+      if (msg.sessionId === activeSessionId) {
+        const session = sessions.find((s) => s.id === activeSessionId);
+        if (session) setMainHeader(session);
+      }
+    });
+
+    onWsMessage(['session-resume'], (msg) => {
+      sessionPaused = false;
+      if (msg.sessionId === activeSessionId) {
+        const session = sessions.find((s) => s.id === activeSessionId);
+        if (session) setMainHeader(session);
+      }
+    });
+
+    onWsMessage(['waveform'], (msg) => {
+      if (msg.sessionId === activeSessionId && msg.sessionId === liveSessionId) {
+        pushWaveformEnvelope(msg.envelope);
+      }
+    });
+
+    onWsMessage(['segment'], (msg) => {
+      if (msg.segment.sessionId === activeSessionId && (msg.segment.sessionId === liveSessionId || msg.segment.sessionId === liveVoiceSessionId)) {
+        renderSegment(msg.segment);
+      }
+      scheduleSessionsRefresh();
+    });
+
+    onWsMessage(['sentiment'], (msg) => {
+      if (msg.sessionId === activeSessionId) applySentiment(msg.speaker, msg.startMs, msg.score);
+    });
+
+    onWsMessage(['trigger'], (msg) => {
+      if (msg.sessionId === activeSessionId) appendTrigger(msg);
+    });
+
+    onWsMessage(['trigger-fact-check'], (msg) => {
+      if (msg.sessionId === activeSessionId) applyTriggerFactCheck(msg.triggerId, msg.status, msg.factCheck);
+    });
+
+    onWsMessage(['suggestion'], (msg) => {
+      if (msg.suggestion.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
+    });
+
+    onWsMessage(['suggestion-updated'], (msg) => {
+      if (msg.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
+    });
+
+    onWsMessage(['fact-check'], (msg) => {
+      if (msg.factCheck.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
+    });
+
+    onWsMessage(['fact-check-updated'], (msg) => {
+      if (msg.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
+    });
+
+    onWsMessage(['log-line'], (msg) => {
+      appendLogLine(msg.entry);
+    });
+
+    onWsMessage(['transcription-error'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        transcriptionErrorBanner.hidden = false;
+        transcriptionErrorBanner.textContent = `Transcription error: ${msg.message} — check the Logs panel or your Google Cloud Speech-to-Text configuration. Recording continues, but speech may not be transcribed.`;
+      }
+    });
+
+    onWsMessage(['reminder-due'], (msg) => {
+      const item = msg.actionItem;
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Speako reminder', { body: item.description });
+      } else {
+        // No permission (or unsupported) — the Logs panel is the only
+        // other place this can visibly land; still better than the
+        // reminder silently firing into nothing.
+        console.warn(`[reminder] "${item.description}" is due, but Notification permission isn't granted — open Action Items to see it.`);
+      }
+      if (item.sessionId === activeSessionId) {
+        renderActionItems(currentActionItems.map((i) => (i.id === item.id ? item : i)));
+      }
+    });
+
+    onWsMessage(['live-query'], (msg) => {
+      if (msg.query.sessionId === activeSessionId) appendQuery(msg.query);
+    });
+
+    onWsMessage(['diarizing'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        identifyBtn.disabled = true;
+        mainMeta.textContent = 'Identifying speakers…';
+      }
+    });
+
+    onWsMessage(['diarized'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        renderFullTranscript(msg.segments);
+        identifyBtn.disabled = false;
+        mainMeta.textContent = 'Speakers identified';
+      }
+      refreshSessions();
+    });
+
+    onWsMessage(['diarization-failed'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        identifyBtn.disabled = false;
+        mainMeta.textContent = `Speaker identification failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['summarizing'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        summarizeBtn.disabled = true;
+        mainMeta.textContent = 'Generating summary…';
+      }
+    });
+
+    onWsMessage(['summarized'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        renderSummary(msg.summary);
+        renderActionItems(msg.actionItems);
+        summarizeBtn.disabled = false;
+        mainMeta.textContent = 'Summary ready';
+      }
+      refreshSessions();
+    });
+
+    onWsMessage(['summarization-failed'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        summarizeBtn.disabled = false;
+        mainMeta.textContent = `Summary generation failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['coaching'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        coachingFetchToken++;
+        renderCoachingFeedback(msg.feedback);
+        coachBtn.disabled = false;
+        mainMeta.textContent = 'Coaching feedback ready';
+      }
+    });
+
+    onWsMessage(['coaching-failed'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        coachBtn.disabled = false;
+        mainMeta.textContent = `Coaching feedback failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['chapters-detecting'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        chaptersBtn.disabled = true;
+        mainMeta.textContent = 'Detecting chapters…';
+      }
+    });
+
+    onWsMessage(['chapters-detected'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        renderChapters(msg.chapters);
+        chaptersBtn.disabled = false;
+        mainMeta.textContent = 'Chapters ready';
+      }
+    });
+
+    onWsMessage(['chapters-detection-failed'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        chaptersBtn.disabled = false;
+        mainMeta.textContent = `Chapter detection failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['audio-overview-generating'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        audioOverviewBtn.disabled = true;
+        mainMeta.textContent = 'Generating audio overview…';
+      }
+      // A subject-driven overview's session is brand new — other tabs/
+      // windows don't know about it yet until the sidebar refreshes.
+      if (!sessions.some((s) => s.id === msg.sessionId)) refreshSessions();
+    });
+
+    onWsMessage(['audio-overview-ready'], (msg) => {
+      if (msg.overview.sessionId === activeSessionId) {
+        renderSessionAudioOverview(msg.overview);
+        renderOverviewContent(msg.overview);
+        audioOverviewBtn.disabled = false;
+        mainMeta.textContent = 'Audio overview ready';
+      }
+      refreshSessions();
+    });
+
+    onWsMessage(['audio-overview-failed'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        audioOverviewBtn.disabled = false;
+        mainMeta.textContent = `Audio overview failed: ${msg.error}`;
+      }
+      refreshSessions();
+    });
+
+    onWsMessage(['action-item-updated'], (msg) => {
+      if (msg.sessionId === activeSessionId) {
+        const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
+        if (idx !== -1) currentActionItems[idx] = msg.actionItem;
+      }
+    });
+
+    onWsMessage(['action-item-added'], (msg) => {
+      // Only reflects it into the live array for other open tabs/windows
+      // — the tab that actually submitted the form already re-rendered
+      // itself from the POST response.
+      if (msg.sessionId === activeSessionId && !currentActionItems.some((i) => i.id === msg.actionItem.id)) {
+        renderActionItems([...currentActionItems, msg.actionItem]);
+      }
+    });
+
+    onWsMessage(['action-item-deleted'], (msg) => {
+      if (msg.sessionId === activeSessionId && currentActionItems.some((i) => i.id === msg.actionItemId)) {
+        renderActionItems(currentActionItems.filter((i) => i.id !== msg.actionItemId));
+      }
+    });
+
+    onWsMessage(['session-renamed'], (msg) => {
+      if (msg.sessionId === activeSessionId) mainTitle.textContent = msg.name || displayName({ startedAt: null });
+      refreshSessions();
+    });
+
+    onWsMessage(['session-deleted'], (msg) => {
+      if (msg.sessionId === activeSessionId) resetMainPanel();
+      refreshSessions();
+    });
+
+    onWsMessage(['session-schedule-updated'], (msg) => {
+      refreshSessions();
+    });
+
+    onWsMessage(['prep-started'], (msg) => {
+      refreshSessions().then(() => {
+        if (msg.sessionId === activeSessionId) updateRunPrepBtn(msg.sessionId);
+      });
+    });
+
+    onWsMessage(['prep-ready'], (msg) => {
+      // Refresh the cached `sessions` array (has the new prepStatus)
+      // before loadPrepBrief() reads it via updateRunPrepBtn() — the old
+      // order left "Run prep now" visibly stale until some unrelated
+      // refresh happened to run later.
+      refreshSessions().then(() => {
+        if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
+        if (dashboardActive && currentDashboardTab === 'meetings') renderDashboardBoard();
+      });
+    });
+
+    onWsMessage(['calendar-session-created'], (msg) => {
+      refreshSessions();
+      if (!calendarOverlay.hidden) loadCalendarWeek();
+    });
+
+    onWsMessage(['plate-updated'], (msg) => {
+      plateSyncBtn.disabled = false;
+      plateSyncStatus.textContent = `Last synced ${new Date().toLocaleTimeString()}`;
+      // Always refresh, even when the dashboard is closed — badges need
+      // current data regardless of whether the board is visible.
+      loadDashboardTasks().then(() => {
+        // Keeps an open Task Detail view current (e.g. approving a
+        // reply draft or editing priority/due-date/postpone from inside
+        // it) — only when it's actually the visible view right now.
+        if (taskDetailView.style.display !== 'none') reopenTaskDetail();
+      });
+      loadMorningBriefing();
+      refreshReviewQueueCount();
+    });
+
+    onWsMessage(['codebase-index-progress'], (msg) => {
+      if (msg.status === 'started') {
+        codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
+      } else if (msg.status === 'done') {
+        codebaseIndexStatus.textContent = `Indexed ${msg.repo} (${msg.fileCount} files, ${msg.chunkCount} chunks)`;
+      } else if (msg.status === 'failed') {
+        codebaseIndexStatus.textContent = `${msg.repo} failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['codebase-index-complete'], (msg) => {
+      indexCodebaseBtn.disabled = false;
+      codebaseIndexStatus.textContent = formatCodebaseSummary(msg.repos);
+    });
+
+    onWsMessage(['communications-index-progress'], (msg) => {
+      if (msg.status === 'started') {
+        communicationsIndexStatus.textContent = `Indexing message ${msg.messageId}…`;
+      } else if (msg.status === 'done') {
+        communicationsIndexStatus.textContent = `Indexed message ${msg.messageId} (${msg.chunkCount} chunks)`;
+      } else if (msg.status === 'failed') {
+        communicationsIndexStatus.textContent = `Message ${msg.messageId} failed: ${msg.error}`;
+      }
+    });
+
+    onWsMessage(['communications-index-complete'], (msg) => {
+      indexCommunicationsBtn.disabled = false;
+      communicationsIndexStatus.textContent = formatCommunicationsSummary(msg.sources);
+    });
+
+    onWsMessage(['code-change-started', 'code-change-ready', 'code-change-applied', 'code-change-pushed', 'code-change-discarded', 'code-change-failed', 'code-change-log'], (msg) => {
+      if (msg.actionItemId) refreshCodeChangeCell(msg.actionItemId);
+    });
+
+    onWsMessage(['dev-cycle-plan-ready', 'dev-cycle-merge-ready', 'dev-cycle-updated', 'jenkins-build-updated', 'jenkins-build-failed', 'jenkins-build-recovered', 'jenkins-build-request-updated'], (msg) => {
+      if (String(msg.devCycleId) === String(currentJiraImplementCycleId)) loadJiraImplement(currentJiraImplementCycleId);
+    });
+
+    onWsMessage(['draft-updated', 'draft-revision', 'draft-log'], (msg) => {
+      if (draftPanelRelevant(msg.draftId)) loadDraftPanel(msg.draftId).catch(() => {});
+      if (taskDetailActiveDraftId === msg.draftId) refreshInlineDraft(msg.draftId).catch(() => {});
+    });
+
+    onWsMessage(['pr-comment-drafts-updated'], (msg) => {
+      if (String(msg.prReviewRequestId) === String(currentPrReviewRequestId)) refetchCommentDrafts(msg.prReviewRequestId);
+    });
+
+    onWsMessage(['voice-ready', 'voice-practice-ready'], (msg) => {
+      clearTimeout(voiceConnectTimer);
+      liveVoiceSessionId = msg.sessionId;
+      if (msg.type === 'voice-practice-ready') voicePracticeSessionId = msg.sessionId;
+      refreshSessions().then(() => openSession(msg.sessionId));
+    });
+
+    onWsMessage(['voice-function-call'], (msg) => {
+      if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Checking ${msg.tool}…`;
+    });
+
+    onWsMessage(['voice-transcript'], (msg) => {
+      if (activeSessionId === liveVoiceSessionId) appendLiveChatBubble(msg.role, msg.text);
+    });
+
+    onWsMessage(['voice-turn-complete'], (msg) => {
+      finalizeLiveChatBubble();
+    });
+
+    onWsMessage(['voice-error'], (msg) => {
+      clearTimeout(voiceConnectTimer);
+      voiceChatBtn.classList.remove('active');
+      if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Voice chat error: ${msg.error}`;
+    });
+
+    onWsMessage(['voice-idle-timeout'], (msg) => {
+      if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = 'Session ended after a period of inactivity.';
+      stopVoice();
+    });
+
+    // Orchestration runs (src/orchestration/engine.ts) — the PR review view and the Jira-implement tab both render a run's steps/log; which one a message belongs to is its `kind`, and whether it's the one on screen is its `subjectId` (the task id / the dev cycle id).
+    onWsMessage(['run-log'], (msg) => {
+      if (msg.kind === 'pr_review' && msg.subjectId === currentPrReviewTaskId) appendPrReviewLogLine(msg.message);
+      else if (msg.kind === 'dev_cycle' && msg.subjectId === String(currentJiraImplementCycleId)) appendJiraImplementLogLine(msg.message);
+    });
+    onWsMessage(['run-step'], (msg) => {
+      if (msg.kind === 'pr_review' && msg.subjectId === currentPrReviewTaskId) updatePrReviewPhase(msg.step);
+      else if (msg.kind === 'dev_cycle' && msg.subjectId === String(currentJiraImplementCycleId)) updateJiraImplementPhase(msg.step);
+    });
+    onWsMessage(['run-status'], (msg) => {
+      const run = msg.run;
+      const settled = run.status !== 'queued' && run.status !== 'running';
+      if (run.kind === 'pr_review' && run.subjectId === currentPrReviewTaskId && settled) loadPrReview(run.subjectId);
+      // A dev-cycle run that parked for approval, finished or failed — the tab re-reads the cycle (plans, merged diff) rather than patching pieces.
+      else if (run.kind === 'dev_cycle' && run.subjectId === String(currentJiraImplementCycleId) && settled) loadJiraImplement(currentJiraImplementCycleId);
+    });
+
     function connect() {
       const ws = new WebSocket(`ws://${location.host}`);
       ws.binaryType = 'arraybuffer';
@@ -9075,316 +9488,8 @@
           return;
         }
         const msg = JSON.parse(event.data);
-
-        if (msg.type === 'status') {
-          liveSessionId = msg.recording ? msg.sessionId : null;
-          sessionPaused = !!msg.paused;
-          setRecordingUiState(msg.recording);
-          if (msg.recording && !activeSessionId) openSession(msg.sessionId);
-          updateWaveformVisibility();
-          refreshSessions();
-        } else if (msg.type === 'session-start') {
-          liveSessionId = msg.sessionId;
-          sessionPaused = false;
-          setRecordingUiState(true);
-          clearWaveform();
-          updateWaveformVisibility();
-          // Every other start path (new-session modal, sidebar's manual
-          // "Start recording" button) already calls openSession() itself,
-          // which re-renders the sidebar — but the schedule poller starts a
-          // session with no client-side driver at all, so without this the
-          // sidebar would never show it's now recording or that its
-          // schedule badge cleared. If that auto-started session also
-          // happens to be the one already open in the main panel, its
-          // header needs the same refresh — otherwise it stays stuck on
-          // whatever "ready — not yet started"/"preparing…" label it had
-          // before recording actually began.
-          refreshSessions().then(() => {
-            if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
-          });
-        } else if (msg.type === 'session-stop') {
-          liveSessionId = null;
-          sessionPaused = false;
-          setRecordingUiState(false);
-          updateWaveformVisibility();
-          // openSession() reads the session's endedAt from the in-memory
-          // `sessions` array via sessions.find(...) — refreshSessions() must
-          // resolve first, or openSession() sees a stale endedAt:null and
-          // the main panel's "recording" state never clears.
-          refreshSessions().then(() => {
-            if (msg.sessionId === activeSessionId) openSession(msg.sessionId);
-          });
-        } else if (msg.type === 'session-pause') {
-          sessionPaused = true;
-          if (msg.sessionId === activeSessionId) {
-            const session = sessions.find((s) => s.id === activeSessionId);
-            if (session) setMainHeader(session);
-          }
-        } else if (msg.type === 'session-resume') {
-          sessionPaused = false;
-          if (msg.sessionId === activeSessionId) {
-            const session = sessions.find((s) => s.id === activeSessionId);
-            if (session) setMainHeader(session);
-          }
-        } else if (msg.type === 'waveform') {
-          if (msg.sessionId === activeSessionId && msg.sessionId === liveSessionId) {
-            pushWaveformEnvelope(msg.envelope);
-          }
-        } else if (msg.type === 'segment') {
-          if (msg.segment.sessionId === activeSessionId && (msg.segment.sessionId === liveSessionId || msg.segment.sessionId === liveVoiceSessionId)) {
-            renderSegment(msg.segment);
-          }
-          scheduleSessionsRefresh();
-        } else if (msg.type === 'sentiment') {
-          if (msg.sessionId === activeSessionId) applySentiment(msg.speaker, msg.startMs, msg.score);
-        } else if (msg.type === 'trigger') {
-          if (msg.sessionId === activeSessionId) appendTrigger(msg);
-        } else if (msg.type === 'trigger-fact-check') {
-          if (msg.sessionId === activeSessionId) applyTriggerFactCheck(msg.triggerId, msg.status, msg.factCheck);
-        } else if (msg.type === 'suggestion') {
-          if (msg.suggestion.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
-        } else if (msg.type === 'suggestion-updated') {
-          if (msg.sessionId === activeSessionId) appendSuggestion(msg.suggestion);
-        } else if (msg.type === 'fact-check') {
-          if (msg.factCheck.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
-        } else if (msg.type === 'fact-check-updated') {
-          if (msg.sessionId === activeSessionId) appendFactCheck(msg.factCheck);
-        } else if (msg.type === 'log-line') {
-          appendLogLine(msg.entry);
-        } else if (msg.type === 'transcription-error') {
-          if (msg.sessionId === activeSessionId) {
-            transcriptionErrorBanner.hidden = false;
-            transcriptionErrorBanner.textContent = `Transcription error: ${msg.message} — check the Logs panel or your Google Cloud Speech-to-Text configuration. Recording continues, but speech may not be transcribed.`;
-          }
-        } else if (msg.type === 'reminder-due') {
-          const item = msg.actionItem;
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('Speako reminder', { body: item.description });
-          } else {
-            // No permission (or unsupported) — the Logs panel is the only
-            // other place this can visibly land; still better than the
-            // reminder silently firing into nothing.
-            console.warn(`[reminder] "${item.description}" is due, but Notification permission isn't granted — open Action Items to see it.`);
-          }
-          if (item.sessionId === activeSessionId) {
-            renderActionItems(currentActionItems.map((i) => (i.id === item.id ? item : i)));
-          }
-        } else if (msg.type === 'live-query') {
-          if (msg.query.sessionId === activeSessionId) appendQuery(msg.query);
-        } else if (msg.type === 'diarizing') {
-          if (msg.sessionId === activeSessionId) {
-            identifyBtn.disabled = true;
-            mainMeta.textContent = 'Identifying speakers…';
-          }
-        } else if (msg.type === 'diarized') {
-          if (msg.sessionId === activeSessionId) {
-            renderFullTranscript(msg.segments);
-            identifyBtn.disabled = false;
-            mainMeta.textContent = 'Speakers identified';
-          }
-          refreshSessions();
-        } else if (msg.type === 'diarization-failed') {
-          if (msg.sessionId === activeSessionId) {
-            identifyBtn.disabled = false;
-            mainMeta.textContent = `Speaker identification failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'summarizing') {
-          if (msg.sessionId === activeSessionId) {
-            summarizeBtn.disabled = true;
-            mainMeta.textContent = 'Generating summary…';
-          }
-        } else if (msg.type === 'summarized') {
-          if (msg.sessionId === activeSessionId) {
-            renderSummary(msg.summary);
-            renderActionItems(msg.actionItems);
-            summarizeBtn.disabled = false;
-            mainMeta.textContent = 'Summary ready';
-          }
-          refreshSessions();
-        } else if (msg.type === 'summarization-failed') {
-          if (msg.sessionId === activeSessionId) {
-            summarizeBtn.disabled = false;
-            mainMeta.textContent = `Summary generation failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'coaching') {
-          if (msg.sessionId === activeSessionId) {
-            coachingFetchToken++;
-            renderCoachingFeedback(msg.feedback);
-            coachBtn.disabled = false;
-            mainMeta.textContent = 'Coaching feedback ready';
-          }
-        } else if (msg.type === 'coaching-failed') {
-          if (msg.sessionId === activeSessionId) {
-            coachBtn.disabled = false;
-            mainMeta.textContent = `Coaching feedback failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'chapters-detecting') {
-          if (msg.sessionId === activeSessionId) {
-            chaptersBtn.disabled = true;
-            mainMeta.textContent = 'Detecting chapters…';
-          }
-        } else if (msg.type === 'chapters-detected') {
-          if (msg.sessionId === activeSessionId) {
-            renderChapters(msg.chapters);
-            chaptersBtn.disabled = false;
-            mainMeta.textContent = 'Chapters ready';
-          }
-        } else if (msg.type === 'chapters-detection-failed') {
-          if (msg.sessionId === activeSessionId) {
-            chaptersBtn.disabled = false;
-            mainMeta.textContent = `Chapter detection failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'audio-overview-generating') {
-          if (msg.sessionId === activeSessionId) {
-            audioOverviewBtn.disabled = true;
-            mainMeta.textContent = 'Generating audio overview…';
-          }
-          // A subject-driven overview's session is brand new — other tabs/
-          // windows don't know about it yet until the sidebar refreshes.
-          if (!sessions.some((s) => s.id === msg.sessionId)) refreshSessions();
-        } else if (msg.type === 'audio-overview-ready') {
-          if (msg.overview.sessionId === activeSessionId) {
-            renderSessionAudioOverview(msg.overview);
-            renderOverviewContent(msg.overview);
-            audioOverviewBtn.disabled = false;
-            mainMeta.textContent = 'Audio overview ready';
-          }
-          refreshSessions();
-        } else if (msg.type === 'audio-overview-failed') {
-          if (msg.sessionId === activeSessionId) {
-            audioOverviewBtn.disabled = false;
-            mainMeta.textContent = `Audio overview failed: ${msg.error}`;
-          }
-          refreshSessions();
-        } else if (msg.type === 'action-item-updated') {
-          if (msg.sessionId === activeSessionId) {
-            const idx = currentActionItems.findIndex((i) => i.id === msg.actionItem.id);
-            if (idx !== -1) currentActionItems[idx] = msg.actionItem;
-          }
-        } else if (msg.type === 'action-item-added') {
-          // Only reflects it into the live array for other open tabs/windows
-          // — the tab that actually submitted the form already re-rendered
-          // itself from the POST response.
-          if (msg.sessionId === activeSessionId && !currentActionItems.some((i) => i.id === msg.actionItem.id)) {
-            renderActionItems([...currentActionItems, msg.actionItem]);
-          }
-        } else if (msg.type === 'action-item-deleted') {
-          if (msg.sessionId === activeSessionId && currentActionItems.some((i) => i.id === msg.actionItemId)) {
-            renderActionItems(currentActionItems.filter((i) => i.id !== msg.actionItemId));
-          }
-        } else if (msg.type === 'session-renamed') {
-          if (msg.sessionId === activeSessionId) mainTitle.textContent = msg.name || displayName({ startedAt: null });
-          refreshSessions();
-        } else if (msg.type === 'session-deleted') {
-          if (msg.sessionId === activeSessionId) resetMainPanel();
-          refreshSessions();
-        } else if (msg.type === 'session-schedule-updated') {
-          refreshSessions();
-        } else if (msg.type === 'prep-started') {
-          refreshSessions().then(() => {
-            if (msg.sessionId === activeSessionId) updateRunPrepBtn(msg.sessionId);
-          });
-        } else if (msg.type === 'prep-ready') {
-          // Refresh the cached `sessions` array (has the new prepStatus)
-          // before loadPrepBrief() reads it via updateRunPrepBtn() — the old
-          // order left "Run prep now" visibly stale until some unrelated
-          // refresh happened to run later.
-          refreshSessions().then(() => {
-            if (msg.sessionId === activeSessionId) loadPrepBrief(msg.sessionId);
-            if (dashboardActive && currentDashboardTab === 'meetings') renderDashboardBoard();
-          });
-        } else if (msg.type === 'calendar-session-created') {
-          refreshSessions();
-          if (!calendarOverlay.hidden) loadCalendarWeek();
-        } else if (msg.type === 'plate-updated') {
-          plateSyncBtn.disabled = false;
-          plateSyncStatus.textContent = `Last synced ${new Date().toLocaleTimeString()}`;
-          // Always refresh, even when the dashboard is closed — badges need
-          // current data regardless of whether the board is visible.
-          loadDashboardTasks().then(() => {
-            // Keeps an open Task Detail view current (e.g. approving a
-            // reply draft or editing priority/due-date/postpone from inside
-            // it) — only when it's actually the visible view right now.
-            if (taskDetailView.style.display !== 'none') reopenTaskDetail();
-          });
-          loadMorningBriefing();
-          refreshReviewQueueCount();
-        } else if (msg.type === 'codebase-index-progress') {
-          if (msg.status === 'started') {
-            codebaseIndexStatus.textContent = `Indexing ${msg.repo}…`;
-          } else if (msg.status === 'done') {
-            codebaseIndexStatus.textContent = `Indexed ${msg.repo} (${msg.fileCount} files, ${msg.chunkCount} chunks)`;
-          } else if (msg.status === 'failed') {
-            codebaseIndexStatus.textContent = `${msg.repo} failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'codebase-index-complete') {
-          indexCodebaseBtn.disabled = false;
-          codebaseIndexStatus.textContent = formatCodebaseSummary(msg.repos);
-        } else if (msg.type === 'communications-index-progress') {
-          if (msg.status === 'started') {
-            communicationsIndexStatus.textContent = `Indexing message ${msg.messageId}…`;
-          } else if (msg.status === 'done') {
-            communicationsIndexStatus.textContent = `Indexed message ${msg.messageId} (${msg.chunkCount} chunks)`;
-          } else if (msg.status === 'failed') {
-            communicationsIndexStatus.textContent = `Message ${msg.messageId} failed: ${msg.error}`;
-          }
-        } else if (msg.type === 'communications-index-complete') {
-          indexCommunicationsBtn.disabled = false;
-          communicationsIndexStatus.textContent = formatCommunicationsSummary(msg.sources);
-        } else if (
-          msg.type === 'code-change-started' ||
-          msg.type === 'code-change-ready' ||
-          msg.type === 'code-change-applied' ||
-          msg.type === 'code-change-pushed' ||
-          msg.type === 'code-change-discarded' ||
-          msg.type === 'code-change-failed' ||
-          msg.type === 'code-change-log'
-        ) {
-          if (msg.actionItemId) refreshCodeChangeCell(msg.actionItemId);
-        } else if (msg.type === 'pr-review-ready' || msg.type === 'pr-review-failed') {
-          if (String(msg.taskId) === currentPrReviewTaskId) loadPrReview(msg.taskId);
-        } else if (msg.type === 'pr-review-log') {
-          if (String(msg.taskId) === currentPrReviewTaskId) appendPrReviewLogLine(msg.message);
-        } else if (msg.type === 'pr-review-phase') {
-          if (String(msg.taskId) === currentPrReviewTaskId) updatePrReviewPhase(msg.key, msg.status, msg.detail);
-        } else if (msg.type === 'dev-cycle-log') {
-          if (String(msg.devCycleId) === String(currentJiraImplementCycleId)) appendJiraImplementLogLine(msg.message);
-        } else if (msg.type === 'dev-cycle-phase') {
-          if (String(msg.devCycleId) === String(currentJiraImplementCycleId)) updateJiraImplementPhase(msg.key, msg.status, msg.detail);
-        } else if (
-          msg.type === 'dev-cycle-plan-ready' ||
-          msg.type === 'dev-cycle-merge-ready' ||
-          msg.type === 'dev-cycle-updated' ||
-          msg.type === 'jenkins-build-updated' ||
-          msg.type === 'jenkins-build-failed' ||
-          msg.type === 'jenkins-build-recovered' ||
-          msg.type === 'jenkins-build-request-updated'
-        ) {
-          if (String(msg.devCycleId) === String(currentJiraImplementCycleId)) loadJiraImplement(currentJiraImplementCycleId);
-        } else if (msg.type === 'draft-updated' || msg.type === 'draft-revision' || msg.type === 'draft-log') {
-          if (draftPanelRelevant(msg.draftId)) loadDraftPanel(msg.draftId).catch(() => {});
-          if (taskDetailActiveDraftId === msg.draftId) refreshInlineDraft(msg.draftId).catch(() => {});
-        } else if (msg.type === 'pr-comment-drafts-updated') {
-          if (String(msg.prReviewRequestId) === String(currentPrReviewRequestId)) refetchCommentDrafts(msg.prReviewRequestId);
-        } else if (msg.type === 'voice-ready' || msg.type === 'voice-practice-ready') {
-          clearTimeout(voiceConnectTimer);
-          liveVoiceSessionId = msg.sessionId;
-          if (msg.type === 'voice-practice-ready') voicePracticeSessionId = msg.sessionId;
-          refreshSessions().then(() => openSession(msg.sessionId));
-        } else if (msg.type === 'voice-function-call') {
-          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Checking ${msg.tool}…`;
-        } else if (msg.type === 'voice-transcript') {
-          if (activeSessionId === liveVoiceSessionId) appendLiveChatBubble(msg.role, msg.text);
-        } else if (msg.type === 'voice-turn-complete') {
-          finalizeLiveChatBubble();
-        } else if (msg.type === 'voice-error') {
-          clearTimeout(voiceConnectTimer);
-          voiceChatBtn.classList.remove('active');
-          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = `Voice chat error: ${msg.error}`;
-        } else if (msg.type === 'voice-idle-timeout') {
-          if (activeSessionId === liveVoiceSessionId) mainMeta.textContent = 'Session ended after a period of inactivity.';
-          stopVoice();
-        }
+        const handler = WS_HANDLERS[msg.type];
+        if (handler) handler(msg);
       };
     }
 
