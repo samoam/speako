@@ -1,4 +1,4 @@
-import { getTaskInfo, getWorktreeDiff, stopBackgroundTask, removeAgentScratchWorktree } from './claudeCodeCli';
+import { getTaskInfo, getWorktreeDiff, stopBackgroundTask, removeAgentScratchWorktree, getBackgroundTaskLogs } from './claudeCodeCli';
 import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCodeChangeFailed } from '../storage/codeChangeRequestRepository';
 
 /**
@@ -17,6 +17,26 @@ import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCod
  * 'code-change-log' so the task detail view's log panel updates live the
  * same way the PR review log does.
  */
+/** The command (or question) a blocked agent's permission prompt is showing, from its terminal tail — best effort, '' when unreadable. */
+async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
+  try {
+    const lines = (await getBackgroundTaskLogs(cliSessionId)).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    let idx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (/requires approval|Do you want to proceed|Do you want to/i.test(lines[i])) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) return '';
+    // The command box precedes the "requires approval" line; its rows start with "│".
+    const box = lines.slice(Math.max(0, idx - 8), idx).filter((l) => /^│/.test(l)).map((l) => l.replace(/^│\s*/, ''));
+    return (box.join(' ') || lines[idx]).slice(0, 300);
+  } catch {
+    return '';
+  }
+}
+
 export async function pollCodeChangeRequest(requestId: number, broadcast: (event: Record<string, unknown>) => void): Promise<void> {
   const POLL_INTERVAL_MS = 10_000;
   const MAX_ATTEMPTS = 120; // 20 minutes
@@ -71,7 +91,10 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
       // Headless, so nobody will ever answer — seen live: an agent parked on
       // a "This command requires approval" prompt for hours, its half-done
       // work read as "finished". Stop it and fail with what it wanted.
-      const error = `Claude Code agent is stuck on ${info.waitingFor ? `a ${info.waitingFor}` : 'a prompt'} it cannot answer headlessly — check \`claude logs ${request.cliSessionId}\` for the command; see claudeCodeCli.ts's ALLOWED_TOOLS.`;
+      // Read the terminal before stopping — `claude logs` is unreadable once
+      // the agent is gone — so the error names what it was asked to approve.
+      const asked = await describeBlockedPrompt(request.cliSessionId);
+      const error = `Claude Code agent is stuck on ${info.waitingFor ? `a ${info.waitingFor}` : 'a prompt'} it cannot answer headlessly${asked ? ` — it asked to run: ${asked}` : ''} (see claudeCodeCli.ts's ALLOWED_TOOLS).`;
       log(error);
       await stopBackgroundTask(request.cliSessionId);
       await removeAgentScratchWorktree(info.cwd, request.repoPath);

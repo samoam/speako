@@ -151,7 +151,15 @@ export type ClaudeAgentModel = 'opus' | 'sonnet' | 'haiku';
  */
 const BG_SPAWN_TIMEOUT_MS = 3 * 60 * 1000;
 
-export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel): Promise<ClaudeCodeTaskHandle> {
+/**
+ * `extraDirs`: directories the agent may touch beyond its launch directory.
+ * `--worktree` puts the agent in <main repo>/.claude/worktrees/<name>, and
+ * when the launch directory is a *linked* worktree elsewhere (a dev cycle's
+ * worktree under %TEMP%), that scratch path is outside it — the agent's
+ * very first `cd <own cwd> && …` then needs approval nobody can give (seen
+ * live, fix round 4). Passing the main repo root here keeps it inside.
+ */
+export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel, extraDirs: string[] = []): Promise<ClaudeCodeTaskHandle> {
   trustClaudeWorkspace(repoPath);
   let stdout: string;
   try {
@@ -159,6 +167,7 @@ export async function startClaudeCodeTask(prompt: string, repoPath: string, mode
       'claude',
       [
         '--bg', prompt, '--worktree',
+        ...extraDirs.flatMap((dir) => ['--add-dir', dir]),
         // Confirmed live that --bg accepts --model (a background session
         // started and completed with it); the session listing doesn't report
         // which model actually ran.

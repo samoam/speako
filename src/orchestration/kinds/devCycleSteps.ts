@@ -136,7 +136,9 @@ const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already
 `;
 
 export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, cycle: DevCycle, prompt: string, worktreePath: string, origin: CodeChangeOrigin): Promise<ChangeOutcome> {
-  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, worktreePath, 'sonnet');
+  // The cycle worktree lives under %TEMP%; the agent's --worktree scratch
+  // checkout lands under the main repo, so the main repo must be in scope.
+  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, worktreePath, 'sonnet', [cycle.repoPath]);
   const request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
   let tailingStopped = false;
   let lastLoggedLength = 0;
