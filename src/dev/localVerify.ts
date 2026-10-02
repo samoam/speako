@@ -151,7 +151,7 @@ function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, s
   });
 }
 
-const tail = (text: string) => text.split('\n').filter((l) => l.trim()).slice(-OUTPUT_TAIL_LINES).join('\n');
+const tail = (text: string, lines = OUTPUT_TAIL_LINES) => text.split('\n').filter((l) => l.trim()).slice(-lines).join('\n');
 
 /** Offline-plugin/dependency resolution failures — the one case where a retry without `-o` is the fix (the repo notes: project deps are cached, plugins often aren't). */
 const OFFLINE_RESOLUTION_RE = /Could not resolve|Cannot access .* in offline mode|Non-resolvable|Could not find artifact|has not been downloaded from it before/i;
@@ -210,14 +210,21 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
     for (const t of changed.unitTests) byModule.set(t.module, [...(byModule.get(t.module) ?? []), t.fqcn]);
     for (const [module, classes] of byModule) {
       log(`Running ${classes.length} unit test class(es) in ${module}…`);
-      const outcome =
-        fs.existsSync(script) && jdk17
-          ? await run('bash', [toBashPath(script), module, ...classes, '--offline'], worktreePath, env, signal, onLine)
-          : await run(mvn, ['-q', '-pl', module, `-Dtest=${classes.join(',')}`, '-DfailIfNoTests=false', '-Dsurefire.failIfNoSpecifiedTests=false', 'test'], worktreePath, env, signal, onLine);
+      const viaMaven = () => run(mvn, ['-q', '-pl', module, `-Dtest=${classes.join(',')}`, '-DfailIfNoTests=false', '-Dsurefire.failIfNoSpecifiedTests=false', 'test'], worktreePath, env, signal, onLine);
+      let outcome = fs.existsSync(script) && jdk17 ? await run('bash', [toBashPath(script), module, ...classes, '--offline'], worktreePath, env, signal, onLine) : await viaMaven();
       output += outcome.output;
+      if (isToolingFailure(outcome.code, outcome.output)) {
+        // The repo's runner could not even start — not the code's fault. Maven
+        // is slower but needs nothing beyond what the compile just used. The
+        // runner's own last words go to the log: onLine filters them out, and
+        // without them a live failure of this kind was undiagnosable.
+        log(`The test runner could not start (exit ${outcome.code}) — running the tests through Maven instead. Runner output: ${tail(outcome.output, 12)}`);
+        outcome = await viaMaven();
+        output += outcome.output;
+      }
       ran.push(...classes);
       if (isToolingFailure(outcome.code, outcome.output)) {
-        return { ok: false, summary: `The local gate could not run the unit tests in ${module} (runner not found) — see the output.`, failingTests: [], output: tail(output), modules: changed.modules, toolingFailure: true };
+        return { ok: false, summary: `The local gate could not run the unit tests in ${module} (neither the runner nor Maven could start) — see the output.`, failingTests: [], output: tail(output), modules: changed.modules, toolingFailure: true };
       }
       if (outcome.code !== 0) {
         const failing = extractFailingTests(outcome.output);
@@ -237,7 +244,10 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
         output += outcome.output;
         ran.push(t.fqcn);
         if (isToolingFailure(outcome.code, outcome.output)) {
-          return { ok: false, summary: `The local gate could not run the integration test ${t.fqcn} (runner not found) — see the output.`, failingTests: [], output: tail(output), modules: changed.modules, toolingFailure: true };
+          // No Maven fallback here — the integration runner wires up the config dir the suite needs; Jenkins runs it either way.
+          log(`The integration-test runner could not start (exit ${outcome.code}) — ${t.fqcn} is left to Jenkins.`);
+          integrationNote += ` ${t.fqcn} left to Jenkins (the local runner could not start).`;
+          continue;
         }
         if (outcome.code !== 0) {
           const failing = extractFailingTests(outcome.output);

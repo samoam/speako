@@ -1,13 +1,15 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { createDevCycle, setDevCycleBranch } from '../src/storage/devCycleRepository';
+import { createDevCycle, setDevCycleBranch, getDevCycle } from '../src/storage/devCycleRepository';
+import { createCodeChangeRequest } from '../src/storage/codeChangeRequestRepository';
+import * as claudeCodeCliModule from '../src/integrations/claudeCodeCli';
 import { upsertJenkinsBuild, setBuildClassification } from '../src/storage/jenkinsBuildRepository';
 import { getRun, Run } from '../src/storage/runRepository';
-import { setRunBroadcast } from '../src/orchestration/engine';
+import { setRunBroadcast, cancelRun, INTERRUPTED_ERROR } from '../src/orchestration/engine';
 import { StepContext } from '../src/orchestration/types';
 import { devCycleFixRunDefinition, startFixRoundIfPossible, MAX_FIX_ROUNDS, DevCycleFixRunState } from '../src/orchestration/kinds/devCycleFixRun';
 import { devCycleRunDefinition, getLatestDevCycleRun } from '../src/orchestration/kinds/devCycleRun';
-import { FailedBuild } from '../src/orchestration/kinds/devCycleSteps';
+import { FailedBuild, dispatchClaudeChange } from '../src/orchestration/kinds/devCycleSteps';
 import * as jenkinsMonitorModule from '../src/dev/jenkinsMonitor';
 
 setRunBroadcast(() => {});
@@ -112,4 +114,60 @@ test("main run's finalize hands a red build over to fix round 1; a green outcome
   const quiet = cycleWithBranch('FIX-6');
   await devCycleRunDefinition.finalize!({ ...fakeRun, subjectId: String(quiet.id), state: { cycleId: quiet.id } }, 'failed', 'something else');
   assert.equal(getLatestDevCycleRun(quiet.id), undefined, 'a failure that is not a red build starts nothing');
+});
+
+test("fix run's finalize: an agent that changed nothing re-enters the local gate (or the build) under the same round number, instead of failing the loop", async () => {
+  const cycle = cycleWithBranch('FIX-7');
+  const fakeRun = { id: 0, kind: 'dev_cycle_fix', subjectKind: 'dev_cycle', subjectId: String(cycle.id), status: 'failed', steps: [], state: { cycleId: cycle.id, round: 2, source: { localFailure: { summary: 's', failingTests: [], output: '', modules: ['m'] } } }, currentStep: 'fix', error: 'Claude Code agent finished with no file changes.', createdAt: '', updatedAt: '', resolvedAt: null } as any;
+  await devCycleFixRunDefinition.finalize!(fakeRun, 'failed', fakeRun.error);
+  const started = getLatestDevCycleRun<any>(cycle.id)!;
+  assert.equal(started.kind, 'dev_cycle');
+  assert.equal(started.state.fixRoundBase, 2, 'a failure of this re-verify starts fix round 3, not round 1');
+  assert.deepEqual(started.steps.filter((s) => s.status === 'done').map((s) => s.key), ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply'], 'resumes at the local gate');
+  await cancelRun(started.id);
+
+  const built = cycleWithBranch('FIX-8');
+  await devCycleFixRunDefinition.finalize!({ ...fakeRun, subjectId: String(built.id), state: { cycleId: built.id, round: 1, source: { failedBuild: failedBuild(40) } } }, 'failed', fakeRun.error);
+  const rebuild = getLatestDevCycleRun<any>(built.id)!;
+  assert.equal(rebuild.kind, 'dev_cycle');
+  assert.ok(rebuild.steps.find((s) => s.key === 'push')!.status === 'done' && rebuild.steps.find((s) => s.key === 'build_and_test')!.status !== 'done', 'resumes at the Jenkins build');
+  await cancelRun(rebuild.id);
+});
+
+test("main run's finalize: a re-verify run carries the fix round forward (fixRoundBase), so the rounds stay bounded", async () => {
+  const cycle = cycleWithBranch('FIX-9');
+  recordBuild(cycle.id, 50, { category: 'compile_error', fixable: true });
+  const fakeRun = { id: 0, kind: 'dev_cycle', subjectKind: 'dev_cycle', subjectId: String(cycle.id), status: 'failed', steps: [], state: { cycleId: cycle.id, fixRoundBase: 2, failedBuild: failedBuild(50, []) }, currentStep: 'build_and_test', error: 'red', createdAt: '', updatedAt: '', resolvedAt: null } as any;
+  await devCycleRunDefinition.finalize!(fakeRun, 'failed', 'red');
+  assert.equal(getLatestDevCycleRun<DevCycleFixRunState>(cycle.id)?.state.round, 3);
+
+  const exhausted = cycleWithBranch('FIX-10');
+  recordBuild(exhausted.id, 51, { category: 'compile_error', fixable: true });
+  await devCycleRunDefinition.finalize!({ ...fakeRun, subjectId: String(exhausted.id), state: { cycleId: exhausted.id, fixRoundBase: MAX_FIX_ROUNDS, failedBuild: failedBuild(51, []) } }, 'failed', 'red');
+  assert.equal(getLatestDevCycleRun(exhausted.id), undefined, 'past the last round nothing starts');
+});
+
+test("main run's finalize: an interrupted run starts no fix round — the engine resumes it instead", async () => {
+  const cycle = cycleWithBranch('FIX-11');
+  const fakeRun = { id: 0, kind: 'dev_cycle', subjectKind: 'dev_cycle', subjectId: String(cycle.id), status: 'failed', steps: [], state: { cycleId: cycle.id, failedBuild: failedBuild(60, []) }, currentStep: 'build_and_test', error: INTERRUPTED_ERROR, createdAt: '', updatedAt: '', resolvedAt: null } as any;
+  await devCycleRunDefinition.finalize!(fakeRun, 'failed', INTERRUPTED_ERROR);
+  assert.equal(getLatestDevCycleRun(cycle.id), undefined);
+});
+
+test('dispatchClaudeChange: a change request still running from before a restart whose agent is alive is re-attached, not started over', { timeout: 30_000 }, async (t) => {
+  const cycle = cycleWithBranch('FIX-12');
+  const orphan = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'jenkins_fix', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'orphan-1' });
+  const started = t.mock.method(claudeCodeCliModule, 'startClaudeCodeTask', async () => { throw new Error('a second agent must not be started'); });
+  t.mock.method(claudeCodeCliModule, 'getTaskInfo', async () => ({ id: 'orphan-1', cwd: 'C:\tmp\speako-dev-cycle-agent-orphan', state: 'done', name: 'x', waitingFor: null }));
+  t.mock.method(claudeCodeCliModule, 'getWorktreeDiff', async () => 'diff --git a/o b/o\n+from before the restart');
+  t.mock.method(claudeCodeCliModule, 'getBackgroundTaskLogs', async () => '');
+  t.mock.method(claudeCodeCliModule, 'removeAgentScratchWorktree', async () => {});
+
+  const ctx = ctxFor({ cycleId: cycle.id, source: { localFailure: { summary: 's', failingTests: [], output: '', modules: [] } }, round: 1 });
+  const outcome = await dispatchClaudeChange(ctx as any, getDevCycle(cycle.id)!, 'prompt', 'C:\wt', 'jenkins_fix');
+  assert.equal(outcome.request.id, orphan.id);
+  assert.equal(outcome.status, 'ready');
+  assert.equal(outcome.diff, 'diff --git a/o b/o\n+from before the restart');
+  assert.equal(started.mock.callCount(), 0);
+  assert.ok(ctx.logs.some((l) => /Re-attaching to the agent still running/.test(l)));
 });

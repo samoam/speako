@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import { config } from '../../config';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
-import { startClaudeCodeTask, getBackgroundTaskLogs, applyCodeChangeToRepo, pushRepoChanges, git } from '../../integrations/claudeCodeCli';
+import { startClaudeCodeTask, getBackgroundTaskLogs, applyCodeChangeToRepo, pushRepoChanges, git, getTaskInfo } from '../../integrations/claudeCodeCli';
 import { jobPathFor, getTestReport, getRecentBuilds } from '../../integrations/jenkinsClient';
 import { assessUnstableBuild } from '../../dev/buildVerdict';
 import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
@@ -17,6 +17,7 @@ import {
   CodeChangeRequest,
   createCodeChangeRequest,
   getCodeChangeRequest,
+  getLatestCodeChangeRequestForDevCycleOrigin,
   markCodeChangeApplied,
   markCodeChangePushed,
 } from '../../storage/codeChangeRequestRepository';
@@ -149,16 +150,36 @@ const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already
 
 `;
 
+/** Still known to the CLI and not killed: working, parked, or done with its diff still in its worktree (`claude agents` lists finished agents too; an unknown id is simply absent). */
+async function isAgentAlive(cliSessionId: string): Promise<boolean> {
+  try {
+    const info = await getTaskInfo(cliSessionId);
+    return !!info && !['stopped', 'failed', 'error'].includes(info.state);
+  } catch {
+    return false;
+  }
+}
+
 export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, cycle: DevCycle, prompt: string, worktreePath: string, origin: CodeChangeOrigin): Promise<ChangeOutcome> {
   // The agent gets its own detached scratch worktree at the branch's
   // commit and is launched *in* it — never in `worktreePath` (the cycle's
   // worktree, where the approved diff is later applied) and never via the
   // CLI's --worktree (see StartClaudeCodeTaskOptions.useWorktree). The diff
   // is captured from there and the scratch worktree removed afterwards.
-  ctx.log('Preparing a scratch worktree for the agent…');
-  const agentWorktree = await addWorktreeForExistingBranch(cycle.repoPath, cycle.branchName!, 'agent');
-  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, agentWorktree, 'sonnet', { useWorktree: false });
-  const request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
+  // An agent from before a Speako restart may still be working (they run
+  // detached): pick its poll back up instead of starting a second one.
+  const orphan = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, origin);
+  let request: CodeChangeRequest;
+  if (orphan?.status === 'running' && (await isAgentAlive(orphan.cliSessionId))) {
+    ctx.log(`Re-attaching to the agent still running from before the restart (session ${orphan.cliSessionId})…`);
+    request = orphan;
+  } else {
+    ctx.log('Preparing a scratch worktree for the agent…');
+    const agentWorktree = await addWorktreeForExistingBranch(cycle.repoPath, cycle.branchName!, 'agent');
+    const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, agentWorktree, 'sonnet', { useWorktree: false });
+    request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
+  }
+  const { cliSessionId } = request;
   let tailingStopped = false;
   let lastLoggedLength = 0;
   const tail = (async () => {

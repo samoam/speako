@@ -17,7 +17,7 @@ import {
 } from '../../storage/devCycleImplementationRepository';
 import { DevCycle, setDevCycleAnalysisContext, setDevCyclePlans, setDevCycleBranch, setDevCycleWorktrees, setDevCycleCurrentStep } from '../../storage/devCycleRepository';
 import { getRunLog, Run, TERMINAL_RUN_STATUSES } from '../../storage/runRepository';
-import { registerRunKind, startRun, retryRun, cancelRun, approveRun, logRun, RunResume } from '../engine';
+import { registerRunKind, startRun, retryRun, cancelRun, approveRun, logRun, RunResume, INTERRUPTED_ERROR } from '../engine';
 import { RunDefinition, StepContext, StepEntry } from '../types';
 import {
   DEV_CYCLE_SUBJECT_KIND,
@@ -52,6 +52,8 @@ const BRANCH_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export interface DevCycleRunState extends DevCycleBaseState {
   seed?: DevPlanSeedContext;
+  /** Set when this run re-enters the gate/build after fix round N found nothing to fix — a failure here starts round N+1, not round 1 again, so the loop stays bounded by MAX_FIX_ROUNDS. */
+  fixRoundBase?: number;
 }
 
 type ImplementationOutcome = { status: 'ready' | 'failed'; diff: string | null; error: string | null };
@@ -336,15 +338,18 @@ function steps(): StepEntry<DevCycleRunState>[] {
 export const devCycleRunDefinition: RunDefinition<DevCycleRunState> = {
   kind: DEV_CYCLE_RUN_KIND,
   steps,
-  async finalize(run, outcome) {
+  async finalize(run, outcome, error) {
     if (outcome === 'done') {
       await startPrDraftAfterGreenBuild(run.state.cycleId);
       return;
     }
+    if (error === INTERRUPTED_ERROR) return; // the engine resumes it (resumeOnRestart)
     // A red build, or a failed local gate, hands over to the fix loop; every other failure waits for Retry.
-    if (outcome === 'failed' && run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, 1);
-    else if (outcome === 'failed' && run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, 1);
+    const round = (run.state.fixRoundBase ?? 0) + 1;
+    if (outcome === 'failed' && run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, round);
+    else if (outcome === 'failed' && run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, round);
   },
+  resumeOnRestart: true,
 };
 
 registerRunKind(devCycleRunDefinition);
@@ -365,12 +370,13 @@ export type DevCycleGate = (typeof GATE_STEPS)[number];
  * implied approvals). Resuming through 'plan' still parks for the plan
  * approval; through 'merge_and_review' still parks for the diff approval.
  */
-export async function startDevCycleRun(cycleId: number, resume?: { completedThrough: DevCycleStepKey }): Promise<Run<DevCycleRunState>> {
+export async function startDevCycleRun(cycleId: number, resume?: { completedThrough: DevCycleStepKey; fixRoundBase?: number }): Promise<Run<DevCycleRunState>> {
   const previous = getLatestDevCycleRun(cycleId);
   if (previous && !TERMINAL_RUN_STATUSES.includes(previous.status)) await cancelRun(previous.id);
   const completed = resume ? devCycleStepsThrough(resume.completedThrough) : [];
   const resumeSpec: RunResume | undefined = resume ? { completed, approved: GATE_STEPS.filter((g) => (completed as string[]).includes(g)) } : undefined;
-  return startRun<DevCycleRunState>({ kind: DEV_CYCLE_RUN_KIND, subjectKind: DEV_CYCLE_SUBJECT_KIND, subjectId: String(cycleId), state: { cycleId }, resume: resumeSpec });
+  const state: DevCycleRunState = resume?.fixRoundBase ? { cycleId, fixRoundBase: resume.fixRoundBase } : { cycleId };
+  return startRun<DevCycleRunState>({ kind: DEV_CYCLE_RUN_KIND, subjectKind: DEV_CYCLE_SUBJECT_KIND, subjectId: String(cycleId), state, resume: resumeSpec });
 }
 
 /** Retries the cycle's latest run (main pipeline or fix round) from its failed step (see engine.ts's retryRun). Null when there's nothing finished to retry. */

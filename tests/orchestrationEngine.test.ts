@@ -255,3 +255,25 @@ test("logRun: appends to the run's log and broadcasts it like a step would", asy
   assert.deepEqual(getRunLog(run.id).map(unstampLogLine), ['refined by hand']);
   assert.deepEqual(events.map((e: any) => [e.type, e.message]), [['run-log', 'refined by hand']]);
 });
+
+test('reconcileRunsOnStartup: a kind that opts in (resumeOnRestart) is retried from its interrupted step, finished steps kept', async () => {
+  const ran: string[] = [];
+  const kind = `test_kind_resume_${Date.now()}`;
+  registerRunKind<{}>({
+    kind,
+    steps: () => [
+      { key: 'a', label: 'A', run: async () => { ran.push('a'); } },
+      { key: 'b', label: 'B', run: async () => { ran.push('b'); } },
+    ],
+    resumeOnRestart: true,
+  });
+  const orphan = createRun({ kind, subjectKind: 'task', subjectId: '12', steps: [{ key: 'a', label: 'A', status: 'done', detail: null }, { key: 'b', label: 'B', status: 'pending', detail: null }], state: {} });
+  tryTransitionRun(orphan.id, ['queued'], 'running');
+  setRunStep(orphan.id, 'b', 'running');
+
+  await reconcileRunsOnStartup();
+  assert.equal(getRun(orphan.id)!.status, 'failed', 'the interrupted run itself stays failed, for the record');
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !ran.includes('b')) await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(ran, ['b'], 'only the interrupted step re-ran, in a new run');
+});

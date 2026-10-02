@@ -6,7 +6,8 @@ import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
 import { getTestReport } from '../../integrations/jenkinsClient';
 import { buildFixPrompt, buildLocalFixPrompt } from '../../dev/buildFixPrompt';
 import { BuildFailureAnalysis } from '../../dev/buildFailureClassification';
-import { registerRunKind, startRun, cancelRun, emitEvent } from '../engine';
+import { registerRunKind, startRun, cancelRun, emitEvent, INTERRUPTED_ERROR } from '../engine';
+import { startDevCycleRun } from './devCycleRun';
 import { RunDefinition, StepEntry } from '../types';
 import {
   DEV_CYCLE_SUBJECT_KIND,
@@ -157,16 +158,25 @@ function steps(): StepEntry<DevCycleFixRunState>[] {
 export const devCycleFixRunDefinition: RunDefinition<DevCycleFixRunState> = {
   kind: DEV_CYCLE_FIX_RUN_KIND,
   steps,
-  async finalize(run, outcome) {
+  async finalize(run, outcome, error) {
     if (outcome === 'done') {
       await startPrDraftAfterGreenBuild(run.state.cycleId);
       return;
     }
-    if (outcome === 'failed') {
-      const next: FixSource | null = run.state.localFailure ? { localFailure: run.state.localFailure } : run.state.failedBuild ? { failedBuild: run.state.failedBuild } : null;
-      if (next) await startFixRoundIfPossible(run.state.cycleId, next, run.state.round + 1);
+    if (outcome !== 'failed' || error === INTERRUPTED_ERROR) return;
+    // The agent looked and changed nothing: the failure is not in the code
+    // as far as it can tell (seen live: a gate that could not start its test
+    // runner). Re-enter the gate / rebuild rather than stop — if it fails
+    // again, the next round's number keeps the loop bounded.
+    if (run.currentStep === 'fix' && /finished with no file changes/.test(error ?? '')) {
+      console.log(`[dev-cycle] cycle ${run.state.cycleId}: fix round ${run.state.round} found nothing to fix — re-running the ${run.state.source.localFailure ? 'local gate' : 'build'}.`);
+      await startDevCycleRun(run.state.cycleId, { completedThrough: run.state.source.localFailure ? 'apply' : 'push', fixRoundBase: run.state.round });
+      return;
     }
+    const next: FixSource | null = run.state.localFailure ? { localFailure: run.state.localFailure } : run.state.failedBuild ? { failedBuild: run.state.failedBuild } : null;
+    if (next) await startFixRoundIfPossible(run.state.cycleId, next, run.state.round + 1);
   },
+  resumeOnRestart: true,
 };
 
 registerRunKind(devCycleFixRunDefinition);

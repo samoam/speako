@@ -134,11 +134,20 @@ export async function cancelRun(runId: number): Promise<boolean> {
 }
 
 /** Fails runs left 'running' by the previous process (running their finalize for cleanup), then restarts anything still queued. */
+export const INTERRUPTED_ERROR = 'Interrupted — Speako restarted while this was running.';
+
 export async function reconcileRunsOnStartup(): Promise<number> {
   const interrupted = getRunsByStatus(['running']);
-  const error = 'Interrupted — Speako restarted while this was running.';
-  failInterruptedRuns(error);
-  for (const run of interrupted) await finish(run.id, 'failed', error);
+  failInterruptedRuns(INTERRUPTED_ERROR);
+  for (const run of interrupted) await finish(run.id, 'failed', INTERRUPTED_ERROR);
+  // Kinds that opt in pick up where they were (seen live: a dev cycle's
+  // implementation interrupted by a restart sat failed until someone
+  // noticed) — a fresh run with the finished steps and approvals carried over.
+  for (const run of interrupted) {
+    if (!definitions.get(run.kind)?.resumeOnRestart) continue;
+    const resumed = retryRun(run.id);
+    if (resumed) console.log(`[runs] resumed ${run.kind} run ${run.id} as run ${resumed.id} after the restart`);
+  }
   pump();
   return interrupted.length;
 }

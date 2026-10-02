@@ -36,6 +36,8 @@ export interface RunDefinition<S> {
   steps(state: S): StepEntry<S>[];
   /** Always called once the run ends, however it ended — cleanup (remove a worktree) and the kind's own result record (mark the review ready/failed). */
   finalize?(run: Run<S>, outcome: RunOutcome, error: string | null): Promise<void>;
+  /** A run of this kind that a Speako restart interrupted is retried on startup from its interrupted step (its steps must be safe to re-enter) instead of left failed for the user to retry by hand. */
+  resumeOnRestart?: boolean;
 }
 
 export type RunBroadcastEvent =

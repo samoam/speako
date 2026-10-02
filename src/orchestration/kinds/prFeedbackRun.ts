@@ -5,7 +5,7 @@ import { getDevCycle } from '../../storage/devCycleRepository';
 import { getPendingFeedback, upsertFeedbackThreads, setFeedbackTriage, markFeedbackAnswered, DevCycleFeedback } from '../../storage/devCycleFeedbackRepository';
 import { Run, TERMINAL_RUN_STATUSES } from '../../storage/runRepository';
 import { watchDevCyclePr, prRefOf, buildTriagePrompt, buildFeedbackChangesPrompt, TRIAGE_JSON_SCHEMA, TriageResult } from '../../dev/prFeedback';
-import { registerRunKind, startRun, cancelRun } from '../engine';
+import { registerRunKind, startRun, cancelRun, INTERRUPTED_ERROR } from '../engine';
 import { RunDefinition, StepEntry } from '../types';
 import { DEV_CYCLE_SUBJECT_KIND, DevCycleBaseState, applyStep, buildAndTestStep, cycleOf, dispatchClaudeChange, ensureCycleWorktree, getLatestDevCycleRun, pushStep, verifyLocallyStep } from './devCycleSteps';
 import { startFixRoundIfPossible } from './devCycleFixRun';
@@ -139,11 +139,12 @@ function steps(): StepEntry<PrFeedbackRunState>[] {
 export const prFeedbackRunDefinition: RunDefinition<PrFeedbackRunState> = {
   kind: PR_FEEDBACK_RUN_KIND,
   steps,
-  async finalize(run, outcome) {
-    if (outcome !== 'failed') return;
+  async finalize(run, outcome, error) {
+    if (outcome !== 'failed' || error === INTERRUPTED_ERROR) return;
     if (run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, 1);
     else if (run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, 1);
   },
+  resumeOnRestart: true,
 };
 
 registerRunKind(prFeedbackRunDefinition);
