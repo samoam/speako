@@ -1889,6 +1889,7 @@
               <div id="jiraImplementMeta"></div>
               <div class="jira-implement-rail-actions">
                 <button id="jiraImplementRetryBtn" class="tool-btn" type="button" hidden>Retry</button>
+                <button id="jiraImplementFixBtn" class="tool-btn" type="button" hidden>Fix failing build</button>
                 <button id="jiraImplementRedoPlanBtn" class="tool-btn" type="button" hidden>Redo plan (ticket changed)</button>
                 <button id="jiraImplementDiscardBtn" class="tool-btn" type="button">Discard</button>
                 <button id="jiraImplementCloseBtn" class="tool-btn" type="button">Close</button>
@@ -6308,6 +6309,7 @@
     const jiraImplementDiscardBtn = document.getElementById('jiraImplementDiscardBtn');
     const jiraImplementRetryBtn = document.getElementById('jiraImplementRetryBtn');
     const jiraImplementRedoPlanBtn = document.getElementById('jiraImplementRedoPlanBtn');
+    const jiraImplementFixBtn = document.getElementById('jiraImplementFixBtn');
     const jiraImplementPlanRefineInput = document.getElementById('jiraImplementPlanRefineInput');
     const jiraImplementPlanRefineBtn = document.getElementById('jiraImplementPlanRefineBtn');
     const jiraImplementPlanApproveBtn = document.getElementById('jiraImplementPlanApproveBtn');
@@ -6552,27 +6554,38 @@
       if (item) selectJiraImplementDiffFile(item.dataset.path);
     });
 
-    function renderJiraImplementMerge(cycle, mergeRequest) {
-      if (!mergeRequest) return;
+    // `change` is whichever diff is current for the cycle: the merged
+    // implementation, or a fix round's change (origin 'jenkins_fix'). Both
+    // land through the same approve — the run decides what follows.
+    function renderJiraImplementMerge(cycle, change, run) {
+      if (!change) return;
+      const isFix = change.origin === 'jenkins_fix';
       jiraImplementMergeBody.textContent =
-        mergeRequest.status === 'ready' ? 'Ready for review — approve to apply and open the PR, or ask for changes below.' : `Status: ${mergeRequest.status}`;
-      currentJiraImplementDiffFiles = jiraImplementParseDiff(mergeRequest.diff);
+        change.status === 'ready'
+          ? isFix
+            ? `Fix${jiraImplementFailedBuildLabel(run)} ready — approve to commit, push and rebuild, or ask for changes below.`
+            : 'Ready for review — approve to commit, push and build on Jenkins, or ask for changes below.'
+          : `Status: ${change.status}`;
+      currentJiraImplementDiffFiles = jiraImplementParseDiff(change.diff);
       const pathToSelect =
         selectedJiraImplementDiffPath && currentJiraImplementDiffFiles.some((f) => f.path === selectedJiraImplementDiffPath)
           ? selectedJiraImplementDiffPath
           : currentJiraImplementDiffFiles[0]?.path ?? null;
       selectJiraImplementDiffFile(pathToSelect);
-      // Approve/refine only act on the step's current merge_and_review row —
-      // once the cycle has moved on (current_step === 'done'), the tab still
-      // shows the merged diff for reference but the actions are hidden.
-      const editable = cycle.currentStep === 'merge_and_review';
+      // Approve/refine only while the run is actually parked on this diff's
+      // gate — afterwards the tab still shows it for reference, actions hidden.
+      const editable = run?.awaitingGate === 'apply_and_push' || run?.awaitingGate === 'apply_fix_and_push';
       jiraImplementMergeApproveBtn.hidden = !editable;
       jiraImplementMergeRefineBtn.hidden = !editable;
       jiraImplementMergeRefineInput.hidden = !editable;
       if (editable) {
-        jiraImplementMergeApproveBtn.disabled = mergeRequest.status !== 'ready';
-        jiraImplementMergeRefineBtn.disabled = mergeRequest.status !== 'ready';
+        jiraImplementMergeApproveBtn.disabled = change.status !== 'ready';
+        jiraImplementMergeRefineBtn.disabled = change.status !== 'ready';
       }
+    }
+
+    function jiraImplementFailedBuildLabel(run) {
+      return run?.fixRound ? ` (fix round ${run.fixRound})` : '';
     }
 
     const JIRA_IMPLEMENT_TAB_ORDER = ['log', 'context', 'plan', 'diff', 'pr', 'tests', 'docs'];
@@ -6860,14 +6873,17 @@
       }
     });
 
-    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft, builds, buildRequests, testJob) {
+    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft, builds, buildRequests, testJob, run) {
       jiraImplementTitle.textContent = cycle.ticketKey;
-      jiraImplementMeta.textContent = cycle.branchName ? `Branch: ${cycle.branchName}` : 'Gathering context…';
+      jiraImplementMeta.textContent = jiraImplementMetaText(cycle, run);
+      // A red build the runs didn't (or can't any more) fix on their own —
+      // offer the fix round by hand; otherwise Retry covers a failed step.
+      jiraImplementFixBtn.hidden = !(run && run.status === 'failed' && run.currentStep === 'build_and_test');
       renderJiraImplementPhases(cycle.phases);
       renderJiraImplementLog(cycle.log);
       renderJiraImplementAnalyze(cycle.analysisContext);
       renderJiraImplementPlan(cycle);
-      renderJiraImplementMerge(cycle, mergeRequest);
+      renderJiraImplementMerge(cycle, mergeRequest, run);
       renderJiraImplementPr(prDraft);
       renderJiraImplementDocs(docsDraft);
       jiraImplementTestsBody.innerHTML = cycle.branchName ? jiraImplementTestsHtml(cycle, builds, buildRequests, testJob) : '';
@@ -6884,7 +6900,7 @@
         fetchJiraImplementDraft(cycleId, 'confluence_dev_cycle_update'),
       ]);
       if (body.error) return;
-      renderJiraImplement(body.cycle, body.implementations, body.mergeRequest, prDraft, docsDraft, body.builds, body.buildRequests, body.testJob);
+      renderJiraImplement(body.cycle, body.implementations, body.pendingChange, prDraft, docsDraft, body.builds, body.buildRequests, body.testJob, body.run);
     }
 
     /** Entry point for the "Implement ticket…" button — a dev cycle started
@@ -7001,6 +7017,32 @@
     // regenerates the plan from scratch under a bumped round, leaving any
     // already-created branch/worktrees in place to be reused once the new
     // plan is re-approved.
+    /** The rail's one-line status: what the current run is doing, in the user's terms, rather than just the branch name. */
+    function jiraImplementMetaText(cycle, run) {
+      if (!run) return cycle.branchName ? `Branch: ${cycle.branchName}` : 'Gathering context…';
+      const round = run.kind === 'dev_cycle_fix' ? `Fix round ${run.fixRound} — ` : '';
+      if (run.status === 'waiting_approval') {
+        const what = run.awaitingGate === 'branch_and_worktrees' ? 'the plan (Plan tab)' : 'the diff (Diff tab)';
+        return `${round}Waiting for your approval of ${what}`;
+      }
+      if (run.status === 'failed') return `${round}Failed — ${run.error ? run.error.split('\n')[0].slice(0, 120) : 'see the step list'}`;
+      if (run.status === 'done') return `${round}Done${cycle.branchName ? ` — ${cycle.branchName}` : ''}`;
+      if (run.status === 'cancelled') return `${round}Cancelled`;
+      return `${round}Running${cycle.branchName ? ` — ${cycle.branchName}` : '…'}`;
+    }
+
+    jiraImplementFixBtn.addEventListener('click', async () => {
+      if (!currentJiraImplementCycleId) return;
+      jiraImplementFixBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/jira-implement/${currentJiraImplementCycleId}/fix`, { method: 'POST' }).then((r) => r.json());
+        if (res.error) alert(res.error);
+        else await loadJiraImplement(currentJiraImplementCycleId);
+      } finally {
+        jiraImplementFixBtn.disabled = false;
+      }
+    });
+
     jiraImplementRedoPlanBtn.addEventListener('click', async () => {
       if (!currentJiraImplementCycleId) return;
       if (!confirm('Re-gather the ticket and regenerate the plan? Any implementation or merged diff already produced for this round stays as history, but implementation will need to be re-approved and re-run.')) return;

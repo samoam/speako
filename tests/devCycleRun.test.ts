@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as os from 'os';
 import { createDevCycle, getDevCycle, setDevCyclePlans, setDevCycleBranch } from '../src/storage/devCycleRepository';
 import { getRun, getRunApprovedSteps, Run } from '../src/storage/runRepository';
 import { setRunBroadcast } from '../src/orchestration/engine';
@@ -197,7 +198,7 @@ function applyStep() {
 
 test('apply_and_push: a diff already committed by a previous attempt is not re-applied — only pushed; a leftover legacy push block is removed first', async (t) => {
   const cycle = createDevCycle({ ticketKey: 'RUN-8', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
-  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-8-x', worktreePath: 'C:\wt' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-8-x', worktreePath: os.tmpdir() });
   const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-1' });
   markCodeChangeReady(request.id, 'C:\wt', 'diff --git a/x b/x');
   markCodeChangeApplied(request.id);
@@ -226,7 +227,7 @@ test('apply_and_push: a diff already committed by a previous attempt is not re-a
 
 test('apply_and_push: an already-pushed merge request is a no-op beyond unlocking the next steps', async (t) => {
   const cycle = createDevCycle({ ticketKey: 'RUN-9', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
-  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-9-x', worktreePath: 'C:\wt' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-9-x', worktreePath: os.tmpdir() });
   const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-2' });
   markCodeChangeReady(request.id, 'C:\wt', 'diff');
   markCodeChangeApplied(request.id);

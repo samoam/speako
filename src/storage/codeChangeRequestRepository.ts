@@ -154,3 +154,12 @@ export function markCodeChangePushed(id: number): void {
 export function markCodeChangeDiscarded(id: number): void {
   db.prepare("UPDATE code_change_requests SET status = 'discarded', resolved_at = datetime('now') WHERE id = ?").run(id);
 }
+
+/** The cycle's most recent change of any of `origins` — the merged implementation or a fix round's diff, whichever the Diff tab should show now. */
+export function getLatestCodeChangeRequestForDevCycle(devCycleId: number, origins: CodeChangeOrigin[]): CodeChangeRequest | undefined {
+  if (!origins.length) return undefined;
+  const row = db
+    .prepare(`SELECT * FROM code_change_requests WHERE dev_cycle_id = ? AND origin IN (${origins.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`)
+    .get(devCycleId, ...origins) as any;
+  return row ? mapRow(row) : undefined;
+}

@@ -151,7 +151,8 @@ import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequ
 import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, dev_cycle) with src/orchestration/engine.ts
 import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
 import { startPrReviewRun, prReviewRequestView } from '../orchestration/kinds/prReviewRun';
-import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwaitingPlanApproval, isDevCycleAwaitingMergeApproval, logDevCycle, devCycleView } from '../orchestration/kinds/devCycleRun';
+import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwaitingPlanApproval, isDevCycleAwaitingChangeApproval, logDevCycle, devCycleView, devCycleRunSummary, getLatestDevCycleRun } from '../orchestration/kinds/devCycleRun';
+import { startDevCycleFixRun } from '../orchestration/kinds/devCycleFixRun';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
@@ -160,7 +161,7 @@ import { isAntigravityCliConfigured } from '../integrations/antigravityCli';
 import { mergeDevPlans, StructuredDevPlan } from '../dev/devPlan';
 import { refineMergedDiff } from '../dev/mergeImplementations';
 import { getDevCycleImplementationsForCycle } from '../storage/devCycleImplementationRepository';
-import { getLatestCodeChangeRequestForDevCycleOrigin, updateCodeChangeDiff } from '../storage/codeChangeRequestRepository';
+import { getLatestCodeChangeRequestForDevCycle, updateCodeChangeDiff } from '../storage/codeChangeRequestRepository';
 import {
   createPrReviewRequest,
   getPrReviewRequest,
@@ -2934,11 +2935,14 @@ export class InterfaceServer {
         return;
       }
       const implementations = getDevCycleImplementationsForCycle(cycle.id, cycle.round);
-      const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
+      // The Diff tab shows whichever change is current: the merged
+      // implementation, or a fix round's diff once one exists.
+      const pendingChange = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
       res.json({
         cycle: devCycleView(cycle),
+        run: devCycleRunSummary(cycle.id),
         implementations,
-        mergeRequest: mergeRequest ?? null,
+        pendingChange: pendingChange ?? null,
         builds: getBuildsForDevCycle(cycle.id),
         buildRequests: getJenkinsBuildRequestsForCycle(cycle.id),
         testJob: config.jenkinsTestJob || null,
@@ -3106,8 +3110,8 @@ export class InterfaceServer {
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
-      if (cycle.currentStep !== 'merge_and_review') {
-        res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — cannot refine the merged diff now.` });
+      if (!isDevCycleAwaitingChangeApproval(cycle.id)) {
+        res.status(409).json({ error: 'This cycle is not waiting on a diff approval — nothing to refine now.' });
         return;
       }
       const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : '';
@@ -3117,9 +3121,9 @@ export class InterfaceServer {
         res.status(400).json({ error: 'instruction is required.' });
         return;
       }
-      const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
+      const mergeRequest = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
       if (!mergeRequest || mergeRequest.status !== 'ready' || !cycle.worktreePath) {
-        res.status(400).json({ error: 'No merged diff ready to refine.' });
+        res.status(400).json({ error: 'No diff ready to refine.' });
         return;
       }
       try {
@@ -3147,18 +3151,49 @@ export class InterfaceServer {
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
-      if (!isDevCycleAwaitingMergeApproval(cycle.id)) {
-        res.status(409).json({ error: 'This cycle is not waiting on a merged-diff approval.' });
+      if (!isDevCycleAwaitingChangeApproval(cycle.id)) {
+        res.status(409).json({ error: 'This cycle is not waiting on a diff approval.' });
         return;
       }
-      const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
-      if (!mergeRequest || mergeRequest.status !== 'ready' || !cycle.worktreePath || !cycle.branchName) {
-        res.status(400).json({ error: 'No merged diff ready to apply.' });
+      const change = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
+      if (!change || change.status !== 'ready' || !cycle.branchName) {
+        res.status(400).json({ error: 'No diff ready to apply.' });
         return;
       }
-      // Approving resumes the parked run: apply + push, then the Jenkins
-      // build; the PR draft starts once the build is green.
+      // Approving resumes the parked run (the merged implementation, or a fix
+      // round's change): commit + push, then the Jenkins build; the PR draft
+      // starts once the build is green.
       res.json({ applied: approveDevCycleGate(cycle.id) });
+    });
+
+    // Starts a fix round for the cycle's last red build by hand — the runs
+    // start one automatically for a fixable failure, so this is for the
+    // cases they don't: rounds exhausted, or a failure first judged
+    // unfixable that the developer wants to try anyway.
+    app.post('/api/jira-implement/:id/fix', async (req, res) => {
+      const cycle = getDevCycle(Number(req.params.id));
+      if (!cycle) {
+        res.status(404).json({ error: 'Unknown dev cycle.' });
+        return;
+      }
+      const latest = getLatestDevCycleRun<any>(cycle.id);
+      // The run that failed recorded the build; failing that (a run from
+      // before this existed, or a build the monitor saw on its own), the
+      // cycle's latest red build row carries the same facts.
+      let failedBuild = latest?.state?.failedBuild;
+      if (!failedBuild) {
+        const red = getBuildsForDevCycle(cycle.id).find((b) => !b.building && (b.result === 'FAILURE' || b.result === 'UNSTABLE'));
+        if (red) {
+          failedBuild = { jobPath: red.jobPath, jobFullName: config.jenkinsTestJob, buildNumber: red.buildNumber, result: red.result, newFailures: red.classificationJson?.suspectTests ?? [], reason: red.classificationJson?.summary ?? red.result };
+        }
+      }
+      if (!failedBuild) {
+        res.status(400).json({ error: 'No failed build recorded for this cycle — run the build first.' });
+        return;
+      }
+      const round = latest?.kind === 'dev_cycle_fix' ? (latest.state.round ?? 1) + 1 : 1;
+      res.json({ started: true, round });
+      await startDevCycleFixRun(cycle.id, failedBuild, round);
     });
 
     app.post('/api/jira-implement/:id/discard', async (req, res) => {

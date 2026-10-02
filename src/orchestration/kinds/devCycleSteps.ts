@@ -1,0 +1,293 @@
+import * as fs from 'fs';
+import { config } from '../../config';
+import { getJiraIssueDetail } from '../../integrations/jiraMcp';
+import { startClaudeCodeTask, getBackgroundTaskLogs, applyCodeChangeToRepo, pushRepoChanges, git } from '../../integrations/claudeCodeCli';
+import { jobPathFor, getTestReport, getRecentBuilds } from '../../integrations/jenkinsClient';
+import { assessUnstableBuild } from '../../dev/buildVerdict';
+import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
+import { triggerJenkinsBuild, getQueueState, getBuildByNumber } from '../../integrations/jenkinsMcp';
+import { createJenkinsBuildRequest, markJenkinsBuildRequestStarted } from '../../storage/jenkinsBuildRequestRepository';
+import { LEGACY_NO_PUSH_URL } from '../../integrations/antigravityCli';
+import { addWorktreeForExistingBranch } from '../../integrations/gitBranches';
+import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
+import { startDraft } from '../../drafts/draftService';
+import {
+  CodeChangeOrigin,
+  CodeChangeRequest,
+  createCodeChangeRequest,
+  getCodeChangeRequest,
+  markCodeChangeApplied,
+  markCodeChangePushed,
+} from '../../storage/codeChangeRequestRepository';
+import { DevCycle, getDevCycle, setDevCycleBranch, setDevCycleCurrentStep } from '../../storage/devCycleRepository';
+import { getLatestRunForSubject, Run } from '../../storage/runRepository';
+import { emitEvent } from '../engine';
+import { StepContext, StepDefinition } from '../types';
+
+/**
+ * Steps and helpers shared by the dev-cycle run kinds (devCycleRun.ts, the
+ * main pipeline; devCycleFixRun.ts, the build-fix loop): everything a cycle
+ * produces lives on the dev_cycles row and its side tables, so any run kind
+ * can pick the cycle up wherever it is.
+ */
+
+export const DEV_CYCLE_SUBJECT_KIND = 'dev_cycle';
+
+const PUSH_TIMEOUT_MS = 10 * 60 * 1000;
+/** The integration job runs the whole suite (~3,200 tests, ~20 min seen live) and may wait for an executor first. */
+const BUILD_TIMEOUT_MS = 90 * 60 * 1000;
+const BUILD_POLL_MS = 20_000;
+
+/** What the build step records before failing the run, so finalize can decide whether a fix round should follow. */
+export interface FailedBuild {
+  jobPath: string;
+  jobFullName: string;
+  buildNumber: number;
+  result: string | null;
+  newFailures: string[];
+  reason: string;
+}
+
+export interface DevCycleBaseState {
+  cycleId: number;
+  failedBuild?: FailedBuild;
+}
+
+export function cycleOf(ctx: StepContext<DevCycleBaseState>): DevCycle {
+  const cycle = getDevCycle(ctx.state.cycleId);
+  if (!cycle) throw new Error(`Dev cycle ${ctx.state.cycleId} no longer exists.`);
+  return cycle;
+}
+
+/** The cycle's most recent run of any kind (main pipeline or fix round) — the one the Jira-implement tab shows. */
+export function getLatestDevCycleRun<S extends DevCycleBaseState = DevCycleBaseState>(cycleId: number): Run<S> | undefined {
+  return getLatestRunForSubject(DEV_CYCLE_SUBJECT_KIND, String(cycleId)) as Run<S> | undefined;
+}
+
+/**
+ * `claude logs <id>` of a `--bg` agent includes its terminal UI, not just
+ * its transcript — seen live in a run log: spinner lines ("✽ Imagining… (18s
+ * · ↓ 464 tokens …)"), full-width box-drawing rules, and the status bar
+ * ("⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt"). None of
+ * that is progress; it's dropped before reaching the run log.
+ */
+export function isClaudeTuiNoise(line: string): boolean {
+  if (/^[─━═│┃╌╍┄┅\s❯>]+$/u.test(line)) return true;
+  if (/[─━═]{8,}/u.test(line)) return true;
+  if (/^[✻✽✶✳✢·•●○◐◓◑◒⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S+…/u.test(line)) return true;
+  if (/accept edits on|shift\+tab to cycle|esc to interrupt|← for agents|\?\s*for shortcuts/i.test(line)) return true;
+  if (/\x1b\[/.test(line)) return true;
+  return false;
+}
+
+/**
+ * The commit the cycle lands on the branch: the ticket key first, then the
+ * ticket's summary, one short subject line and nothing else — the team's
+ * convention (no "Implement …" prefix, no body, no co-author trailer, no
+ * mention of the tooling). Author/committer come from the repo's own git
+ * identity, as they would for a hand-made commit.
+ */
+export function devCycleCommitMessage(ticketKey: string, summary: string | null | undefined): string {
+  const text = (summary ?? '').replace(/\s+/g, ' ').trim();
+  const subject = text ? `${ticketKey} ${text}` : ticketKey;
+  return subject.length > 100 ? `${subject.slice(0, 99).trimEnd()}…` : subject;
+}
+
+export const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+
+/** The cycle's primary worktree, re-created on the branch if it was removed (prOpenDraft removes worktrees once the PR is open; a later fix round needs one again). */
+export async function ensureCycleWorktree(cycle: DevCycle, log: (m: string) => void): Promise<string> {
+  if (!cycle.branchName) throw new Error('This dev cycle has no branch yet.');
+  if (cycle.worktreePath && fs.existsSync(cycle.worktreePath)) return cycle.worktreePath;
+  log(`Re-creating a worktree for ${cycle.branchName}…`);
+  const worktreePath = await addWorktreeForExistingBranch(cycle.repoPath, cycle.branchName, 'fix');
+  setDevCycleBranch(cycle.id, { branchName: cycle.branchName, worktreePath });
+  return worktreePath;
+}
+
+export type ChangeOutcome = { request: CodeChangeRequest; status: 'ready' | 'failed'; diff: string | null; error: string | null };
+
+/**
+ * One Claude Code `--bg` agent run in a worktree, followed to its diff: a
+ * code_change_requests row (the same record the apply step and the Diff tab
+ * read), the agent's state polled, and `claude logs` tailed into the run log
+ * — `--bg` has no streaming onProgress, so the tail is the only way to show
+ * what the agent is doing rather than "Agent state: running" for minutes.
+ */
+export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, cycle: DevCycle, prompt: string, worktreePath: string, origin: CodeChangeOrigin): Promise<ChangeOutcome> {
+  const { cliSessionId } = await startClaudeCodeTask(prompt, worktreePath, 'sonnet');
+  const request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
+  let tailingStopped = false;
+  let lastLoggedLength = 0;
+  const tail = (async () => {
+    while (!tailingStopped) {
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      if (tailingStopped) return;
+      try {
+        const logs = await getBackgroundTaskLogs(cliSessionId);
+        if (logs.length > lastLoggedLength) {
+          const added = logs.slice(lastLoggedLength);
+          lastLoggedLength = logs.length;
+          for (const line of added.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed && !isClaudeTuiNoise(trimmed)) ctx.log(`Claude: ${trimmed}`);
+          }
+        }
+      } catch {
+        // best-effort only — a failed `claude logs` call shouldn't affect the actual poll/outcome
+      }
+    }
+  })();
+  await pollCodeChangeRequest(request.id, emitEvent);
+  tailingStopped = true;
+  await tail;
+  const finished = getCodeChangeRequest(request.id)!;
+  if (finished.status === 'ready') return { request: finished, status: 'ready', diff: finished.diff ?? '', error: null };
+  return { request: finished, status: 'failed', diff: null, error: finished.error ?? 'Claude Code agent failed.' };
+}
+
+/**
+ * The human-gated "commit this diff and push it" step, shared by the merged
+ * implementation and by a fix round. Resumable: the change request's own
+ * status says how far a previous attempt got (seen live: committed, then the
+ * push timed out), so a retry never re-applies an already-committed diff.
+ */
+export function applyAndPushStep<S extends DevCycleBaseState>(options: {
+  key: string;
+  label: string;
+  /** The change to land — looked up at run time so a retry sees the same row. */
+  request: (state: S) => CodeChangeRequest | undefined;
+  commitMessage: (cycle: DevCycle, ticketSummary: string | null, state: S) => string;
+}): StepDefinition<S> {
+  return {
+    key: options.key,
+    label: options.label,
+    approval: true,
+    timeoutMs: PUSH_TIMEOUT_MS,
+    async run(ctx) {
+      const cycle = cycleOf(ctx);
+      const request = options.request(ctx.state);
+      if (!request || !['ready', 'applied', 'pushed'].includes(request.status) || !cycle.branchName) throw new Error('No change ready to apply.');
+      const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
+      if (request.status === 'ready') {
+        const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
+        await applyCodeChangeToRepo(request.diff ?? '', worktreePath, options.commitMessage(cycle, ticket?.summary ?? null, ctx.state));
+        markCodeChangeApplied(request.id);
+        emitEvent({ type: 'code-change-applied', devCycleId: cycle.id, requestId: request.id });
+      } else {
+        ctx.log('The change was already committed by a previous attempt.');
+      }
+      if (request.status !== 'pushed') {
+        // An earlier Speako version blocked Antigravity's pushes by writing
+        // a bogus push URL into the shared repo config (see antigravityCli.ts);
+        // a repo that still carries it can't push from any worktree.
+        const pushUrl = await git(['config', '--get', 'remote.origin.pushurl'], cycle.repoPath).catch(() => '');
+        if (pushUrl.trim() === LEGACY_NO_PUSH_URL) {
+          await git(['config', '--unset', 'remote.origin.pushurl'], cycle.repoPath);
+          ctx.log('Removed a leftover push block from an earlier Speako version from the repo config.');
+        }
+        await pushRepoChanges(worktreePath);
+        markCodeChangePushed(request.id);
+        emitEvent({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: request.id });
+      }
+      // 'done' is what unlocks the PR/Docs tabs — the PR draft itself only
+      // auto-starts once the build is green, but "Draft PR now" stays
+      // available as the manual escape hatch.
+      setDevCycleCurrentStep(cycle.id, 'done');
+      ctx.log(`Committed and pushed to ${cycle.branchName}.`);
+      return `Pushed to ${cycle.branchName}.`;
+    },
+  };
+}
+
+/**
+ * Builds and tests the branch on the shared Jenkins job and waits for the
+ * verdict. UNSTABLE is judged against the job's own history (buildVerdict.ts)
+ * — the shared job's baseline is itself unstable. A red build records what
+ * failed in `state.failedBuild` before throwing, so the run's finalize can
+ * start a fix round. Skipped (not failed) when no job is configured.
+ */
+export function buildAndTestStep<S extends DevCycleBaseState>(): StepDefinition<S> {
+  return {
+    key: 'build_and_test',
+    label: 'Build & test on Jenkins',
+    timeoutMs: BUILD_TIMEOUT_MS,
+    async run(ctx) {
+      const cycle = cycleOf(ctx);
+      if (!config.jenkinsTestJob) return 'Skipped — no build & test job configured (Settings > Jenkins).';
+      if (!cycle.branchName) throw new Error('This cycle has no branch to build.');
+      const jobFullName = config.jenkinsTestJob;
+      const jobPath = jobPathFor(jobFullName);
+      const queueId = await triggerJenkinsBuild(jobFullName, { [config.jenkinsTestBranchParam]: cycle.branchName });
+      // Recorded so jenkinsMonitor.ts follows the same build into the Tests
+      // tab (build rows + failure classification); this step only waits for
+      // the verdict.
+      const buildRequest = createJenkinsBuildRequest({ devCycleId: cycle.id, jobPath, jobFullName, branchName: cycle.branchName, queueId });
+      ctx.log(`Queued ${jobFullName} for ${cycle.branchName} (queue item ${queueId}).`);
+      let buildNumber: number | null = null;
+      const fail = (result: string | null, newFailures: string[], reason: string, url: string): never => {
+        ctx.state.failedBuild = { jobPath, jobFullName, buildNumber: buildNumber!, result, newFailures, reason };
+        throw new Error(`Build #${buildNumber} ${reason} — ${url}`);
+      };
+      while (!ctx.signal.aborted) {
+        if (buildNumber == null) {
+          const queue = await getQueueState(queueId);
+          if (queue.state === 'cancelled' || queue.state === 'gone') throw new Error(`Jenkins ${queue.state === 'cancelled' ? 'cancelled the queued build' : 'lost the queued build'} (queue item ${queueId}).`);
+          if (queue.state === 'started') {
+            buildNumber = queue.buildNumber;
+            // The monitor follows the request from here by build number — the
+            // queue item it would otherwise rely on expires minutes after this.
+            markJenkinsBuildRequestStarted(buildRequest.id, buildNumber);
+            ctx.log(`Build #${buildNumber} started.`);
+          } else {
+            ctx.detail(queue.why ? `Waiting in the Jenkins queue: ${queue.why}` : 'Waiting in the Jenkins queue…');
+          }
+        } else {
+          const build = await getBuildByNumber(jobFullName, buildNumber);
+          if (build && !build.building) {
+            // Record the finished build right away (rows in jenkins_builds,
+            // failure classification) instead of waiting for the monitor's next tick.
+            await pollJenkinsBuilds(emitEvent).catch((err: any) => ctx.log(`Could not record the build in the Tests tab yet: ${err.message}`));
+            if (build.result === 'SUCCESS') {
+              ctx.log(`Build #${buildNumber} passed.`);
+              return `Build #${buildNumber} passed.`;
+            }
+            if (build.result === 'UNSTABLE') {
+              const recent = (await getRecentBuilds(jobPath, 7)).filter((b) => b.number !== buildNumber && !b.building).slice(0, 5);
+              const [report, ...recentReports] = await Promise.all([getTestReport(jobPath, buildNumber), ...recent.map((b) => getTestReport(jobPath, b.number))]);
+              const verdict = assessUnstableBuild(report, recentReports.filter((r): r is NonNullable<typeof r> => !!r));
+              if (verdict.preexistingFailures.length) ctx.log(`Pre-existing failures (also failing before this branch): ${verdict.preexistingFailures.join(', ')}`);
+              if (verdict.pass) {
+                ctx.log(`Build #${buildNumber} unstable — ${verdict.reason}; treating as passed.`);
+                return `Build #${buildNumber} unstable — ${verdict.reason}.`;
+              }
+              return fail('UNSTABLE', verdict.newFailures, `UNSTABLE — ${verdict.reason}`, build.url);
+            }
+            return fail(build.result, [], build.result ?? 'ended without a result', build.url);
+          }
+          ctx.detail(`Build #${buildNumber} running…`);
+        }
+        await sleep(BUILD_POLL_MS, ctx.signal);
+      }
+      throw new Error('Cancelled while waiting for the build.');
+    },
+  };
+}
+
+/** Once a build is green: the PR is drafted on a tested branch (no-op if the cycle already has a PR). */
+export async function startPrDraftAfterGreenBuild(cycleId: number): Promise<void> {
+  const cycle = getDevCycle(cycleId);
+  if (!cycle || cycle.prId) return;
+  await startDraft({ kind: 'pr_open', subjectId: cycleId }).catch((err: any) => {
+    console.error(`[dev-cycle] failed to auto-start PR open for cycle ${cycleId}:`, err.message);
+  });
+}
