@@ -42,7 +42,12 @@ const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)'];
 // compound command runs unprompted, and `git commit` is REFUSED outright by
 // the deny rule below rather than prompting — the only restriction that
 // actually matters inside a disposable worktree.
-const ALLOWED_TOOLS = ['Write', 'Edit', 'Read', 'Grep', 'Glob', 'Bash'];
+// `Skill` too: a repo can ship project skills (.claude/skills/ — officercc
+// has run-integration-test), the agent reaches for them to run the tests
+// it's asked to run, and invoking a skill is its own permission ("Claude
+// may use instructions, code, or files from this Skill") that neither Bash
+// nor acceptEdits covers — confirmed live, fix round 6 parked on exactly that.
+const ALLOWED_TOOLS = ['Write', 'Edit', 'Read', 'Grep', 'Glob', 'Bash', 'Skill'];
 
 const SPAWN_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 30_000;

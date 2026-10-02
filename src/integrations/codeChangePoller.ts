@@ -29,15 +29,17 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
       }
     }
     if (idx === -1) return '';
-    // The prompt's own rows (tool name, "Run shell command"/"Edit file", the
-    // command box) precede the "requires approval" line; box-drawing rules
-    // and spinner lines in between carry nothing.
-    const context = lines
-      .slice(Math.max(0, idx - 14), idx)
-      .filter((l) => !/^[─━═│┃╌╍┄┅\s]*$/u.test(l) && !/^[✻✽✶✳✢·*]\s/u.test(l) && !/Tip:/.test(l))
+    // The dialog's "Yes, and don't ask again for: <tool pattern>" option names
+    // the tool and command precisely (seen live: "git fetch *"); fall back to
+    // the rows around the "requires approval" line (tool name, command box),
+    // minus box-drawing rules, spinners and the echoed prompt.
+    const window = lines.slice(Math.max(0, idx - 14), Math.min(lines.length, idx + 8));
+    const dontAsk = window.map((l) => /don.t ask again for:\s*(.+)$/i.exec(l)?.[1]).find(Boolean);
+    const context = window
+      .filter((l) => !/^[─━═│┃╌╍┄┅\s]*$/u.test(l) && !/^[✻✽✶✳✢·*]\s/u.test(l) && !/Tip:|Esc to cancel|^❯ |^\d\. (Yes|No)/.test(l))
       .map((l) => l.replace(/^[│┃]\s*/, '').replace(/[─━═╌]{3,}/g, '').trim())
       .filter(Boolean);
-    return context.join(' | ').slice(0, 600);
+    return `${dontAsk ? `[${dontAsk.trim()}] ` : ''}${context.join(' | ')}`.slice(0, 600);
   } catch {
     return '';
   }
