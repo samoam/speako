@@ -12,6 +12,8 @@ import {
   approveDevCycleGate,
   logDevCycle,
   devCycleView,
+  isClaudeTuiNoise,
+  devCycleCommitMessage,
 } from '../src/orchestration/kinds/devCycleRun';
 
 setRunBroadcast(() => {});
@@ -95,6 +97,7 @@ import { updateSettings } from '../src/settingsStore';
 import * as jenkinsMcpModule from '../src/integrations/jenkinsMcp';
 import { getJenkinsBuildRequestsForCycle } from '../src/storage/jenkinsBuildRequestRepository';
 import { StepContext } from '../src/orchestration/types';
+import * as jenkinsClientModule from '../src/integrations/jenkinsClient';
 import { DevCycleRunState } from '../src/orchestration/kinds/devCycleRun';
 
 function buildStep() {
@@ -147,6 +150,99 @@ test('build_and_test: a FAILURE/UNSTABLE build fails the step with the build URL
   mock.method(jenkinsMcpModule, 'triggerJenkinsBuild', async () => 1);
   mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'started' as const, buildNumber: 9 }));
   mock.method(jenkinsMcpModule, 'getBuildByNumber', async () => ({ jobPath: 'job/Integration-Test', number: 9, result: 'UNSTABLE', building: false, timestamp: 1, durationMs: 1, url: 'https://jenkins/9/', displayName: '#9' }));
+  mock.method(jenkinsClientModule, 'getRecentBuilds', async () => []);
+  mock.method(jenkinsClientModule, 'getTestReport', async () => ({ total: 10, failCount: 1, skipCount: 0, failures: [{ className: 'a.T', name: 'n', errorDetails: null, errorStackTrace: null, age: 1 }] }));
   t.after(() => mock.restoreAll());
-  await assert.rejects(buildStep().run(stepContext(cycle.id)), /Build #9 UNSTABLE — https:\/\/jenkins\/9\//);
+  await assert.rejects(buildStep().run(stepContext(cycle.id)), /Build #9 UNSTABLE — 1 new test failure\(s\): a\.T\.n — https:\/\/jenkins\/9\//);
+});
+
+test('build_and_test: an UNSTABLE build whose failures were all already failing on the job passes (the shared job\'s baseline is unstable)', async (t) => {
+  updateSettings({ jenkinsTestJob: 'Integration-Test' });
+  t.after(() => updateSettings({ jenkinsTestJob: '' }));
+  const cycle = createDevCycle({ ticketKey: 'RUN-7', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-7-x', worktreePath: 'wt' });
+  mock.method(jenkinsMcpModule, 'triggerJenkinsBuild', async () => 1);
+  mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'started' as const, buildNumber: 10 }));
+  mock.method(jenkinsMcpModule, 'getBuildByNumber', async () => ({ jobPath: 'job/Integration-Test', number: 10, result: 'UNSTABLE', building: false, timestamp: 1, durationMs: 1, url: 'https://jenkins/10/', displayName: '#10' }));
+  mock.method(jenkinsClientModule, 'getRecentBuilds', async () => [{ jobPath: 'job/Integration-Test', number: 9, result: 'UNSTABLE', building: false, timestamp: 1, durationMs: 1, url: '', displayName: '#9' }]);
+  mock.method(jenkinsClientModule, 'getTestReport', async () => ({ total: 10, failCount: 2, skipCount: 0, failures: [{ className: 'a.Old', name: 'one', errorDetails: null, errorStackTrace: null, age: 3 }, { className: 'a.Old', name: 'two', errorDetails: null, errorStackTrace: null, age: 1 }] }));
+  t.after(() => mock.restoreAll());
+  const ctx = stepContext(cycle.id);
+  const detail = await buildStep().run(ctx);
+  assert.match(String(detail), /^Build #10 unstable — 2 pre-existing failure\(s\), none new\.$/);
+  assert.ok(ctx.logs.some((l) => /Pre-existing failures.*a\.Old\.one, a\.Old\.two/.test(l)));
+});
+
+test('isClaudeTuiNoise: drops spinner, rule and status-bar lines from `claude logs`, keeps real progress', async () => {
+  for (const noise of [
+    '✽ Imagining… (18s · ↓ 464 tokens · thinking with high effort)',
+    '────────────────────────────────────────────── jira escalation delay implementation ─❯',
+    '⏵⏵ accept edits on (shift+tab to cycle) · ← for agents · esc to interrupt',
+    '───────────',
+  ]) assert.equal(isClaudeTuiNoise(noise), true, noise);
+  for (const real of ['Reading src/Foo.java', 'Edited LprEventPendingTicketServiceImpl.java (+12 −3)', 'The fix is already committed, so I will add the null fallback.']) assert.equal(isClaudeTuiNoise(real), false, real);
+});
+
+// ---- apply_and_push step: resumable after a failed push, and heals the legacy push block ----
+
+import * as claudeCodeCliModule from '../src/integrations/claudeCodeCli';
+import { createCodeChangeRequest, markCodeChangeReady, markCodeChangeApplied, markCodeChangePushed, getCodeChangeRequest } from '../src/storage/codeChangeRequestRepository';
+import { LEGACY_NO_PUSH_URL } from '../src/integrations/antigravityCli';
+
+function applyStep() {
+  return devCycleRunDefinition.steps({ cycleId: 0 }).flat().find((s) => s.key === 'apply_and_push')!;
+}
+
+test('apply_and_push: a diff already committed by a previous attempt is not re-applied — only pushed; a leftover legacy push block is removed first', async (t) => {
+  const cycle = createDevCycle({ ticketKey: 'RUN-8', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-8-x', worktreePath: 'C:\wt' });
+  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-1' });
+  markCodeChangeReady(request.id, 'C:\wt', 'diff --git a/x b/x');
+  markCodeChangeApplied(request.id);
+
+  const apply = mock.method(claudeCodeCliModule, 'applyCodeChangeToRepo', async () => { assert.fail('must not re-apply an already-committed diff'); });
+  const push = mock.method(claudeCodeCliModule, 'pushRepoChanges', async () => {});
+  const gitCalls: string[] = [];
+  mock.method(claudeCodeCliModule, 'git', async (args: string[]) => {
+    gitCalls.push(args.join(' '));
+    if (args.join(' ') === 'config --get remote.origin.pushurl') return `${LEGACY_NO_PUSH_URL}\n`;
+    return '';
+  });
+  t.after(() => mock.restoreAll());
+
+  const ctx = stepContext(cycle.id);
+  const detail = await applyStep().run(ctx);
+  assert.equal(detail, 'Pushed to feature/RUN-8-x.');
+  assert.equal(apply.mock.callCount(), 0);
+  assert.equal(push.mock.callCount(), 1);
+  assert.ok(gitCalls.includes('config --unset remote.origin.pushurl'), `legacy block removed: ${gitCalls.join(' | ')}`);
+  assert.equal(getCodeChangeRequest(request.id)!.status, 'pushed');
+  assert.ok(ctx.logs.some((l) => /already committed by a previous attempt/.test(l)));
+  assert.ok(ctx.logs.some((l) => /Removed a leftover push block/.test(l)));
+  assert.equal(getDevCycle(cycle.id)!.currentStep, 'done');
+});
+
+test('apply_and_push: an already-pushed merge request is a no-op beyond unlocking the next steps', async (t) => {
+  const cycle = createDevCycle({ ticketKey: 'RUN-9', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-9-x', worktreePath: 'C:\wt' });
+  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-2' });
+  markCodeChangeReady(request.id, 'C:\wt', 'diff');
+  markCodeChangeApplied(request.id);
+
+  markCodeChangePushed(request.id);
+  const push = mock.method(claudeCodeCliModule, 'pushRepoChanges', async () => { assert.fail('must not push twice'); });
+  t.after(() => mock.restoreAll());
+  await applyStep().run(stepContext(cycle.id));
+  assert.equal(push.mock.callCount(), 0);
+});
+
+test('devCycleCommitMessage: Jira key first, the ticket summary, one short line, nothing else', async () => {
+
+  assert.equal(devCycleCommitMessage('ETICK-10176', 'Same-day escalation prior (escalationdelaydays=0) not counted'), 'ETICK-10176 Same-day escalation prior (escalationdelaydays=0) not counted');
+  assert.equal(devCycleCommitMessage('ETICK-1', '  multi\n  line   summary '), 'ETICK-1 multi line summary');
+  assert.equal(devCycleCommitMessage('ETICK-1', null), 'ETICK-1');
+  const long = devCycleCommitMessage('ETICK-1', 'x'.repeat(200));
+  assert.equal(long.length, 100);
+  assert.ok(long.endsWith('…'));
+  assert.doesNotMatch(long, /Implement|Speako|Claude|Co-Authored/);
 });

@@ -39,11 +39,15 @@ import { git } from './claudeCodeCli';
  *   set) — there is no discovered equivalent flag to deny just that one
  *   command while still running non-interactively. The safety net here is
  *   structural instead: this is only ever used inside a disposable worktree
- *   (never the user's real repo), `disableGitPush` below makes an actual
- *   `git push` fail at the transport level regardless of whether the agent
- *   attempts one, and `getWorktreeDiffSinceBase` (not a plain
- *   `git diff --cached`) still captures the real changes even if the agent
- *   committed them mid-session.
+ *   (never the user's real repo), NO_PUSH_GIT_ENV below makes an actual
+ *   `git push` fail at the transport level for every git the agent process
+ *   spawns, and `getWorktreeDiffSinceBase` (not a plain `git diff --cached`)
+ *   still captures the real changes even if the agent committed them
+ *   mid-session. The push block is an environment override, never a config
+ *   write: an earlier version ran `git remote set-url --push` in the
+ *   worktree, and since worktrees share the repo's .git/config that
+ *   disabled pushing for the developer's own checkout too (seen live
+ *   2026-10-02 — the dev cycle's own push step then failed on it).
  */
 const AGY_TIMEOUT_MS = 30 * 60 * 1000; // matches claudeCodeCli.ts's REVIEW_TIMEOUT_MS — Promise.all in server.ts waits for the slower of the two, so there's no point in one giving up well before the other
 
@@ -88,11 +92,11 @@ export interface AgyTurnOutcome {
  * line is `{"event":"result","result":{status, response, structured_output?,
  * usage}}`; `--json-schema` fills `structured_output`.
  */
-export function runAgyTurn(prompt: string, args: string[], cwd: string, timeoutMs: number): Promise<AgyTurnOutcome> {
+export function runAgyTurn(prompt: string, args: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {}): Promise<AgyTurnOutcome> {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(resolveAgyBinary(), ['--input-format', 'stream-json', '--output-format', 'stream-json', ...args, '--print='], { cwd });
+      child = spawn(resolveAgyBinary(), ['--input-format', 'stream-json', '--output-format', 'stream-json', ...args, '--print='], { cwd, env: { ...process.env, ...env } });
     } catch (err: any) {
       resolve({ result: null, stderr: '', code: null, spawnError: err });
       return;
@@ -149,7 +153,7 @@ export async function runAntigravityAgent(
   dirPath: string,
   options: { mode: 'plan' | 'accept-edits'; onProgress?: (message: string) => void }
 ): Promise<AntigravityRunResult> {
-  const outcome = await runAgyTurn(prompt, ['--mode', options.mode, '--add-dir', dirPath, '--dangerously-skip-permissions'], dirPath, AGY_TIMEOUT_MS);
+  const outcome = await runAgyTurn(prompt, ['--mode', options.mode, '--add-dir', dirPath, '--dangerously-skip-permissions'], dirPath, AGY_TIMEOUT_MS, options.mode === 'accept-edits' ? NO_PUSH_GIT_ENV : {});
   if (outcome.spawnError) {
     // ENOENT (agy not installed) lands here — the fallback path every call site expects.
     antigravityAvailable = false;
@@ -185,16 +189,22 @@ export async function runSecondOpinionReview(
   return runAntigravityAgent(prompt, dirPath, { mode: 'plan', onProgress });
 }
 
+/** The push URL an earlier Speako version wrote into the shared repo config (see the header) — recognized so the dev cycle's push step can remove it if it's still there. */
+export const LEGACY_NO_PUSH_URL = 'disabled-by-speako://no-push';
+
 /**
  * Structural defense against an unauthorized `git push` from inside a
- * disposable worktree (see this file's header comment) — breaks the
- * worktree's push URL so `git push` fails at the transport level regardless
- * of whether `agy` itself would have tried one. `git pull`/`fetch` (which
- * use the read `url`, untouched) still work; only pushing is disabled.
+ * disposable worktree (see this file's header comment): git ≥ 2.31 reads
+ * GIT_CONFIG_COUNT/KEY_n/VALUE_n as config for that process only, so every
+ * git the agent spawns sees a broken push URL while the repo's own config —
+ * shared by every worktree and the developer's checkout — is untouched.
+ * `git pull`/`fetch` (the read `url`) still work; only pushing is disabled.
  */
-export async function disableGitPush(worktreePath: string): Promise<void> {
-  await git(['remote', 'set-url', '--push', 'origin', 'disabled-by-speako://no-push'], worktreePath);
-}
+export const NO_PUSH_GIT_ENV: Record<string, string> = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'remote.origin.pushurl',
+  GIT_CONFIG_VALUE_0: LEGACY_NO_PUSH_URL,
+};
 
 /**
  * Diffs the CURRENT full state of `worktreePath` (staged via `git add -A`,

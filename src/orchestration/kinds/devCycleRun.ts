@@ -1,10 +1,11 @@
 import { config } from '../../config';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
-import { startClaudeCodeTask, getBackgroundTaskLogs, runClaudeCodeReview, applyCodeChangeToRepo, pushRepoChanges } from '../../integrations/claudeCodeCli';
-import { jobPathFor } from '../../integrations/jenkinsClient';
+import { startClaudeCodeTask, getBackgroundTaskLogs, runClaudeCodeReview, applyCodeChangeToRepo, pushRepoChanges, git } from '../../integrations/claudeCodeCli';
+import { jobPathFor, getTestReport, getRecentBuilds } from '../../integrations/jenkinsClient';
+import { assessUnstableBuild } from '../../dev/buildVerdict';
 import { triggerJenkinsBuild, getQueueState, getBuildByNumber } from '../../integrations/jenkinsMcp';
 import { createJenkinsBuildRequest } from '../../storage/jenkinsBuildRequestRepository';
-import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, disableGitPush, getWorktreeDiffSinceBase } from '../../integrations/antigravityCli';
+import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, getWorktreeDiffSinceBase, LEGACY_NO_PUSH_URL } from '../../integrations/antigravityCli';
 import { createTicketBranchWorktree, addWorktreeForExistingBranch } from '../../integrations/gitBranches';
 import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
 import { gatherJiraImplementContext } from '../../dev/jiraImplementContext';
@@ -75,6 +76,35 @@ function cycleOf(ctx: StepContext<DevCycleRunState>): DevCycle {
   return cycle;
 }
 
+/**
+ * `claude logs <id>` of a `--bg` agent includes its terminal UI, not just
+ * its transcript — seen live in a run log: spinner lines ("✽ Imagining… (18s
+ * · ↓ 464 tokens …)"), full-width box-drawing rules, and the status bar
+ * ("⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt"). None of
+ * that is progress; it's dropped before reaching the run log.
+ */
+export function isClaudeTuiNoise(line: string): boolean {
+  if (/^[─━═│┃╌╍┄┅\s❯>]+$/u.test(line)) return true;
+  if (/[─━═]{8,}/u.test(line)) return true;
+  if (/^[✻✽✶✳✢·•●○◐◓◑◒⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S+…/u.test(line)) return true;
+  if (/accept edits on|shift\+tab to cycle|esc to interrupt|← for agents|\?\s*for shortcuts/i.test(line)) return true;
+  if (/\x1b\[/.test(line)) return true;
+  return false;
+}
+
+/**
+ * The commit the cycle lands on the branch: the ticket key first, then the
+ * ticket's summary, one short subject line and nothing else — the team's
+ * convention (no "Implement …" prefix, no body, no co-author trailer, no
+ * mention of the tooling). Author/committer come from the repo's own git
+ * identity, as they would for a hand-made commit.
+ */
+export function devCycleCommitMessage(ticketKey: string, summary: string | null | undefined): string {
+  const text = (summary ?? '').replace(/\s+/g, ' ').trim();
+  const subject = text ? `${ticketKey} ${text}` : ticketKey;
+  return subject.length > 100 ? `${subject.slice(0, 99).trimEnd()}…` : subject;
+}
+
 function implementPromptFor(cycle: DevCycle, approvedPlan: StructuredDevPlan): string {
   return `Implement Jira ticket ${cycle.ticketKey} following this approved plan exactly. If you must deviate from it, make the minimum necessary change and clearly state the deviation in your final message.
 
@@ -118,7 +148,7 @@ async function runClaudeImplementation(ctx: StepContext<DevCycleRunState>, cycle
             lastLoggedLength = logs.length;
             for (const line of added.split('\n')) {
               const trimmed = line.trim();
-              if (trimmed) ctx.log(`Claude: ${trimmed}`);
+              if (trimmed && !isClaudeTuiNoise(trimmed)) ctx.log(`Claude: ${trimmed}`);
             }
           }
         } catch {
@@ -147,10 +177,11 @@ async function runClaudeImplementation(ctx: StepContext<DevCycleRunState>, cycle
 
 /**
  * Antigravity (agy) runs to completion on its own — no PID tracking.
- * disableGitPush + getWorktreeDiffSinceBase are the safety net documented
- * in antigravityCli.ts (accept-edits mode isn't confirmed to block `git
- * commit` the way Claude Code is). When agy is missing or fails this
- * variant is simply failed and the implement step proceeds with Claude's.
+ * runAntigravityAgent's push block + getWorktreeDiffSinceBase are the
+ * safety net documented in antigravityCli.ts (accept-edits mode isn't
+ * confirmed to block `git commit` the way Claude Code is). When agy is
+ * missing or fails this variant is simply failed and the implement step
+ * proceeds with Claude's.
  */
 async function runAntigravityImplementation(ctx: StepContext<DevCycleRunState>, cycle: DevCycle, prompt: string, worktreePath: string): Promise<ImplementationOutcome> {
   if (!isAntigravityCliConfigured()) {
@@ -160,7 +191,6 @@ async function runAntigravityImplementation(ctx: StepContext<DevCycleRunState>, 
   }
   const implementationRow = createDevCycleImplementation({ devCycleId: cycle.id, round: cycle.round, variant: 'gemini', worktreePath, cliSessionId: 'antigravity' });
   try {
-    await disableGitPush(worktreePath);
     const result = await runAntigravityAgent(prompt, worktreePath, { mode: 'accept-edits', onProgress: (message) => ctx.log(`Antigravity: ${message}`) });
     if (!result.isError) {
       const diff = await getWorktreeDiffSinceBase(worktreePath, `origin/${cycle.baseBranch}`);
@@ -391,18 +421,34 @@ function steps(): StepEntry<DevCycleRunState>[] {
       label: 'Apply merged diff & push',
       approval: true,
       timeoutMs: PUSH_TIMEOUT_MS,
+      // Resumable: the merge request's own status says how far a previous
+      // attempt got (seen live: committed, then the push failed), so a retry
+      // never re-applies an already-committed diff.
       async run(ctx) {
         const cycle = cycleOf(ctx);
         const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
-        if (!mergeRequest || mergeRequest.status !== 'ready' || !cycle.worktreePath || !cycle.branchName) throw new Error('No merged diff ready to apply.');
-        const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
-        const commitMessage = `Implement ${cycle.ticketKey}: ${(ticket?.summary ?? cycle.ticketKey).slice(0, 200)}`;
-        await applyCodeChangeToRepo(mergeRequest.diff ?? '', cycle.worktreePath, commitMessage);
-        markCodeChangeApplied(mergeRequest.id);
-        emitEvent({ type: 'code-change-applied', devCycleId: cycle.id, requestId: mergeRequest.id });
-        await pushRepoChanges(cycle.worktreePath);
-        markCodeChangePushed(mergeRequest.id);
-        emitEvent({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: mergeRequest.id });
+        if (!mergeRequest || !['ready', 'applied', 'pushed'].includes(mergeRequest.status) || !cycle.worktreePath || !cycle.branchName) throw new Error('No merged diff ready to apply.');
+        if (mergeRequest.status === 'ready') {
+          const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
+          await applyCodeChangeToRepo(mergeRequest.diff ?? '', cycle.worktreePath, devCycleCommitMessage(cycle.ticketKey, ticket?.summary));
+          markCodeChangeApplied(mergeRequest.id);
+          emitEvent({ type: 'code-change-applied', devCycleId: cycle.id, requestId: mergeRequest.id });
+        } else {
+          ctx.log('Merged diff was already committed by a previous attempt.');
+        }
+        if (mergeRequest.status !== 'pushed') {
+          // An earlier Speako version blocked Antigravity's pushes by writing
+          // a bogus push URL into the shared repo config (see antigravityCli.ts);
+          // a repo that still carries it can't push from any worktree.
+          const pushUrl = await git(['config', '--get', 'remote.origin.pushurl'], cycle.repoPath).catch(() => '');
+          if (pushUrl.trim() === LEGACY_NO_PUSH_URL) {
+            await git(['config', '--unset', 'remote.origin.pushurl'], cycle.repoPath);
+            ctx.log('Removed a leftover push block from an earlier Speako version from the repo config.');
+          }
+          await pushRepoChanges(cycle.worktreePath);
+          markCodeChangePushed(mergeRequest.id);
+          emitEvent({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: mergeRequest.id });
+        }
         // 'done' is what unlocks the PR/Docs tabs — the PR draft itself only
         // auto-starts once the build is green (finalize), but "Draft PR now"
         // stays available as the manual escape hatch.
@@ -443,6 +489,19 @@ function steps(): StepEntry<DevCycleRunState>[] {
               if (build.result === 'SUCCESS') {
                 ctx.log(`Build #${buildNumber} passed.`);
                 return `Build #${buildNumber} passed.`;
+              }
+              if (build.result === 'UNSTABLE') {
+                // Judged against the job's own history, not "zero failures" — see buildVerdict.ts.
+                const jobPath = jobPathFor(jobFullName);
+                const recent = (await getRecentBuilds(jobPath, 7)).filter((b) => b.number !== buildNumber && !b.building).slice(0, 5);
+                const [report, ...recentReports] = await Promise.all([getTestReport(jobPath, buildNumber), ...recent.map((b) => getTestReport(jobPath, b.number))]);
+                const verdict = assessUnstableBuild(report, recentReports.filter((r): r is NonNullable<typeof r> => !!r));
+                if (verdict.preexistingFailures.length) ctx.log(`Pre-existing failures (also failing before this branch): ${verdict.preexistingFailures.join(', ')}`);
+                if (verdict.pass) {
+                  ctx.log(`Build #${buildNumber} unstable — ${verdict.reason}; treating as passed.`);
+                  return `Build #${buildNumber} unstable — ${verdict.reason}.`;
+                }
+                throw new Error(`Build #${buildNumber} UNSTABLE — ${verdict.reason} — ${build.url}`);
               }
               throw new Error(`Build #${buildNumber} ${build.result ?? 'ended without a result'} — ${build.url}`);
             }

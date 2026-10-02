@@ -178,8 +178,16 @@ export async function getTaskInfo(cliSessionId: string): Promise<ClaudeCodeAgent
 }
 
 export async function git(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 });
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 });
+    return stdout;
+  } catch (err: any) {
+    // execFile's timeout kill surfaces as a bare "Command failed: git …" with
+    // empty stderr — indistinguishable from a real git failure (seen live: a
+    // push that completed on the remote but took 33s was reported as failed).
+    if (err?.killed) throw new Error(`git ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s (${args.join(' ')})`);
+    throw err;
+  }
 }
 
 // A real fetch + worktree checkout against a large repo (confirmed live: one
@@ -450,9 +458,17 @@ export async function applyCodeChangeToRepo(diff: string, repoPath: string, comm
   }
 }
 
-/** Separate, explicit push step — never bundled into applyCodeChangeToRepo, per the "no push unless approved" requirement being its own gate distinct from "no commit unless approved." */
+/**
+ * Separate, explicit push step — never bundled into applyCodeChangeToRepo,
+ * per the "no push unless approved" requirement being its own gate distinct
+ * from "no commit unless approved." Pushes the checked-out branch to the
+ * same name on origin explicitly: a worktree created with
+ * `worktree add -b <branch> origin/<trunk>` has trunk as its upstream, and
+ * a bare `git push` (push.default simple) refuses that mismatch.
+ */
 export async function pushRepoChanges(repoPath: string): Promise<void> {
-  await git(['push'], repoPath);
+  // Network-bound like a fetch, not a local op: a real push of this repo took 33s, past the default 30s.
+  await git(['push', '-u', 'origin', 'HEAD'], repoPath, WORKTREE_CHECKOUT_TIMEOUT_MS);
 }
 
 /**
