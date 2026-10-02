@@ -11,7 +11,7 @@ import {
   JenkinsBuildRow,
 } from '../storage/jenkinsBuildRepository';
 import { getOpenJenkinsBuildRequests, markJenkinsBuildRequestStarted, setJenkinsBuildRequestStatus } from '../storage/jenkinsBuildRequestRepository';
-import { isJenkinsConfigured, findBranchJob, getLastBuild, getConsoleTail, getTestReport, getPipelineStages, getRecentBuilds, JenkinsBuildStatus } from '../integrations/jenkinsClient';
+import { isJenkinsConfigured, findBranchJob, getLastBuild, getConsoleTail, getTestReport, getPipelineStages, getRecentBuilds, findBuildNumberByQueueId, JenkinsBuildStatus } from '../integrations/jenkinsClient';
 import { getQueueState, getBuildByNumber } from '../integrations/jenkinsMcp';
 import { extractSignals, classifyBuildFailure } from './buildFailureClassification';
 import { extractTicketKeyFromBranch } from './branchNaming';
@@ -94,12 +94,20 @@ async function pollBuildRequests(broadcast: Broadcast): Promise<{ checked: numbe
       if (request.status === 'queued' || buildNumber == null) {
         const queue = await getQueueState(request.queueId);
         if (queue.state === 'waiting') continue;
-        if (queue.state === 'cancelled' || queue.state === 'gone') {
-          setJenkinsBuildRequestStatus(request.id, queue.state === 'cancelled' ? 'cancelled' : 'lost');
-          broadcast({ type: 'jenkins-build-request-updated', devCycleId: request.devCycleId, requestId: request.id, status: queue.state === 'cancelled' ? 'cancelled' : 'lost' });
-          continue;
+        if (queue.state === 'started') {
+          buildNumber = queue.buildNumber;
+        } else {
+          // The queue item is gone — expired after the build started (the
+          // common case when the first poll comes late), or cancelled. The
+          // build itself still remembers its queue id, so look there first.
+          const found = queue.state === 'gone' ? await findBuildNumberByQueueId(request.jobPath, request.queueId) : null;
+          if (found == null) {
+            setJenkinsBuildRequestStatus(request.id, queue.state === 'cancelled' ? 'cancelled' : 'lost');
+            broadcast({ type: 'jenkins-build-request-updated', devCycleId: request.devCycleId, requestId: request.id, status: queue.state === 'cancelled' ? 'cancelled' : 'lost' });
+            continue;
+          }
+          buildNumber = found;
         }
-        buildNumber = queue.buildNumber;
         markJenkinsBuildRequestStarted(request.id, buildNumber);
       }
 

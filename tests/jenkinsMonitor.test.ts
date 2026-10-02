@@ -253,6 +253,7 @@ test('pollJenkinsBuilds: a run Jenkins dropped from its queue is marked lost, no
   const scopeSpy = onlyCycle(cycle);
   const requestsSpy = onlyRequests(request.id);
   const queueSpy = mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'gone' }));
+  const lookupSpy = mock.method(jenkinsClientModule, 'findBuildNumberByQueueId', async () => null);
   const events: any[] = [];
   try {
     await pollJenkinsBuilds((e) => events.push(e));
@@ -262,5 +263,34 @@ test('pollJenkinsBuilds: a run Jenkins dropped from its queue is marked lost, no
     scopeSpy.mock.restore();
     requestsSpy.mock.restore();
     queueSpy.mock.restore();
+    lookupSpy.mock.restore();
+  }
+});
+
+test('pollJenkinsBuilds: a queue item that expired after its build started is recovered through the build\'s queueId, not marked lost', async () => {
+  configureJenkins();
+  const { cycle, request } = sharedJobRequest('PROJ-23', 903);
+  const scopeSpy = onlyCycle(cycle);
+  const requestsSpy = onlyRequests(request.id);
+  const queueSpy = mock.method(jenkinsMcpModule, 'getQueueState', async () => ({ state: 'gone' }));
+  const lookupSpy = mock.method(jenkinsClientModule, 'findBuildNumberByQueueId', async (jobPath: string, queueId: number) => {
+    assert.equal(queueId, 903);
+    return 168;
+  });
+  const buildSpy = mock.method(jenkinsMcpModule, 'getBuildByNumber', async (job: string, n: number) => ({ jobPath: request.jobPath, number: n, result: null, building: true, timestamp: 1, durationMs: 0, url: `https://jenkins.example.com/job/x/${n}/`, displayName: `#${n}` }));
+  const events: any[] = [];
+  try {
+    await pollJenkinsBuilds((e) => events.push(e));
+    const after = getJenkinsBuildRequest(request.id)!;
+    assert.equal(after.status, 'started');
+    assert.equal(after.buildNumber, 168);
+    assert.ok(getJenkinsBuildByJobAndNumber(request.jobPath, 168), 'the running build was recorded');
+    assert.ok(!events.some((e) => e.type === 'jenkins-build-request-updated' && e.status === 'lost'));
+  } finally {
+    scopeSpy.mock.restore();
+    requestsSpy.mock.restore();
+    queueSpy.mock.restore();
+    lookupSpy.mock.restore();
+    buildSpy.mock.restore();
   }
 });

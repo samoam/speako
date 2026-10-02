@@ -192,6 +192,20 @@ export async function getTestReport(jobPath: string, buildNumber: number): Promi
   return { total: raw.totalCount ?? 0, failCount: raw.failCount ?? 0, skipCount: raw.skipCount ?? 0, failures };
 }
 
+/**
+ * The build a queue item became, once the item itself has expired from
+ * Jenkins' queue (it does a few minutes after the build starts — seen live:
+ * a build followed only from its queue item was marked lost although it was
+ * running). Every build's JSON carries the `queueId` it came from (confirmed
+ * live on hudson.maven.MavenModuleSetBuild #167: `"queueId":26315`).
+ */
+export async function findBuildNumberByQueueId(jobPath: string, queueId: number): Promise<number | null> {
+  requireConfigured();
+  const raw = await apiGetOrNull(`${jobPath}/api/json?tree=builds[number,queueId]{0,30}`);
+  const match = (raw?.builds ?? []).find((b: any) => Number(b.queueId) === queueId);
+  return match ? Number(match.number) : null;
+}
+
 export interface JenkinsStage {
   name: string;
   status: string;

@@ -155,7 +155,7 @@ import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwai
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
-import { getJenkinsBuildRequestsForCycle } from '../storage/jenkinsBuildRequestRepository';
+import { getJenkinsBuildRequestsForCycle, getOpenJenkinsBuildRequests } from '../storage/jenkinsBuildRequestRepository';
 import { isAntigravityCliConfigured } from '../integrations/antigravityCli';
 import { mergeDevPlans, StructuredDevPlan } from '../dev/devPlan';
 import { refineMergedDiff } from '../dev/mergeImplementations';
@@ -2363,7 +2363,11 @@ export class InterfaceServer {
     this.emailSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runEmailSync(); }, config.emailSyncPollMinutes * 60_000);
     this.calendarImportTimer = setInterval(() => this.runCalendarImport(), config.calendarImportPollMinutes * 60_000);
     this.orchestratorSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runOrchestratorSync(); }, config.orchestratorPollMinutes * 60_000);
-    this.jenkinsSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runJenkinsSync(); }, config.jenkinsPollMinutes * 60_000);
+    // Business hours only for the general watch, but a build Speako itself
+    // queued (a dev cycle's build_and_test) is followed whenever it's open —
+    // seen live: a cycle run at night left its build unrecorded in the Tests
+    // tab, and with it no jenkins_build task to "Propose fix" from.
+    this.jenkinsSyncTimer = setInterval(() => { if (isWithinBusinessHours() || getOpenJenkinsBuildRequests().length) this.runJenkinsSync(); }, config.jenkinsPollMinutes * 60_000);
     this.teamsSyncTimer = setInterval(() => { if (isWithinBusinessHours()) this.runTeamsSync(); }, config.teamsSyncPollMinutes * 60_000);
   }
 

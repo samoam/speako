@@ -139,6 +139,8 @@ test('build_and_test: triggers the configured job with the branch parameter, rec
   assert.equal(requests.length, 1);
   assert.equal(requests[0].queueId, 26315);
   assert.equal(requests[0].jobFullName, 'Integration-Test');
+  assert.equal(requests[0].status, 'started', 'the step records the build number itself — the monitor must not depend on the (expiring) queue item');
+  assert.equal(requests[0].buildNumber, 167);
   assert.ok(ctx.logs.some((l) => /Build #167 started/.test(l)));
 });
 

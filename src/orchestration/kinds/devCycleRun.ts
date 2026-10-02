@@ -3,8 +3,9 @@ import { getJiraIssueDetail } from '../../integrations/jiraMcp';
 import { startClaudeCodeTask, getBackgroundTaskLogs, runClaudeCodeReview, applyCodeChangeToRepo, pushRepoChanges, git } from '../../integrations/claudeCodeCli';
 import { jobPathFor, getTestReport, getRecentBuilds } from '../../integrations/jenkinsClient';
 import { assessUnstableBuild } from '../../dev/buildVerdict';
+import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
 import { triggerJenkinsBuild, getQueueState, getBuildByNumber } from '../../integrations/jenkinsMcp';
-import { createJenkinsBuildRequest } from '../../storage/jenkinsBuildRequestRepository';
+import { createJenkinsBuildRequest, markJenkinsBuildRequestStarted } from '../../storage/jenkinsBuildRequestRepository';
 import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, getWorktreeDiffSinceBase, LEGACY_NO_PUSH_URL } from '../../integrations/antigravityCli';
 import { createTicketBranchWorktree, addWorktreeForExistingBranch } from '../../integrations/gitBranches';
 import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
@@ -470,7 +471,7 @@ function steps(): StepEntry<DevCycleRunState>[] {
         // Recorded so jenkinsMonitor.ts follows the same build into the Tests
         // tab (build rows + failure classification); this step only waits for
         // the verdict.
-        createJenkinsBuildRequest({ devCycleId: cycle.id, jobPath: jobPathFor(jobFullName), jobFullName, branchName: cycle.branchName, queueId });
+        const buildRequest = createJenkinsBuildRequest({ devCycleId: cycle.id, jobPath: jobPathFor(jobFullName), jobFullName, branchName: cycle.branchName, queueId });
         ctx.log(`Queued ${jobFullName} for ${cycle.branchName} (queue item ${queueId}).`);
         let buildNumber: number | null = null;
         while (!ctx.signal.aborted) {
@@ -479,6 +480,9 @@ function steps(): StepEntry<DevCycleRunState>[] {
             if (queue.state === 'cancelled' || queue.state === 'gone') throw new Error(`Jenkins ${queue.state === 'cancelled' ? 'cancelled the queued build' : 'lost the queued build'} (queue item ${queueId}).`);
             if (queue.state === 'started') {
               buildNumber = queue.buildNumber;
+              // The monitor follows the request from here by build number — the
+              // queue item it would otherwise rely on expires minutes after this.
+              markJenkinsBuildRequestStarted(buildRequest.id, buildNumber);
               ctx.log(`Build #${buildNumber} started.`);
             } else {
               ctx.detail(queue.why ? `Waiting in the Jenkins queue: ${queue.why}` : 'Waiting in the Jenkins queue…');
@@ -486,6 +490,10 @@ function steps(): StepEntry<DevCycleRunState>[] {
           } else {
             const build = await getBuildByNumber(jobFullName, buildNumber);
             if (build && !build.building) {
+              // Record the finished build right away (rows in jenkins_builds,
+              // failure classification, the jenkins_build task "Propose fix"
+              // hangs off) instead of waiting for the monitor's next tick.
+              await pollJenkinsBuilds(emitEvent).catch((err: any) => ctx.log(`Could not record the build in the Tests tab yet: ${err.message}`));
               if (build.result === 'SUCCESS') {
                 ctx.log(`Build #${buildNumber} passed.`);
                 return `Build #${buildNumber} passed.`;
