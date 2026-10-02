@@ -49,9 +49,10 @@ async function callJenkinsTool(name: string, args: Record<string, unknown>): Pro
 }
 
 /**
- * NOT yet confirmed live (the shared test job didn't exist when this was
- * written): Jenkins' own queue API identifies an item by numeric `id` and
- * by a `queue/item/<id>/` URL, so either form is accepted here.
+ * Jenkins' queue API identifies an item by numeric `id` and by a
+ * `queue/item/<id>/` URL, so either form is accepted. Confirmed live
+ * (2026-10-01, Integration-OfficerCC_Oauth2SMTP-POSTGRES): triggerBuild's
+ * result yielded queue item 26315 here, which became build #167.
  */
 function extractQueueId(result: any): number | null {
   if (result == null) return null;
@@ -72,11 +73,11 @@ export async function triggerJenkinsBuild(jobFullName: string, parameters: Recor
 export type QueueState = { state: 'waiting'; why: string | null } | { state: 'started'; buildNumber: number } | { state: 'cancelled' } | { state: 'gone' };
 
 /**
- * Follows a queue item to the build it became. Same not-yet-confirmed-live
- * caveat as extractQueueId: the shape follows Jenkins' queue item JSON
- * (`executable.number` once started, `cancelled`, `why` while waiting).
- * `gone` = Jenkins no longer knows the item (queue items expire a few minutes
- * after leaving the queue), which the caller treats as a lost trigger.
+ * Follows a queue item to the build it became. Confirmed live (2026-10-01)
+ * that getQueueItem answers with Jenkins' queue item JSON: `executable.number`
+ * once started (item 26315 → 167), `cancelled: false`, `why: null`. `gone` =
+ * Jenkins no longer knows the item (queue items expire a few minutes after
+ * leaving the queue), which the caller treats as a lost trigger.
  */
 export async function getQueueState(queueId: number): Promise<QueueState> {
   const item = await callJenkinsTool('getQueueItem', { id: queueId });

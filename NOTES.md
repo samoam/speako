@@ -2041,3 +2041,29 @@ the value if disconnects are more/less frequent than expected.
   `getJobScm` returns nothing), recent tickets (ETICK-10173/10176/10230) have
   none, and `findJobsWithScmUrl(officercc.git, branch)` returns
   integration/template jobs rather than feature-branch builds.
+
+## The shared build-and-test job (`Integration-OfficerCC_Oauth2SMTP-POSTGRES`)
+
+- **Which job:** `Integration-OfficerCC_Oauth2SMTP-POSTGRES` (Maven job, label
+  `automation2`, goals `-P AUTOMATION2 clean verify`, ~3,200 tests, ~20 min).
+  Its Git branch was hard-coded (`*/ETICK-9929-…` plus a matching
+  `LocalBranch` extension), so on 2026-10-01 Speako added a String parameter
+  `BRANCH` (default `master`) and set the branch spec to `*/${BRANCH}` and
+  the local branch to `${BRANCH}` by POSTing the edited `config.xml`; the
+  original is in that session's scratchpad backup. Settings:
+  `jenkinsTestJob` = that name, `jenkinsTestBranchParam` = `BRANCH`.
+- **POSTing `config.xml` needs `Content-Type: application/xml; charset=utf-8`**
+  — confirmed live that the same body with plain `application/xml` came back
+  HTTP 500 (the description contained a non-ASCII character); with the
+  charset it saved (200).
+- **Queue → build, confirmed live:** `triggerBuild` over MCP with
+  `{BRANCH: 'master'}` produced queue item 26315; `getQueueItem(26315)` showed
+  `executable.number: 167`, `cancelled: false`, `why: null`, and build #167
+  ran with `BRANCH=master` in its parameters (checked out `origin/master`).
+  jenkinsMcp.ts's extractQueueId/getQueueState comments were updated from
+  "not yet confirmed" to this.
+- **Where it runs in the pipeline:** the dev-cycle run's `build_and_test`
+  step (src/orchestration/kinds/devCycleRun.ts) after `apply_and_push`; a
+  red build fails the run, the Tests tab shows jenkinsMonitor's
+  classification, and /retry re-runs only the build. The step is skipped
+  (not failed) when `jenkinsTestJob` is unset.

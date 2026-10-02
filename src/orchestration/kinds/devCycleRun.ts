@@ -1,5 +1,9 @@
+import { config } from '../../config';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
-import { startClaudeCodeTask, getBackgroundTaskLogs, runClaudeCodeReview } from '../../integrations/claudeCodeCli';
+import { startClaudeCodeTask, getBackgroundTaskLogs, runClaudeCodeReview, applyCodeChangeToRepo, pushRepoChanges } from '../../integrations/claudeCodeCli';
+import { jobPathFor } from '../../integrations/jenkinsClient';
+import { triggerJenkinsBuild, getQueueState, getBuildByNumber } from '../../integrations/jenkinsMcp';
+import { createJenkinsBuildRequest } from '../../storage/jenkinsBuildRequestRepository';
 import { runSecondOpinionReview, runAntigravityAgent, isAntigravityCliConfigured, disableGitPush, getWorktreeDiffSinceBase } from '../../integrations/antigravityCli';
 import { createTicketBranchWorktree, addWorktreeForExistingBranch } from '../../integrations/gitBranches';
 import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
@@ -9,7 +13,14 @@ import { mergeImplementations } from '../../dev/mergeImplementations';
 import { buildBranchName } from '../../dev/branchNaming';
 import { startDraft } from '../../drafts/draftService';
 import { lifecycleTransitionSubjectId } from '../../drafts/kinds/jiraTransitionDraft';
-import { createCodeChangeRequest, getCodeChangeRequest, markCodeChangeReady } from '../../storage/codeChangeRequestRepository';
+import {
+  createCodeChangeRequest,
+  getCodeChangeRequest,
+  getLatestCodeChangeRequestForDevCycleOrigin,
+  markCodeChangeReady,
+  markCodeChangeApplied,
+  markCodeChangePushed,
+} from '../../storage/codeChangeRequestRepository';
 import {
   createDevCycleImplementation,
   getDevCycleImplementationsForCycle,
@@ -34,6 +45,10 @@ const SUBJECT_KIND = 'dev_cycle';
 
 const ANALYZE_TIMEOUT_MS = 5 * 60 * 1000;
 const BRANCH_TIMEOUT_MS = 10 * 60 * 1000;
+const PUSH_TIMEOUT_MS = 10 * 60 * 1000;
+/** The integration job runs the whole suite (~3,200 tests, ~20 min seen live) and may wait for an executor first. */
+const BUILD_TIMEOUT_MS = 90 * 60 * 1000;
+const BUILD_POLL_MS = 20_000;
 
 /**
  * Everything a dev cycle produces (context, plans, branch, worktrees,
@@ -51,7 +66,7 @@ export interface DevCycleRunState {
 
 type ImplementationOutcome = { status: 'ready' | 'failed'; diff: string | null; error: string | null };
 
-const STEP_KEYS = ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review'] as const;
+const STEP_KEYS = ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply_and_push', 'build_and_test'] as const;
 export type DevCycleStepKey = (typeof STEP_KEYS)[number];
 
 function cycleOf(ctx: StepContext<DevCycleRunState>): DevCycle {
@@ -182,13 +197,27 @@ function approvedPlanOf(cycle: DevCycle): StructuredDevPlan {
   return plan;
 }
 
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+
 /**
- * The Jira-implement pipeline as a run: analyze and plan run unattended,
- * the run then parks for the human's plan approval (the only approval —
- * branch creation, both implementations and the AI merge are mechanical
- * and run straight through), and ends with a merged diff ready for the
- * human's diff review, which is its own route (merge/approve) and the
- * start of the pr_open draft.
+ * The Jira-implement pipeline as a run: analyze and plan run unattended;
+ * the run parks for the human's plan approval; branch creation, both
+ * implementations and the AI merge run straight through to a merged diff;
+ * the run parks again for the human's diff approval; then the diff is
+ * applied + pushed and the branch is built and tested on the shared Jenkins
+ * job, and only a green build ends the run (finalize starts the pr_open
+ * draft). A red build fails the run at build_and_test — the Tests tab shows
+ * the classified failure, "Propose fix" is the jenkins_fix draft, and
+ * /retry re-runs just the build.
  */
 function steps(): StepEntry<DevCycleRunState>[] {
   return [
@@ -355,10 +384,87 @@ function steps(): StepEntry<DevCycleRunState>[] {
         return 'Merged diff ready for review.';
       },
     },
+    {
+      key: 'apply_and_push',
+      label: 'Apply merged diff & push',
+      approval: true,
+      timeoutMs: PUSH_TIMEOUT_MS,
+      async run(ctx) {
+        const cycle = cycleOf(ctx);
+        const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
+        if (!mergeRequest || mergeRequest.status !== 'ready' || !cycle.worktreePath || !cycle.branchName) throw new Error('No merged diff ready to apply.');
+        const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
+        const commitMessage = `Implement ${cycle.ticketKey}: ${(ticket?.summary ?? cycle.ticketKey).slice(0, 200)}`;
+        await applyCodeChangeToRepo(mergeRequest.diff ?? '', cycle.worktreePath, commitMessage);
+        markCodeChangeApplied(mergeRequest.id);
+        emitEvent({ type: 'code-change-applied', devCycleId: cycle.id, requestId: mergeRequest.id });
+        await pushRepoChanges(cycle.worktreePath);
+        markCodeChangePushed(mergeRequest.id);
+        emitEvent({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: mergeRequest.id });
+        // 'done' is what unlocks the PR/Docs tabs — the PR draft itself only
+        // auto-starts once the build is green (finalize), but "Draft PR now"
+        // stays available as the manual escape hatch.
+        setDevCycleCurrentStep(cycle.id, 'done');
+        ctx.log(`Merged diff applied and pushed to ${cycle.branchName}.`);
+        return `Pushed to ${cycle.branchName}.`;
+      },
+    },
+    {
+      key: 'build_and_test',
+      label: 'Build & test on Jenkins',
+      timeoutMs: BUILD_TIMEOUT_MS,
+      async run(ctx) {
+        const cycle = cycleOf(ctx);
+        if (!config.jenkinsTestJob) return 'Skipped — no build & test job configured (Settings > Jenkins).';
+        if (!cycle.branchName) throw new Error('This cycle has no branch to build.');
+        const jobFullName = config.jenkinsTestJob;
+        const queueId = await triggerJenkinsBuild(jobFullName, { [config.jenkinsTestBranchParam]: cycle.branchName });
+        // Recorded so jenkinsMonitor.ts follows the same build into the Tests
+        // tab (build rows + failure classification); this step only waits for
+        // the verdict.
+        createJenkinsBuildRequest({ devCycleId: cycle.id, jobPath: jobPathFor(jobFullName), jobFullName, branchName: cycle.branchName, queueId });
+        ctx.log(`Queued ${jobFullName} for ${cycle.branchName} (queue item ${queueId}).`);
+        let buildNumber: number | null = null;
+        while (!ctx.signal.aborted) {
+          if (buildNumber == null) {
+            const queue = await getQueueState(queueId);
+            if (queue.state === 'cancelled' || queue.state === 'gone') throw new Error(`Jenkins ${queue.state === 'cancelled' ? 'cancelled the queued build' : 'lost the queued build'} (queue item ${queueId}).`);
+            if (queue.state === 'started') {
+              buildNumber = queue.buildNumber;
+              ctx.log(`Build #${buildNumber} started.`);
+            } else {
+              ctx.detail(queue.why ? `Waiting in the Jenkins queue: ${queue.why}` : 'Waiting in the Jenkins queue…');
+            }
+          } else {
+            const build = await getBuildByNumber(jobFullName, buildNumber);
+            if (build && !build.building) {
+              if (build.result === 'SUCCESS') {
+                ctx.log(`Build #${buildNumber} passed.`);
+                return `Build #${buildNumber} passed.`;
+              }
+              throw new Error(`Build #${buildNumber} ${build.result ?? 'ended without a result'} — ${build.url}`);
+            }
+            ctx.detail(`Build #${buildNumber} running…`);
+          }
+          await sleep(BUILD_POLL_MS, ctx.signal);
+        }
+        throw new Error('Cancelled while waiting for the build.');
+      },
+    },
   ];
 }
 
-export const devCycleRunDefinition: RunDefinition<DevCycleRunState> = { kind: DEV_CYCLE_RUN_KIND, steps };
+export const devCycleRunDefinition: RunDefinition<DevCycleRunState> = {
+  kind: DEV_CYCLE_RUN_KIND,
+  steps,
+  async finalize(run, outcome) {
+    if (outcome !== 'done') return;
+    // Only a green build reaches here — the PR is drafted on a tested branch.
+    await startDraft({ kind: 'pr_open', subjectId: run.state.cycleId }).catch((err: any) => {
+      console.error(`[dev-cycle] failed to auto-start PR open for cycle ${run.state.cycleId}:`, err.message);
+    });
+  },
+};
 
 registerRunKind(devCycleRunDefinition);
 
@@ -371,19 +477,21 @@ export function devCycleStepsThrough(through: DevCycleStepKey): DevCycleStepKey[
   return STEP_KEYS.slice(0, STEP_KEYS.indexOf(through) + 1);
 }
 
+/** The two human gates of the run; a resume that already includes a gate's step implies its approval, since that step only ever ran after a human approved. */
+const GATE_STEPS: DevCycleStepKey[] = ['branch_and_worktrees', 'apply_and_push'];
+
 /**
  * Starts a run for the cycle, cancelling one still in flight first — a
  * manual rerun/redo supersedes whatever was happening. `resume` lists the
- * steps whose results are already on the cycle; the plan approval is
- * implied when branch_and_worktrees is among them, since the branch only
- * ever gets created after a human approved a plan. Resuming through 'plan'
- * still parks for approval.
+ * steps whose results are already on the cycle (see GATE_STEPS for the
+ * implied approvals). Resuming through 'plan' still parks for the plan
+ * approval; through 'merge_and_review' still parks for the diff approval.
  */
 export async function startDevCycleRun(cycleId: number, resume?: { completedThrough: DevCycleStepKey }): Promise<Run<DevCycleRunState>> {
   const previous = getLatestDevCycleRun(cycleId);
   if (previous && !TERMINAL_RUN_STATUSES.includes(previous.status)) await cancelRun(previous.id);
   const completed = resume ? devCycleStepsThrough(resume.completedThrough) : [];
-  const resumeSpec: RunResume | undefined = resume ? { completed, approved: completed.includes('branch_and_worktrees') ? ['branch_and_worktrees'] : [] } : undefined;
+  const resumeSpec: RunResume | undefined = resume ? { completed, approved: GATE_STEPS.filter((g) => completed.includes(g)) } : undefined;
   return startRun<DevCycleRunState>({ kind: DEV_CYCLE_RUN_KIND, subjectKind: SUBJECT_KIND, subjectId: String(cycleId), state: { cycleId }, resume: resumeSpec });
 }
 
@@ -393,13 +501,23 @@ export function retryDevCycleRun(cycleId: number): Run | null {
   return latest ? retryRun(latest.id) : null;
 }
 
-/** True while the cycle's run is parked on the plan approval. */
-export function isDevCycleAwaitingPlanApproval(cycleId: number): boolean {
+/** The gate the cycle's run is parked on, if any — what the plan/merge approve+refine routes check. */
+export function devCycleAwaitingGate(cycleId: number): DevCycleStepKey | null {
   const run = getLatestDevCycleRun(cycleId);
-  return !!run && run.status === 'waiting_approval' && run.currentStep === 'branch_and_worktrees';
+  if (!run || run.status !== 'waiting_approval') return null;
+  return GATE_STEPS.find((g) => g === run.currentStep) ?? null;
 }
 
-export function approveDevCyclePlan(cycleId: number): boolean {
+export function isDevCycleAwaitingPlanApproval(cycleId: number): boolean {
+  return devCycleAwaitingGate(cycleId) === 'branch_and_worktrees';
+}
+
+export function isDevCycleAwaitingMergeApproval(cycleId: number): boolean {
+  return devCycleAwaitingGate(cycleId) === 'apply_and_push';
+}
+
+/** Resumes the run from whichever gate it's parked on (the routes check which one first). */
+export function approveDevCycleGate(cycleId: number): boolean {
   const run = getLatestDevCycleRun(cycleId);
   return !!run && approveRun(run.id);
 }

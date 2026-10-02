@@ -151,7 +151,7 @@ import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequ
 import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, dev_cycle) with src/orchestration/engine.ts
 import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
 import { startPrReviewRun, prReviewRequestView } from '../orchestration/kinds/prReviewRun';
-import { startDevCycleRun, retryDevCycleRun, approveDevCyclePlan, isDevCycleAwaitingPlanApproval, logDevCycle, devCycleView } from '../orchestration/kinds/devCycleRun';
+import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwaitingPlanApproval, isDevCycleAwaitingMergeApproval, logDevCycle, devCycleView } from '../orchestration/kinds/devCycleRun';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
@@ -2991,7 +2991,7 @@ export class InterfaceServer {
       setDevCyclePlans(cycle.id, { merged: finalPlan });
       // Approving resumes the parked run: branch + worktrees, both
       // implementations and the AI merge then run unattended.
-      res.json({ started: approveDevCyclePlan(cycle.id) });
+      res.json({ started: approveDevCycleGate(cycle.id) });
     });
 
     // Retries from whichever step failed (engine.ts's retryRun keeps the
@@ -3058,6 +3058,15 @@ export class InterfaceServer {
         }
         res.json({ started: true });
         await startDevCycleRun(cycle.id, { completedThrough: 'implement' });
+        return;
+      }
+      if (step === 'build_and_test') {
+        if (cycle.currentStep !== 'done') {
+          res.status(400).json({ error: 'The merged diff has not been pushed yet — nothing to build.' });
+          return;
+        }
+        res.json({ started: true });
+        await startDevCycleRun(cycle.id, { completedThrough: 'apply_and_push' });
         return;
       }
       res.status(400).json({ error: `Cannot manually rerun step "${step}".` });
@@ -3134,8 +3143,8 @@ export class InterfaceServer {
         res.status(404).json({ error: 'Unknown dev cycle.' });
         return;
       }
-      if (cycle.currentStep !== 'merge_and_review') {
-        res.status(409).json({ error: `This cycle is on step "${cycle.currentStep}" — cannot apply the merged diff now.` });
+      if (!isDevCycleAwaitingMergeApproval(cycle.id)) {
+        res.status(409).json({ error: 'This cycle is not waiting on a merged-diff approval.' });
         return;
       }
       const mergeRequest = getLatestCodeChangeRequestForDevCycleOrigin(cycle.id, 'dev_cycle_merge');
@@ -3143,26 +3152,9 @@ export class InterfaceServer {
         res.status(400).json({ error: 'No merged diff ready to apply.' });
         return;
       }
-      try {
-        const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
-        const commitMessage = `Implement ${cycle.ticketKey}: ${(ticket?.summary ?? cycle.ticketKey).slice(0, 200)}`;
-        await applyCodeChangeToRepo(mergeRequest.diff ?? '', cycle.worktreePath, commitMessage);
-        markCodeChangeApplied(mergeRequest.id);
-        this.broadcast({ type: 'code-change-applied', devCycleId: cycle.id, requestId: mergeRequest.id });
-        await pushRepoChanges(cycle.worktreePath);
-        markCodeChangePushed(mergeRequest.id);
-        this.broadcast({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: mergeRequest.id });
-        setDevCycleCurrentStep(cycle.id, 'done');
-        logDevCycle(cycle.id, 'Merged diff applied and pushed — opening the pull request…');
-        this.broadcast({ type: 'dev-cycle-updated', devCycleId: cycle.id });
-        res.json({ applied: true });
-        startDraft({ kind: 'pr_open', subjectId: cycle.id }).catch((err: any) => {
-          console.error(`[jira-implement] failed to auto-start PR open for cycle ${cycle.id}:`, err.message);
-        });
-      } catch (err: any) {
-        console.error(`[jira-implement] merge approve failed for cycle ${cycle.id}:`, err.message);
-        res.status(500).json({ error: err.message });
-      }
+      // Approving resumes the parked run: apply + push, then the Jenkins
+      // build; the PR draft starts once the build is green.
+      res.json({ applied: approveDevCycleGate(cycle.id) });
     });
 
     app.post('/api/jira-implement/:id/discard', async (req, res) => {

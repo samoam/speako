@@ -6362,7 +6362,7 @@
     // (ticket changed)" — a bigger, explicit action with its own confirm
     // dialog for when the ticket itself changed after an already-approved
     // plan. Branch & worktrees has no meaningful "redo" once created.
-    const JIRA_IMPLEMENT_RERUNNABLE_STEPS = new Set(['plan', 'implement', 'merge_and_review']);
+    const JIRA_IMPLEMENT_RERUNNABLE_STEPS = new Set(['plan', 'implement', 'merge_and_review', 'build_and_test']);
 
     // A 'running' step is still rerunnable (not just 'done'/'failed'): the
     // engine fails interrupted runs on restart, but a step whose agent hung
