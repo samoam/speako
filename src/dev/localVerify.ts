@@ -102,7 +102,10 @@ type CommandOutcome = { code: number | null; output: string };
 
 function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal, onLine: (line: string) => void): Promise<CommandOutcome> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env, shell: false });
+    // Maven's Windows launcher is mvn.cmd, and Node ≥ 18.20/20.12/22 refuses
+    // to spawn a .cmd/.bat without a shell (EINVAL, the CVE-2024-27980 fix —
+    // seen live). The arguments here carry no shell metacharacters.
+    const child = spawn(cmd, args, { cwd, env, shell: /\.(cmd|bat)$/i.test(cmd) });
     let output = '';
     let partial = '';
     const onData = (chunk: Buffer) => {
@@ -169,7 +172,9 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
   };
 
   log(`Compiling ${changed.modules.join(', ')} (and upstream modules) with JDK 8 at ${jdk8}…`);
-  const compileArgs = ['-q', '-pl', changed.modules.join(','), '-am', 'test-compile'];
+  // Not -q: a cold compile of this reactor took 13 min live, and Maven's
+  // "Building <module>" lines are the only progress the run log can show.
+  const compileArgs = ['-pl', changed.modules.join(','), '-am', 'test-compile'];
   let compile = await run(mvn, ['-o', ...compileArgs], worktreePath, env, signal, onLine);
   output += compile.output;
   if (compile.code !== 0 && OFFLINE_RESOLUTION_RE.test(compile.output)) {
