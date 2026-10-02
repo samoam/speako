@@ -28,7 +28,12 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
         break;
       }
     }
-    if (idx === -1) return '';
+    const noise = (l: string) => /^[─━═│┃╌╍┄┅\s]*$/u.test(l) || /^[✻✽✶✳✢·*]\s/u.test(l) || /Tip:|Esc to cancel|^❯ |^▐|^▝|Sonnet 5\.5|Get to finished/.test(l);
+    if (idx === -1) {
+      // An unrecognized dialog — still better to show the terminal's last lines than nothing.
+      const tail = lines.filter((l) => !noise(l)).slice(-10).map((l) => l.replace(/[─━═╌]{3,}/g, '').trim()).filter(Boolean);
+      return tail.length ? `(unrecognized dialog; terminal tail) ${tail.join(' | ')}`.slice(0, 600) : '';
+    }
     // The dialog's "Yes, and don't ask again for: <tool pattern>" option names
     // the tool and command precisely (seen live: "git fetch *"); fall back to
     // the rows around the "requires approval" line (tool name, command box),
@@ -42,6 +47,31 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
       .map((l) => l.replace(/^[│┃]\s*/, '').replace(/[─━═╌]{3,}/g, '').trim())
       .filter(Boolean);
     return `${dontAsk ? `[${dontAsk.trim()}] ` : ''}${context.join(' | ')}`.slice(0, 600);
+  } catch {
+    return '';
+  }
+}
+
+/** The agent's final message, from its terminal: the text after the last "●" marker (how the CLI renders an assistant turn), trimmed of spinners and rules. */
+async function describeAgentConclusion(cliSessionId: string): Promise<string> {
+  try {
+    const lines = (await getBackgroundTaskLogs(cliSessionId)).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    let start = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (/^● /.test(lines[i]) && !/^● (Running|Searching|Reading|Searched|Ran)\b/.test(lines[i])) {
+        start = i;
+        break;
+      }
+    }
+    if (start === -1) return '';
+    const seen = new Set<string>();
+    const text = lines
+      .slice(start)
+      .filter((l) => !/^[─━═│┃╌╍┄┅\s]*$/u.test(l) && !/^[✻✽✶✳✢·*]\s/u.test(l) && !/Tip:|^❯ |^▐|^▝|Sonnet 5\.5|Get to finished|Worked for|done \d/.test(l))
+      .filter((l) => (seen.has(l) ? false : (seen.add(l), true)))
+      .map((l) => l.replace(/^● /, ''))
+      .join(' ');
+    return text.slice(0, 700);
   } catch {
     return '';
   }
@@ -97,7 +127,13 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
       log(`Still working… (${Math.round(((attempt + 1) * POLL_INTERVAL_MS) / 60_000)}m elapsed)`);
     }
 
-    if (info.state === 'blocked') {
+    // 'blocked' covers two very different things (confirmed live): an agent
+    // parked on a permission prompt (waitingFor: "permission prompt"), and
+    // an agent that simply ended its turn and is waiting for the user's next
+    // message (waitingFor empty) — i.e. finished, possibly having concluded
+    // it should not change anything. Only the former is a dead end.
+    const finished = info.state === 'done' || (info.state === 'blocked' && !info.waitingFor);
+    if (info.state === 'blocked' && !finished) {
       // Headless, so nobody will ever answer — seen live: an agent parked on
       // a "This command requires approval" prompt for hours, its half-done
       // work read as "finished". Stop it and fail with what it wanted.
@@ -112,11 +148,13 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
       broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
       return;
     }
-    if (info.state === 'done') {
+    if (finished) {
       try {
         const diff = await getWorktreeDiff(info.cwd);
         if (!diff.trim()) {
-          const error = `Claude Code agent finished with no file changes — check \`claude logs ${request.cliSessionId}\` for what it concluded.`;
+          // Its last words are the reason (seen live: "send me the surefire output for those three tests") — read before it's stopped.
+          const conclusion = await describeAgentConclusion(request.cliSessionId);
+          const error = `Claude Code agent finished with no file changes${conclusion ? ` — it concluded: ${conclusion}` : ''}.`;
           log(error);
           markCodeChangeFailed(requestId, error);
           broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
@@ -130,7 +168,8 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
         markCodeChangeFailed(requestId, err.message);
         broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error: err.message });
       }
-      // The diff is in the DB now; the agent's scratch worktree has served its purpose.
+      // The diff is in the DB now; the agent (idle, or already exited) and its scratch worktree have served their purpose.
+      if (info.state === 'blocked') await stopBackgroundTask(request.cliSessionId);
       await removeAgentScratchWorktree(info.cwd, request.repoPath);
       return;
     }

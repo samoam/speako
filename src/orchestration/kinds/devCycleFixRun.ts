@@ -3,6 +3,7 @@ import { getCodeChangeRequest } from '../../storage/codeChangeRequestRepository'
 import { getDevCycle } from '../../storage/devCycleRepository';
 import { Run, TERMINAL_RUN_STATUSES } from '../../storage/runRepository';
 import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
+import { getTestReport } from '../../integrations/jenkinsClient';
 import { buildFixPrompt } from '../../dev/buildFixPrompt';
 import { BuildFailureAnalysis } from '../../dev/buildFailureClassification';
 import { registerRunKind, startRun, cancelRun, emitEvent } from '../engine';
@@ -29,6 +30,24 @@ export interface DevCycleFixRunState extends DevCycleBaseState {
   failedBuildToFix: FailedBuild;
   round: number;
   fixRequestId?: number;
+}
+
+/** Jenkins' test report for the build, reduced to the named tests' failure messages and stack-trace heads — appended to the fix prompt. Empty when the report is unavailable. */
+async function describeTestFailures(jobPath: string, buildNumber: number, tests: string[]): Promise<string> {
+  const report = await getTestReport(jobPath, buildNumber).catch(() => null);
+  if (!report) return '';
+  const wanted = new Set(tests);
+  const failures = report.failures.filter((f) => !wanted.size || wanted.has(`${f.className}.${f.name}`));
+  if (!failures.length) return '';
+  const sections = failures.map((f) => {
+    // The exception line, every "Caused by", and the project's own frames —
+    // a Spring/Hibernate trace is dozens of framework frames before the first
+    // com.gtechna one (seen live), and those are the ones that locate the bug.
+    const traceLines = (f.errorStackTrace ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const trace = traceLines.filter((l, i) => i === 0 || /^Caused by/.test(l) || /com\.gtechna|com\.gti\./.test(l)).slice(0, 16).join('\n');
+    return `### ${f.className}.${f.name}\nMessage: ${(f.errorDetails ?? '(none)').trim().slice(0, 600)}\n${trace ? `Stack trace (head):\n${trace}` : ''}`;
+  });
+  return `\n\nJenkins test report for build #${buildNumber} — the failing tests, as reported:\n\n${sections.join('\n\n')}\n\nYou cannot run these integration tests here (they need the automation database); reason from the messages and stack traces above and from the code.`;
 }
 
 /**
@@ -75,7 +94,13 @@ function steps(): StepEntry<DevCycleFixRunState>[] {
         // The verdict's own list of new failures is the ground truth for what
         // this branch broke — more precise than the classifier's suspects.
         const suspectTests = newFailures.length ? newFailures : analysis.suspectTests;
-        const prompt = buildFixPrompt({ branch: cycle.branchName!, buildNumber, analysis: { ...analysis, suspectTests }, ticketKey: cycle.ticketKey });
+        // The agent can't run the integration suite itself (it needs the
+        // automation DB), so it gets what Jenkins saw: each new failure's
+        // message and stack-trace head. Without it a fix agent concluded "send
+        // me the surefire output for those three tests" and changed nothing
+        // (seen live, round 9).
+        const evidence = await describeTestFailures(jobPath, buildNumber, suspectTests);
+        const prompt = buildFixPrompt({ branch: cycle.branchName!, buildNumber, analysis: { ...analysis, suspectTests }, ticketKey: cycle.ticketKey }) + evidence;
         ctx.log(`Fix round ${ctx.state.round}: asking Claude to fix ${suspectTests.length ? suspectTests.length + ' failing test(s)' : 'the failure'}…`);
         const outcome = await dispatchClaudeChange(ctx, cycle, prompt, worktreePath, 'jenkins_fix');
         ctx.state.fixRequestId = outcome.request.id;

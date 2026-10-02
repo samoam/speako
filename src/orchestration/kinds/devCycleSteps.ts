@@ -75,7 +75,7 @@ export function isClaudeTuiNoise(line: string): boolean {
   if (/^[─━═│┃╌╍┄┅\s❯>]+$/u.test(line)) return true;
   if (/[─━═]{8,}/u.test(line)) return true;
   if (/^[✻✽✶✳✢·•●○◐◓◑◒⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S+…/u.test(line)) return true;
-  if (/accept edits on|shift\+tab to cycle|esc to interrupt|← for agents|\?\s*for shortcuts/i.test(line)) return true;
+  if (/accept edits on|shift\+tab to cycle|esc to interrupt|← for agents|\?\s*for shortcuts|·\s*\/effort$|\/btw to ask/i.test(line)) return true;
   if (/\x1b\[/.test(line)) return true;
   return false;
 }

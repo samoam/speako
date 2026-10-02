@@ -42,3 +42,33 @@ test('pollCodeChangeRequest: a finished agent has its diff captured and its scra
   assert.equal(after.worktreePath, 'C:\\repo\\.claude\\worktrees\\busy-owl');
   assert.equal(remove.mock.callCount(), 1);
 });
+
+test('pollCodeChangeRequest: an agent that ended its turn (blocked, nothing awaited) is finished — its diff is captured and it is stopped', { timeout: 30_000 }, async (t) => {
+  const request = createCodeChangeRequest({ origin: 'jenkins_fix', repoName: 'r', repoPath: 'C:\cycle-wt', cliSessionId: 'idle-1' });
+  mock.method(claudeCodeCliModule, 'getTaskInfo', async () => ({ id: 'idle-1', cwd: 'C:\tmp\speako-dev-cycle-agent-x', state: 'blocked', name: 'x', waitingFor: null }));
+  mock.method(claudeCodeCliModule, 'getWorktreeDiff', async () => 'diff --git a/z b/z\n+fix');
+  const stop = mock.method(claudeCodeCliModule, 'stopBackgroundTask', async () => {});
+  mock.method(claudeCodeCliModule, 'removeAgentScratchWorktree', async () => {});
+  t.after(() => mock.restoreAll());
+
+  await pollCodeChangeRequest(request.id, () => {});
+  const after = getCodeChangeRequest(request.id)!;
+  assert.equal(after.status, 'ready');
+  assert.equal(after.diff, 'diff --git a/z b/z\n+fix');
+  assert.equal(stop.mock.callCount(), 1, 'an idle agent is stopped once its diff is captured');
+});
+
+test('pollCodeChangeRequest: a finished agent with no changes fails with what it concluded', { timeout: 30_000 }, async (t) => {
+  const request = createCodeChangeRequest({ origin: 'jenkins_fix', repoName: 'r', repoPath: 'C:\cycle-wt', cliSessionId: 'idle-2' });
+  mock.method(claudeCodeCliModule, 'getTaskInfo', async () => ({ id: 'idle-2', cwd: 'C:\tmp\speako-dev-cycle-agent-y', state: 'blocked', name: 'y', waitingFor: null }));
+  mock.method(claudeCodeCliModule, 'getWorktreeDiff', async () => '');
+  mock.method(claudeCodeCliModule, 'getBackgroundTaskLogs', async () => '● Running 2 shell commands…\n● I cannot fix this safely without the surefire output.\nSend me the output for those tests.\n✻ Worked for 1m · done 2:39 AM\n');
+  mock.method(claudeCodeCliModule, 'stopBackgroundTask', async () => {});
+  mock.method(claudeCodeCliModule, 'removeAgentScratchWorktree', async () => {});
+  t.after(() => mock.restoreAll());
+
+  await pollCodeChangeRequest(request.id, () => {});
+  const after = getCodeChangeRequest(request.id)!;
+  assert.equal(after.status, 'failed');
+  assert.match(after.error ?? '', /finished with no file changes — it concluded: I cannot fix this safely without the surefire output\. Send me the output for those tests\./);
+});
