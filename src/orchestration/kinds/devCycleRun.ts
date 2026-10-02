@@ -298,7 +298,9 @@ function steps(): StepEntry<DevCycleRunState>[] {
           const ticket = await getJiraIssueDetail(cycle.ticketKey).catch(() => null);
           branchName = buildBranchName({ type: cycle.branchType, ticketKey: cycle.ticketKey, summary: ticket?.summary || cycle.ticketKey });
           ctx.log(`Creating branch "${branchName}"…`);
-          worktreePath = await createTicketBranchWorktree(cycle.repoPath, branchName, cycle.baseBranch);
+          const created = await createTicketBranchWorktree(cycle.repoPath, branchName, cycle.baseBranch);
+          worktreePath = created.worktreePath;
+          if (created.reusedExisting) ctx.log(`Branch "${branchName}" already existed — reusing it (and whatever is already committed on it).`);
           setDevCycleBranch(cycle.id, { branchName, worktreePath });
           // "Branch created + implementation starts" is the one approval — the
           // Jira write itself is still its own separately-gated draft.

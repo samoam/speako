@@ -24,11 +24,35 @@ export async function branchExistsOnRemote(repoPath: string, branch: string): Pr
  * every plan/implement round, every Return loop) — never removed except
  * when the cycle itself closes (see closeDevCycle's cleanup).
  */
-export async function createTicketBranchWorktree(repoPath: string, branch: string, baseBranch: string): Promise<string> {
+export async function createTicketBranchWorktree(repoPath: string, branch: string, baseBranch: string): Promise<{ worktreePath: string; reusedExisting: boolean }> {
   await git(['fetch', 'origin', baseBranch], repoPath, GIT_NETWORK_TIMEOUT_MS);
   const worktreePath = path.join(os.tmpdir(), `speako-dev-cycle-${branch.replace(/[/\\]/g, '-')}-${Date.now()}`);
-  await git(['worktree', 'add', '-b', branch, worktreePath, `origin/${baseBranch}`], repoPath, GIT_NETWORK_TIMEOUT_MS);
-  return worktreePath;
+  // The ticket branch can already exist — an earlier (abandoned) cycle for
+  // the same ticket created and pushed it, or the developer started by hand
+  // (seen live: ETICK-10176's branch carried a manual commit from the user's
+  // own checkout). `-b` would refuse ("already exists") and starting over
+  // from trunk would throw that work away, so an existing branch is reused.
+  const onRemote = await branchExistsOnRemote(repoPath, branch);
+  const local = (await git(['branch', '--list', branch], repoPath)).trim().length > 0;
+  try {
+    if (onRemote) {
+      await git(['fetch', 'origin', branch], repoPath, GIT_NETWORK_TIMEOUT_MS);
+      if (local) await git(['worktree', 'add', worktreePath, branch], repoPath, GIT_NETWORK_TIMEOUT_MS);
+      else await git(['worktree', 'add', '-b', branch, worktreePath, `origin/${branch}`], repoPath, GIT_NETWORK_TIMEOUT_MS);
+    } else if (local) {
+      await git(['worktree', 'add', worktreePath, branch], repoPath, GIT_NETWORK_TIMEOUT_MS);
+    } else {
+      await git(['worktree', 'add', '-b', branch, worktreePath, `origin/${baseBranch}`], repoPath, GIT_NETWORK_TIMEOUT_MS);
+    }
+  } catch (err: any) {
+    // git refuses to check a branch out in two worktrees at once (see
+    // addWorktreeForExistingBranch) — and here the other worktree is usually
+    // the developer's own repo folder, which Speako must not touch.
+    const match = /(?:already used by worktree at|already checked out at) '([^']+)'/.exec(err.message ?? '');
+    if (match) throw new Error(`Branch "${branch}" is already checked out in ${match[1]} — switch that checkout to another branch (e.g. git switch ${baseBranch}) and retry.`);
+    throw err;
+  }
+  return { worktreePath, reusedExisting: onRemote || local };
 }
 
 /**
