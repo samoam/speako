@@ -11,6 +11,7 @@ import { LEGACY_NO_PUSH_URL } from '../../integrations/antigravityCli';
 import { addWorktreeForExistingBranch } from '../../integrations/gitBranches';
 import { pollCodeChangeRequest } from '../../integrations/codeChangePoller';
 import { startDraft } from '../../drafts/draftService';
+import { runLocalVerify } from '../../dev/localVerify';
 import {
   CodeChangeOrigin,
   CodeChangeRequest,
@@ -34,6 +35,8 @@ import { StepContext, StepDefinition } from '../types';
 export const DEV_CYCLE_SUBJECT_KIND = 'dev_cycle';
 
 const PUSH_TIMEOUT_MS = 10 * 60 * 1000;
+/** A cold compile of the changed modules plus their upstream reactor siblings, then the changed tests — the big reactor can take a while from a fresh worktree. */
+const LOCAL_VERIFY_TIMEOUT_MS = 45 * 60 * 1000;
 /** The integration job runs the whole suite (~3,200 tests, ~20 min seen live) and may wait for an executor first. */
 const BUILD_TIMEOUT_MS = 90 * 60 * 1000;
 const BUILD_POLL_MS = 20_000;
@@ -48,9 +51,18 @@ export interface FailedBuild {
   reason: string;
 }
 
+/** What the local gate records before failing the run — the fix round's evidence when the failure never reached Jenkins. */
+export interface LocalFailure {
+  summary: string;
+  failingTests: string[];
+  output: string;
+  modules: string[];
+}
+
 export interface DevCycleBaseState {
   cycleId: number;
   failedBuild?: FailedBuild;
+  localFailure?: LocalFailure;
 }
 
 export function cycleOf(ctx: StepContext<DevCycleBaseState>): DevCycle {
@@ -175,12 +187,13 @@ export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, 
 }
 
 /**
- * The human-gated "commit this diff and push it" step, shared by the merged
+ * The human-gated "commit this diff" step, shared by the merged
  * implementation and by a fix round. Resumable: the change request's own
- * status says how far a previous attempt got (seen live: committed, then the
- * push timed out), so a retry never re-applies an already-committed diff.
+ * status says whether a previous attempt already committed, so a retry
+ * never re-applies an already-committed diff. The push is a separate step
+ * (pushStep) so the local gate can run in between.
  */
-export function applyAndPushStep<S extends DevCycleBaseState>(options: {
+export function applyStep<S extends DevCycleBaseState>(options: {
   key: string;
   label: string;
   /** The change to land — looked up at run time so a retry sees the same row. */
@@ -202,9 +215,51 @@ export function applyAndPushStep<S extends DevCycleBaseState>(options: {
         await applyCodeChangeToRepo(request.diff ?? '', worktreePath, options.commitMessage(cycle, ticket?.summary ?? null, ctx.state));
         markCodeChangeApplied(request.id);
         emitEvent({ type: 'code-change-applied', devCycleId: cycle.id, requestId: request.id });
-      } else {
-        ctx.log('The change was already committed by a previous attempt.');
+        ctx.log(`Committed to ${cycle.branchName} (not pushed yet).`);
+        return 'Committed.';
       }
+      ctx.log('The change was already committed by a previous attempt.');
+      return 'Already committed.';
+    },
+  };
+}
+
+/**
+ * Speako's own gate before anything leaves the machine: compile the changed
+ * modules and run the changed tests locally (src/dev/localVerify.ts). A
+ * failure records the evidence in state.localFailure and fails the run, so
+ * the fix loop can take over without a Jenkins round.
+ */
+export function verifyLocallyStep<S extends DevCycleBaseState>(): StepDefinition<S> {
+  return {
+    key: 'verify_locally',
+    label: 'Build & test locally',
+    timeoutMs: LOCAL_VERIFY_TIMEOUT_MS,
+    async run(ctx) {
+      const cycle = cycleOf(ctx);
+      const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
+      const result = await runLocalVerify(worktreePath, cycle.baseBranch, ctx.log, ctx.signal);
+      if (!result.ok) {
+        ctx.state.localFailure = { summary: result.summary, failingTests: result.failingTests, output: result.output, modules: result.modules };
+        throw new Error(result.summary);
+      }
+      ctx.log(result.summary);
+      return result.summary;
+    },
+  };
+}
+
+/** Pushes the branch once the local gate passed. Resumable like applyStep: a change already marked pushed is not pushed again. */
+export function pushStep<S extends DevCycleBaseState>(options: { request: (state: S) => CodeChangeRequest | undefined }): StepDefinition<S> {
+  return {
+    key: 'push',
+    label: 'Push',
+    timeoutMs: PUSH_TIMEOUT_MS,
+    async run(ctx) {
+      const cycle = cycleOf(ctx);
+      const request = options.request(ctx.state);
+      if (!request || !cycle.branchName) throw new Error('No committed change to push.');
+      const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
       if (request.status !== 'pushed') {
         // An earlier Speako version blocked Antigravity's pushes by writing
         // a bogus push URL into the shared repo config (see antigravityCli.ts);
@@ -217,12 +272,14 @@ export function applyAndPushStep<S extends DevCycleBaseState>(options: {
         await pushRepoChanges(worktreePath);
         markCodeChangePushed(request.id);
         emitEvent({ type: 'code-change-pushed', devCycleId: cycle.id, requestId: request.id });
+      } else {
+        ctx.log('Already pushed by a previous attempt.');
       }
       // 'done' is what unlocks the PR/Docs tabs — the PR draft itself only
       // auto-starts once the build is green, but "Draft PR now" stays
       // available as the manual escape hatch.
       setDevCycleCurrentStep(cycle.id, 'done');
-      ctx.log(`Committed and pushed to ${cycle.branchName}.`);
+      ctx.log(`Pushed to ${cycle.branchName}.`);
       return `Pushed to ${cycle.branchName}.`;
     },
   };

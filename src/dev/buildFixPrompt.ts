@@ -1,6 +1,25 @@
 import { BuildFailureAnalysis } from './buildFailureClassification';
 
 /**
+ * The local counterpart of buildFixPrompt below: the branch failed Speako's
+ * own compile/unit-test gate before the push (src/dev/localVerify.ts), so
+ * the evidence is the build tool's output rather than a Jenkins
+ * classification. Same scoping rules.
+ */
+export function buildLocalFixPrompt(params: { branch: string; ticketKey: string | null; summary: string; failingTests: string[]; output: string; modules: string[] }): string {
+  return `The local build/test gate on branch ${params.branch} failed${params.ticketKey ? ` (ticket ${params.ticketKey})` : ''}, before anything was pushed.
+
+Summary: ${params.summary}
+Modules: ${params.modules.join(', ') || '(unknown)'}
+Failing test(s): ${params.failingTests.join(', ') || '(none identified — see the output)'}
+
+Output (tail):
+${params.output || '(no output captured)'}
+
+Fix the underlying cause. Do not modify unrelated files, do not weaken or delete the failing assertion(s), and do not disable or skip the test. If you cannot determine a safe fix, say so in your final message rather than guessing.`;
+}
+
+/**
  * Deliberately scoped — a fix agent gets the classification's own evidence
  * and suggestion, not "go explore the codebase and figure it out," so it
  * can't wander into unrelated changes the way a from-scratch implementation

@@ -210,6 +210,7 @@ const SETTINGS_FIELDS = [
   'jenkinsTestBranchParam',
   'jenkinsPollMinutes',
   'devTrunkBranch',
+  'localVerifyIntegrationConfigDir',
   'prePrMaxChangedFiles',
   'prePrMaxChangedLines',
   'mem0McpUrl',
@@ -3074,7 +3075,7 @@ export class InterfaceServer {
           return;
         }
         res.json({ started: true });
-        await startDevCycleRun(cycle.id, { completedThrough: 'apply_and_push' });
+        await startDevCycleRun(cycle.id, { completedThrough: 'push' });
         return;
       }
       res.status(400).json({ error: `Cannot manually rerun step "${step}".` });
@@ -3177,6 +3178,12 @@ export class InterfaceServer {
         return;
       }
       const latest = getLatestDevCycleRun<any>(cycle.id);
+      if (latest?.state?.localFailure) {
+        const round = latest.kind === 'dev_cycle_fix' ? (latest.state.round ?? 1) + 1 : 1;
+        res.json({ started: true, round });
+        await startDevCycleFixRun(cycle.id, { localFailure: latest.state.localFailure }, round);
+        return;
+      }
       // The run that failed recorded the build; failing that (a run from
       // before this existed, or a build the monitor saw on its own), the
       // cycle's latest red build row carries the same facts.
@@ -3193,7 +3200,7 @@ export class InterfaceServer {
       }
       const round = latest?.kind === 'dev_cycle_fix' ? (latest.state.round ?? 1) + 1 : 1;
       res.json({ started: true, round });
-      await startDevCycleFixRun(cycle.id, failedBuild, round);
+      await startDevCycleFixRun(cycle.id, { failedBuild }, round);
     });
 
     app.post('/api/jira-implement/:id/discard', async (req, res) => {

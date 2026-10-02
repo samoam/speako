@@ -496,6 +496,10 @@ export const config = {
   get devTrunkBranch(): string {
     return str('devTrunkBranch', 'DEV_TRUNK_BRANCH', 'master');
   },
+  /** Directory holding the integration tests' application.properties + cc.config (officercc's scripts default to /GTI/officercc5/tests). Empty = integration tests are left to Jenkins; the local gate (src/dev/localVerify.ts) only compiles and runs unit tests. */
+  get localVerifyIntegrationConfigDir(): string {
+    return str('localVerifyIntegrationConfigDir', 'LOCAL_VERIFY_INTEGRATION_CONFIG_DIR', '');
+  },
   /** Pre-PR self-review checklist thresholds (src/dev/prePrChecks.ts) — above either, the PR-size check warns and suggests a split. */
   get prePrMaxChangedFiles(): number {
     return num('prePrMaxChangedFiles', 'PRE_PR_MAX_CHANGED_FILES', 20);

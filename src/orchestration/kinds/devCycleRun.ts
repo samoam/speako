@@ -22,8 +22,10 @@ import { RunDefinition, StepContext, StepEntry } from '../types';
 import {
   DEV_CYCLE_SUBJECT_KIND,
   DevCycleBaseState,
-  applyAndPushStep,
+  applyStep,
   buildAndTestStep,
+  pushStep,
+  verifyLocallyStep,
   cycleOf,
   devCycleCommitMessage,
   dispatchClaudeChange,
@@ -54,7 +56,7 @@ export interface DevCycleRunState extends DevCycleBaseState {
 
 type ImplementationOutcome = { status: 'ready' | 'failed'; diff: string | null; error: string | null };
 
-const STEP_KEYS = ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply_and_push', 'build_and_test'] as const;
+const STEP_KEYS = ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply', 'verify_locally', 'push', 'build_and_test'] as const;
 export type DevCycleStepKey = (typeof STEP_KEYS)[number];
 
 function implementPromptFor(cycle: DevCycle, approvedPlan: StructuredDevPlan): string {
@@ -146,10 +148,11 @@ function approvedPlanOf(cycle: DevCycle): StructuredDevPlan {
  * the run parks for the human's plan approval; branch creation, both
  * implementations and the AI merge run straight through to a merged diff;
  * the run parks again for the human's diff approval; then the diff is
- * applied + pushed and the branch is built and tested on the shared Jenkins
- * job. A green build ends the run (finalize drafts the PR); a red one with
- * a fixable classification starts a fix round (devCycleFixRun.ts) instead
- * of leaving the cycle to the developer.
+ * committed, compiled and unit-tested locally (the gate before anything
+ * leaves the machine), pushed, and built and tested on the shared Jenkins
+ * job. A green build ends the run (finalize drafts the PR); a failed local
+ * gate or a red build with a fixable classification starts a fix round
+ * (devCycleFixRun.ts) instead of leaving the cycle to the developer.
  */
 function steps(): StepEntry<DevCycleRunState>[] {
   return [
@@ -318,12 +321,14 @@ function steps(): StepEntry<DevCycleRunState>[] {
         return 'Merged diff ready for review.';
       },
     },
-    applyAndPushStep<DevCycleRunState>({
-      key: 'apply_and_push',
-      label: 'Apply merged diff & push',
+    applyStep<DevCycleRunState>({
+      key: 'apply',
+      label: 'Apply merged diff',
       request: (state) => getLatestCodeChangeRequestForDevCycleOrigin(state.cycleId, 'dev_cycle_merge'),
       commitMessage: (cycle, summary) => devCycleCommitMessage(cycle.ticketKey, summary),
     }),
+    verifyLocallyStep<DevCycleRunState>(),
+    pushStep<DevCycleRunState>({ request: (state) => getLatestCodeChangeRequestForDevCycleOrigin(state.cycleId, 'dev_cycle_merge') }),
     buildAndTestStep<DevCycleRunState>(),
   ];
 }
@@ -336,8 +341,9 @@ export const devCycleRunDefinition: RunDefinition<DevCycleRunState> = {
       await startPrDraftAfterGreenBuild(run.state.cycleId);
       return;
     }
-    // A red build hands over to the fix loop; every other failure waits for Retry.
-    if (outcome === 'failed' && run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, run.state.failedBuild, 1);
+    // A red build, or a failed local gate, hands over to the fix loop; every other failure waits for Retry.
+    if (outcome === 'failed' && run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, 1);
+    else if (outcome === 'failed' && run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, 1);
   },
 };
 
@@ -349,7 +355,7 @@ export function devCycleStepsThrough(through: DevCycleStepKey): DevCycleStepKey[
 }
 
 /** The human gates across the cycle's run kinds; a resume that already includes a gate's step implies its approval, since that step only ever ran after a human approved. */
-const GATE_STEPS = ['branch_and_worktrees', 'apply_and_push', 'apply_fix_and_push'] as const;
+const GATE_STEPS = ['branch_and_worktrees', 'apply', 'apply_fix'] as const;
 export type DevCycleGate = (typeof GATE_STEPS)[number];
 
 /**
@@ -387,7 +393,7 @@ export function isDevCycleAwaitingPlanApproval(cycleId: number): boolean {
 /** True while a diff (the merged implementation, or a fix round's change) waits for the human — both land through the same approve. */
 export function isDevCycleAwaitingChangeApproval(cycleId: number): boolean {
   const gate = devCycleAwaitingGate(cycleId);
-  return gate === 'apply_and_push' || gate === 'apply_fix_and_push';
+  return gate === 'apply' || gate === 'apply_fix';
 }
 
 /** Resumes the run from whichever gate it's parked on (the routes check which one first). */

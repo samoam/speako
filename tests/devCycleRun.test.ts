@@ -31,10 +31,10 @@ async function waitForStatus(runId: number, statuses: string[], timeoutMs = 5000
   throw new Error(`run ${runId} still "${getRun(runId)!.status}" after ${timeoutMs}ms`);
 }
 
-test('step list: analyze → plan → [approve plan] branch_and_worktrees → implement → merge_and_review → [approve diff] apply_and_push → build_and_test', () => {
+test('step list: analyze → plan → [approve plan] branch_and_worktrees → implement → merge_and_review → [approve diff] apply → verify_locally → push → build_and_test', () => {
   const steps = devCycleRunDefinition.steps({ cycleId: 1 }).flat();
-  assert.deepEqual(steps.map((s) => s.key), ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply_and_push', 'build_and_test']);
-  assert.deepEqual(steps.filter((s) => s.approval).map((s) => s.key), ['branch_and_worktrees', 'apply_and_push'], 'the plan approval and the merged-diff approval are the two human gates');
+  assert.deepEqual(steps.map((s) => s.key), ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply', 'verify_locally', 'push', 'build_and_test']);
+  assert.deepEqual(steps.filter((s) => s.approval).map((s) => s.key), ['branch_and_worktrees', 'apply'], 'the plan approval and the merged-diff approval are the two human gates');
   assert.ok(steps.every((s) => !s.optional), 'every step is required — a failure stops the run so the user can retry');
 });
 
@@ -42,14 +42,14 @@ test('devCycleStepsThrough: the steps a resume keeps, in pipeline order', () => 
   assert.deepEqual(devCycleStepsThrough('analyze'), ['analyze']);
   assert.deepEqual(devCycleStepsThrough('branch_and_worktrees'), ['analyze', 'plan', 'branch_and_worktrees']);
   assert.deepEqual(devCycleStepsThrough('implement'), ['analyze', 'plan', 'branch_and_worktrees', 'implement']);
-  assert.deepEqual(devCycleStepsThrough('apply_and_push').at(-1), 'apply_and_push');
+  assert.deepEqual(devCycleStepsThrough('push'), ['analyze', 'plan', 'branch_and_worktrees', 'implement', 'merge_and_review', 'apply', 'verify_locally', 'push']);
 });
 
 test('startDevCycleRun with a resume past the plan: kept steps start done and the plan approval is implied, so the run does not park for approval again', async () => {
   const cycle = createDevCycle({ ticketKey: 'RUN-1', repoName: 'r', repoPath: 'p', branchType: 'feature', lifecycleState: 'Dev Ready' });
   setDevCyclePlans(cycle.id, { claude: plan });
   const run = await startDevCycleRun(cycle.id, { completedThrough: 'implement' });
-  assert.deepEqual(run.steps.map((s) => [s.key, s.status]), [['analyze', 'done'], ['plan', 'done'], ['branch_and_worktrees', 'done'], ['implement', 'done'], ['merge_and_review', 'pending'], ['apply_and_push', 'pending'], ['build_and_test', 'pending']]);
+  assert.deepEqual(run.steps.map((s) => [s.key, s.status]), [['analyze', 'done'], ['plan', 'done'], ['branch_and_worktrees', 'done'], ['implement', 'done'], ['merge_and_review', 'pending'], ['apply', 'pending'], ['verify_locally', 'pending'], ['push', 'pending'], ['build_and_test', 'pending']]);
   assert.deepEqual(getRunApprovedSteps(run.id), ['branch_and_worktrees']);
   // No worktree on this cycle, so merge_and_review fails fast — the point is that it *ran* instead of waiting for approval.
   const finished = await waitForStatus(run.id, ['done', 'failed', 'waiting_approval']);
@@ -80,7 +80,7 @@ test("approveDevCycleGate / logDevCycle / devCycleView act on the cycle's latest
   await waitForStatus(run.id, ['waiting_approval']);
   logDevCycle(cycle.id, 'Plan refined per feedback: tighten it');
   const view = devCycleView(getDevCycle(cycle.id)!);
-  assert.deepEqual(view.phases.map((p) => p.status), ['done', 'done', 'pending', 'pending', 'pending', 'pending', 'pending']);
+  assert.deepEqual(view.phases.map((p) => p.status), ['done', 'done', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending']);
   assert.equal(view.phases[2].detail, 'Waiting for your approval.');
   assert.match(view.log.at(-1) ?? '', /Plan refined per feedback: tighten it$/);
   assert.equal(approveDevCycleGate(cycle.id), true);
@@ -186,24 +186,36 @@ test('isClaudeTuiNoise: drops spinner, rule and status-bar lines from `claude lo
   for (const real of ['Reading src/Foo.java', 'Edited LprEventPendingTicketServiceImpl.java (+12 −3)', 'The fix is already committed, so I will add the null fallback.']) assert.equal(isClaudeTuiNoise(real), false, real);
 });
 
-// ---- apply_and_push step: resumable after a failed push, and heals the legacy push block ----
+// ---- apply / push steps: resumable, and the push heals the legacy push block ----
 
 import * as claudeCodeCliModule from '../src/integrations/claudeCodeCli';
 import { createCodeChangeRequest, markCodeChangeReady, markCodeChangeApplied, markCodeChangePushed, getCodeChangeRequest } from '../src/storage/codeChangeRequestRepository';
 import { LEGACY_NO_PUSH_URL } from '../src/integrations/antigravityCli';
 
-function applyStep() {
-  return devCycleRunDefinition.steps({ cycleId: 0 }).flat().find((s) => s.key === 'apply_and_push')!;
+function stepByKey(key: string) {
+  return devCycleRunDefinition.steps({ cycleId: 0 }).flat().find((s) => s.key === key)!;
 }
 
-test('apply_and_push: a diff already committed by a previous attempt is not re-applied — only pushed; a leftover legacy push block is removed first', async (t) => {
-  const cycle = createDevCycle({ ticketKey: 'RUN-8', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
+test('apply: a diff already committed by a previous attempt is not re-applied', async (t) => {
+  const cycle = createDevCycle({ ticketKey: 'RUN-8', repoName: 'r', repoPath: 'C:\\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
   setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-8-x', worktreePath: os.tmpdir() });
-  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-1' });
-  markCodeChangeReady(request.id, 'C:\wt', 'diff --git a/x b/x');
+  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\\wt', cliSessionId: 'merge-1' });
+  markCodeChangeReady(request.id, 'C:\\wt', 'diff --git a/x b/x');
   markCodeChangeApplied(request.id);
-
   const apply = mock.method(claudeCodeCliModule, 'applyCodeChangeToRepo', async () => { assert.fail('must not re-apply an already-committed diff'); });
+  t.after(() => mock.restoreAll());
+  const ctx = stepContext(cycle.id);
+  assert.equal(await stepByKey('apply').run(ctx), 'Already committed.');
+  assert.equal(apply.mock.callCount(), 0);
+  assert.equal(getCodeChangeRequest(request.id)!.status, 'applied', 'apply never pushes — that is the push step, after the local gate');
+});
+
+test('push: pushes a committed change once, removes a leftover legacy push block first, and unlocks the PR tabs', async (t) => {
+  const cycle = createDevCycle({ ticketKey: 'RUN-9', repoName: 'r', repoPath: 'C:\\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
+  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-9-x', worktreePath: os.tmpdir() });
+  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\\wt', cliSessionId: 'merge-2' });
+  markCodeChangeReady(request.id, 'C:\\wt', 'diff');
+  markCodeChangeApplied(request.id);
   const push = mock.method(claudeCodeCliModule, 'pushRepoChanges', async () => {});
   const gitCalls: string[] = [];
   mock.method(claudeCodeCliModule, 'git', async (args: string[]) => {
@@ -212,31 +224,18 @@ test('apply_and_push: a diff already committed by a previous attempt is not re-a
     return '';
   });
   t.after(() => mock.restoreAll());
-
   const ctx = stepContext(cycle.id);
-  const detail = await applyStep().run(ctx);
-  assert.equal(detail, 'Pushed to feature/RUN-8-x.');
-  assert.equal(apply.mock.callCount(), 0);
+  assert.equal(await stepByKey('push').run(ctx), 'Pushed to feature/RUN-9-x.');
   assert.equal(push.mock.callCount(), 1);
   assert.ok(gitCalls.includes('config --unset remote.origin.pushurl'), `legacy block removed: ${gitCalls.join(' | ')}`);
   assert.equal(getCodeChangeRequest(request.id)!.status, 'pushed');
-  assert.ok(ctx.logs.some((l) => /already committed by a previous attempt/.test(l)));
-  assert.ok(ctx.logs.some((l) => /Removed a leftover push block/.test(l)));
   assert.equal(getDevCycle(cycle.id)!.currentStep, 'done');
-});
+  assert.ok(ctx.logs.some((l) => /Removed a leftover push block/.test(l)));
 
-test('apply_and_push: an already-pushed merge request is a no-op beyond unlocking the next steps', async (t) => {
-  const cycle = createDevCycle({ ticketKey: 'RUN-9', repoName: 'r', repoPath: 'C:\repo', branchType: 'feature', lifecycleState: 'Dev Ready' });
-  setDevCycleBranch(cycle.id, { branchName: 'feature/RUN-9-x', worktreePath: os.tmpdir() });
-  const request = createCodeChangeRequest({ devCycleId: cycle.id, origin: 'dev_cycle_merge', repoName: 'r', repoPath: 'C:\wt', cliSessionId: 'merge-2' });
-  markCodeChangeReady(request.id, 'C:\wt', 'diff');
-  markCodeChangeApplied(request.id);
-
+  const again = mock.method(claudeCodeCliModule, 'pushRepoChanges', async () => { assert.fail('must not push twice'); });
+  await stepByKey('push').run(stepContext(cycle.id));
+  assert.equal(again.mock.callCount(), 0);
   markCodeChangePushed(request.id);
-  const push = mock.method(claudeCodeCliModule, 'pushRepoChanges', async () => { assert.fail('must not push twice'); });
-  t.after(() => mock.restoreAll());
-  await applyStep().run(stepContext(cycle.id));
-  assert.equal(push.mock.callCount(), 0);
 });
 
 test('devCycleCommitMessage: Jira key first, the ticket summary, one short line, nothing else', async () => {

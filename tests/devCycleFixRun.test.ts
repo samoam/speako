@@ -51,16 +51,16 @@ async function waitForStatus(runId: number, statuses: string[], timeoutMs = 5000
   throw new Error(`run ${runId} still "${getRun(runId)!.status}" after ${timeoutMs}ms`);
 }
 
-test('fix run: analyze_failure → fix → [approve] apply_fix_and_push → build_and_test', () => {
-  const steps = devCycleFixRunDefinition.steps({ cycleId: 1, failedBuildToFix: failedBuild(1), round: 1 }).flat();
-  assert.deepEqual(steps.map((s) => s.key), ['analyze_failure', 'fix', 'apply_fix_and_push', 'build_and_test']);
-  assert.deepEqual(steps.filter((s) => s.approval).map((s) => s.key), ['apply_fix_and_push'], 'the fix diff is the one human gate of a round');
+test('fix run: analyze_failure → fix → [approve] apply_fix → verify_locally → push → build_and_test', () => {
+  const steps = devCycleFixRunDefinition.steps({ cycleId: 1, source: { failedBuild: failedBuild(1) }, round: 1 }).flat();
+  assert.deepEqual(steps.map((s) => s.key), ['analyze_failure', 'fix', 'apply_fix', 'verify_locally', 'push', 'build_and_test']);
+  assert.deepEqual(steps.filter((s) => s.approval).map((s) => s.key), ['apply_fix'], 'the fix diff is the one human gate of a round');
 });
 
 test('analyze_failure: a classified, fixable build passes with its summary and the new failures logged', async (t) => {
   const cycle = cycleWithBranch('FIX-1');
   recordBuild(cycle.id, 10, { category: 'test_regression', fixable: true });
-  const ctx = ctxFor({ cycleId: cycle.id, failedBuildToFix: failedBuild(10, ['a.T.one', 'a.T.two']), round: 1 });
+  const ctx = ctxFor({ cycleId: cycle.id, source: { failedBuild: failedBuild(10, ['a.T.one', 'a.T.two']) }, round: 1 });
   const detail = await devCycleFixRunDefinition.steps(ctx.state).flat()[0].run(ctx);
   assert.equal(detail, 'test_regression: tests broke');
   assert.ok(ctx.logs.some((l) => /New failing tests: a\.T\.one, a\.T\.two/.test(l)));
@@ -71,20 +71,20 @@ test('analyze_failure: an unclassified build asks the monitor once, then fails w
   recordBuild(cycle.id, 11, null);
   const poll = mock.method(jenkinsMonitorModule, 'pollJenkinsBuilds', async () => ({ checked: 0, newFailures: 0 }));
   t.after(() => mock.restoreAll());
-  const step = devCycleFixRunDefinition.steps({ cycleId: cycle.id, failedBuildToFix: failedBuild(11), round: 1 }).flat()[0];
-  await assert.rejects(step.run(ctxFor({ cycleId: cycle.id, failedBuildToFix: failedBuild(11), round: 1 })), /Build #11 has not been classified yet/);
+  const step = devCycleFixRunDefinition.steps({ cycleId: cycle.id, source: { failedBuild: failedBuild(11) }, round: 1 }).flat()[0];
+  await assert.rejects(step.run(ctxFor({ cycleId: cycle.id, source: { failedBuild: failedBuild(11) }, round: 1 })), /Build #11 has not been classified yet/);
   assert.equal(poll.mock.callCount(), 1);
 
   recordBuild(cycle.id, 12, { category: 'flaky_test', fixable: false });
-  await assert.rejects(step.run(ctxFor({ cycleId: cycle.id, failedBuildToFix: failedBuild(12), round: 1 })), /flaky_test — not something a code fix can address; rerun the build instead/);
+  await assert.rejects(step.run(ctxFor({ cycleId: cycle.id, source: { failedBuild: failedBuild(12) }, round: 1 })), /flaky_test — not something a code fix can address; rerun the build instead/);
 });
 
 test('startFixRoundIfPossible: starts a fix run for a fixable failure, refuses an unfixable one and stops after MAX_FIX_ROUNDS', async () => {
   const cycle = cycleWithBranch('FIX-3');
   recordBuild(cycle.id, 20, { category: 'test_regression', fixable: true });
-  assert.equal(await startFixRoundIfPossible(cycle.id, failedBuild(20), MAX_FIX_ROUNDS + 1), null, 'rounds exhausted');
+  assert.equal(await startFixRoundIfPossible(cycle.id, { failedBuild: failedBuild(20) }, MAX_FIX_ROUNDS + 1), null, 'rounds exhausted');
 
-  const run = await startFixRoundIfPossible(cycle.id, failedBuild(20), 2);
+  const run = await startFixRoundIfPossible(cycle.id, { failedBuild: failedBuild(20) }, 2);
   assert.ok(run);
   assert.equal(run!.kind, 'dev_cycle_fix');
   assert.equal((run!.state as DevCycleFixRunState).round, 2);
@@ -95,7 +95,7 @@ test('startFixRoundIfPossible: starts a fix run for a fixable failure, refuses a
 
   const unfixable = cycleWithBranch('FIX-4');
   recordBuild(unfixable.id, 21, { category: 'infra_failure', fixable: false });
-  assert.equal(await startFixRoundIfPossible(unfixable.id, failedBuild(21), 1), null);
+  assert.equal(await startFixRoundIfPossible(unfixable.id, { failedBuild: failedBuild(21) }, 1), null);
   assert.equal(getLatestDevCycleRun(unfixable.id), undefined, 'no run started for an infra failure');
 });
 
@@ -107,7 +107,7 @@ test("main run's finalize hands a red build over to fix round 1; a green outcome
   const started = getLatestDevCycleRun<DevCycleFixRunState>(cycle.id);
   assert.equal(started?.kind, 'dev_cycle_fix');
   assert.equal(started?.state.round, 1);
-  assert.equal(started?.state.failedBuildToFix.buildNumber, 30);
+  assert.equal(started?.state.source.failedBuild?.buildNumber, 30);
 
   const quiet = cycleWithBranch('FIX-6');
   await devCycleRunDefinition.finalize!({ ...fakeRun, subjectId: String(quiet.id), state: { cycleId: quiet.id } }, 'failed', 'something else');

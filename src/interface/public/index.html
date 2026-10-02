@@ -1457,6 +1457,7 @@
           <legend>Dev cycle</legend>
           <div class="settings-grid">
             <div class="settings-field"><label>Trunk branch</label><input type="text" data-key="devTrunkBranch" /></div>
+            <div class="settings-field"><label>Local integration-test config dir (empty: leave ITs to Jenkins)</label><input type="text" data-key="localVerifyIntegrationConfigDir" /></div>
             <div class="settings-field"><label>Pre-PR max changed files</label><input type="number" data-key="prePrMaxChangedFiles" /></div>
             <div class="settings-field"><label>Pre-PR max changed lines</label><input type="number" data-key="prePrMaxChangedLines" /></div>
           </div>
@@ -6574,7 +6575,7 @@
       selectJiraImplementDiffFile(pathToSelect);
       // Approve/refine only while the run is actually parked on this diff's
       // gate — afterwards the tab still shows it for reference, actions hidden.
-      const editable = run?.awaitingGate === 'apply_and_push' || run?.awaitingGate === 'apply_fix_and_push';
+      const editable = run?.awaitingGate === 'apply' || run?.awaitingGate === 'apply_fix';
       jiraImplementMergeApproveBtn.hidden = !editable;
       jiraImplementMergeRefineBtn.hidden = !editable;
       jiraImplementMergeRefineInput.hidden = !editable;
