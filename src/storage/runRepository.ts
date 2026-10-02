@@ -76,6 +76,12 @@ export function getLatestRunForSubject(subjectKind: string, subjectId: string): 
   return row ? mapRow(row) : undefined;
 }
 
+/** Every run for a subject, newest first. */
+export function getRunsForSubject(subjectKind: string, subjectId: string): Run[] {
+  const rows = db.prepare('SELECT * FROM orchestration_runs WHERE subject_kind = ? AND subject_id = ? ORDER BY id DESC').all(subjectKind, subjectId) as any[];
+  return rows.map(mapRow);
+}
+
 export function getRunsByStatus(statuses: readonly RunStatus[]): Run[] {
   if (!statuses.length) return [];
   const rows = db.prepare(`SELECT * FROM orchestration_runs WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY id ASC`).all(...statuses) as any[];

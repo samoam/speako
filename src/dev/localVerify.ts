@@ -112,6 +112,16 @@ export function isToolingFailure(code: number | null, output: string): boolean {
   return code === 127 || /^(\/bin\/)?bash: .*: No such file or directory/m.test(output) || /^(\/bin\/)?bash: .*: command not found/m.test(output);
 }
 
+/**
+ * The repo's runner ran but could not load the very test class it compiled
+ * (JUnitCore's "Could not find class [...]" — confirmed live from a %TEMP%
+ * worktree, after a successful test-compile of that module): its classpath,
+ * not the code. Maven's surefire needs no such assembly.
+ */
+export function isRunnerClasspathFailure(output: string): boolean {
+  return /Could not find class \[/.test(output) || /ClassNotFoundException: [\w.$]+Test\b/.test(output);
+}
+
 const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const OUTPUT_TAIL_LINES = 120;
 
@@ -213,12 +223,13 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
       const viaMaven = () => run(mvn, ['-q', '-pl', module, `-Dtest=${classes.join(',')}`, '-DfailIfNoTests=false', '-Dsurefire.failIfNoSpecifiedTests=false', 'test'], worktreePath, env, signal, onLine);
       let outcome = fs.existsSync(script) && jdk17 ? await run('bash', [toBashPath(script), module, ...classes, '--offline'], worktreePath, env, signal, onLine) : await viaMaven();
       output += outcome.output;
-      if (isToolingFailure(outcome.code, outcome.output)) {
-        // The repo's runner could not even start — not the code's fault. Maven
-        // is slower but needs nothing beyond what the compile just used. The
-        // runner's own last words go to the log: onLine filters them out, and
-        // without them a live failure of this kind was undiagnosable.
-        log(`The test runner could not start (exit ${outcome.code}) — running the tests through Maven instead. Runner output: ${tail(outcome.output, 12)}`);
+      if (isToolingFailure(outcome.code, outcome.output) || isRunnerClasspathFailure(outcome.output)) {
+        // The repo's runner could not start, or could not load the test class
+        // — not the code's fault. Maven is slower but needs nothing beyond
+        // what the compile just used. The runner's own last words go to the
+        // log: onLine filters them out, and without them a live failure of
+        // this kind was undiagnosable.
+        log(`The test runner did not get to run the tests (exit ${outcome.code}) — running them through Maven instead. Runner output: ${tail(outcome.output, 12)}`);
         outcome = await viaMaven();
         output += outcome.output;
       }

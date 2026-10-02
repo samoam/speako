@@ -22,7 +22,7 @@ import {
   markCodeChangePushed,
 } from '../../storage/codeChangeRequestRepository';
 import { DevCycle, getDevCycle, setDevCycleBranch, setDevCycleCurrentStep } from '../../storage/devCycleRepository';
-import { getLatestRunForSubject, Run } from '../../storage/runRepository';
+import { getLatestRunForSubject, getRunsForSubject, Run } from '../../storage/runRepository';
 import { emitEvent } from '../engine';
 import { StepContext, StepDefinition } from '../types';
 
@@ -77,6 +77,15 @@ export function cycleOf(ctx: StepContext<DevCycleBaseState>): DevCycle {
 /** The cycle's most recent run of any kind (main pipeline or fix round) — the one the Jira-implement tab shows. */
 export function getLatestDevCycleRun<S extends DevCycleBaseState = DevCycleBaseState>(cycleId: number): Run<S> | undefined {
   return getLatestRunForSubject(DEV_CYCLE_SUBJECT_KIND, String(cycleId)) as Run<S> | undefined;
+}
+
+/**
+ * The run a fix round is working for: the cycle's latest run that is not
+ * itself a fix round — the main pipeline, or a review-feedback round whose
+ * remaining steps (posting the replies) still have to run once the fix lands.
+ */
+export function parentRunOfFixes(cycleId: number): Run | undefined {
+  return getRunsForSubject(DEV_CYCLE_SUBJECT_KIND, String(cycleId)).find((r) => r.kind !== 'dev_cycle_fix');
 }
 
 /**

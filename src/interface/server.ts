@@ -150,7 +150,8 @@ import { pollCodeChangeRequest } from '../integrations/codeChangePoller';
 import { pollJenkinsBuilds } from '../dev/jenkinsMonitor';
 import { getPullRequest, getPullRequestDiff, getPullRequestComments, addPullRequestComment, PrRef } from '../integrations/bitbucketServer';
 import '../orchestration/kinds'; // side-effect only: registers every run kind (pr_review, dev_cycle) with src/orchestration/engine.ts
-import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from '../orchestration/engine';
+import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun, retryRun } from '../orchestration/engine';
+import { parentRunOfFixes } from '../orchestration/kinds/devCycleSteps';
 import { startPrReviewRun, prReviewRequestView } from '../orchestration/kinds/prReviewRun';
 import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwaitingPlanApproval, isDevCycleAwaitingChangeApproval, logDevCycle, devCycleView, devCycleRunSummary, getLatestDevCycleRun } from '../orchestration/kinds/devCycleRun';
 import { startDevCycleFixRun } from '../orchestration/kinds/devCycleFixRun';
@@ -3115,7 +3116,10 @@ export class InterfaceServer {
           return;
         }
         res.json({ started: true });
-        await startDevCycleRun(cycle.id, { completedThrough: 'apply' });
+        // A review-feedback round owns its gate (its replies still have to be posted after it); the main pipeline otherwise.
+        const parent = parentRunOfFixes(cycle.id);
+        if (parent?.kind === 'pr_feedback' && parent.status === 'failed') retryRun(parent.id);
+        else await startDevCycleRun(cycle.id, { completedThrough: 'apply' });
         return;
       }
       res.status(400).json({ error: `Cannot manually rerun step "${step}".` });

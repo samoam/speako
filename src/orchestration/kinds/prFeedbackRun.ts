@@ -18,6 +18,8 @@ export interface PrFeedbackRunState extends DevCycleBaseState {
   round: number;
   /** Set once the round produced a code change (some thread was triaged as 'change'). */
   changeRequestId?: number;
+  /** Same role as DevCycleRunState.fixRoundBase: a retry of this round after fix round N keeps the fix loop's count. */
+  fixRoundBase?: number;
 }
 
 const noChange = (state: PrFeedbackRunState) => (state.changeRequestId ? null : 'Skipped — no code change this round.');
@@ -141,8 +143,9 @@ export const prFeedbackRunDefinition: RunDefinition<PrFeedbackRunState> = {
   steps,
   async finalize(run, outcome, error) {
     if (outcome !== 'failed' || error === INTERRUPTED_ERROR) return;
-    if (run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, 1);
-    else if (run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, 1);
+    const round = (run.state.fixRoundBase ?? 0) + 1;
+    if (run.state.localFailure) await startFixRoundIfPossible(run.state.cycleId, { localFailure: run.state.localFailure }, round);
+    else if (run.state.failedBuild) await startFixRoundIfPossible(run.state.cycleId, { failedBuild: run.state.failedBuild }, round);
   },
   resumeOnRestart: true,
 };

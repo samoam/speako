@@ -85,14 +85,14 @@ export function startRun<S>(params: { kind: string; subjectKind: string; subject
  * step and everything after it run again. Returns null if the run isn't
  * finished yet.
  */
-export function retryRun(runId: number): Run | null {
+export function retryRun(runId: number, statePatch: Record<string, unknown> = {}): Run | null {
   const previous = getRun(runId);
   if (!previous || !['failed', 'cancelled', 'done'].includes(previous.status)) return null;
   return startRun({
     kind: previous.kind,
     subjectKind: previous.subjectKind,
     subjectId: previous.subjectId,
-    state: previous.state,
+    state: { ...previous.state, ...statePatch },
     resume: { completed: previous.steps.filter((s) => s.status === 'done').map((s) => s.key), approved: getRunApprovedSteps(runId) },
   });
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { analyzeChangedFiles, detectJdkHome, extractFailingTests, toBashPath, isToolingFailure } from '../src/dev/localVerify';
+import { analyzeChangedFiles, detectJdkHome, extractFailingTests, toBashPath, isToolingFailure, isRunnerClasspathFailure } from '../src/dev/localVerify';
 
 const isModule = (dir: string) => ['officercc5-service', 'officercc4db', 'officercc-common'].includes(dir);
 
@@ -88,4 +88,11 @@ test('isToolingFailure: a runner bash could not find is a gate problem, a failin
   assert.equal(isToolingFailure(1, 'bash: mvn: command not found\n'), true);
   assert.equal(isToolingFailure(1, 'Tests run: 3, Failures: 1\n1) run(com.gtechna.T)\n'), false);
   assert.equal(isToolingFailure(0, ''), false);
+});
+
+test('isRunnerClasspathFailure: JUnitCore not finding the test class is the runner, not the code', () => {
+  assert.equal(isRunnerClasspathFailure('java.lang.IllegalArgumentException: Could not find class [com.gtechna.officercc5.scheduler.job.LprEventPendingTicketJobTest]\n'), true);
+  assert.equal(isRunnerClasspathFailure('Caused by: java.lang.ClassNotFoundException: com.gtechna.officercc5.scheduler.job.LprEventPendingTicketJobTest\n'), true);
+  assert.equal(isRunnerClasspathFailure('Caused by: java.lang.ClassNotFoundException: com.gtechna.Helper\n1) run(com.gtechna.T)\n'), false, 'a missing production class is a real failure');
+  assert.equal(isRunnerClasspathFailure('Tests run: 3, Failures: 1\n'), false);
 });

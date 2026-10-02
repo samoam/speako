@@ -4,7 +4,9 @@ import { createDevCycle, setDevCycleBranch, getDevCycle } from '../src/storage/d
 import { createCodeChangeRequest } from '../src/storage/codeChangeRequestRepository';
 import * as claudeCodeCliModule from '../src/integrations/claudeCodeCli';
 import { upsertJenkinsBuild, setBuildClassification } from '../src/storage/jenkinsBuildRepository';
-import { getRun, Run } from '../src/storage/runRepository';
+import { getRun, Run, createRun, tryTransitionRun } from '../src/storage/runRepository';
+import * as prFeedbackModule from '../src/dev/prFeedback';
+import '../src/orchestration/kinds/prFeedbackRun';
 import { setRunBroadcast, cancelRun, INTERRUPTED_ERROR } from '../src/orchestration/engine';
 import { StepContext } from '../src/orchestration/types';
 import { devCycleFixRunDefinition, startFixRoundIfPossible, MAX_FIX_ROUNDS, DevCycleFixRunState } from '../src/orchestration/kinds/devCycleFixRun';
@@ -170,4 +172,28 @@ test('dispatchClaudeChange: a change request still running from before a restart
   assert.equal(outcome.diff, 'diff --git a/o b/o\n+from before the restart');
   assert.equal(started.mock.callCount(), 0);
   assert.ok(ctx.logs.some((l) => /Re-attaching to the agent still running/.test(l)));
+});
+
+test("fix run's finalize: a fix for a review-feedback round's failure resumes that round (its replies are still to post), and a no-change round retries it with the round carried", async (t) => {
+  const cycle = cycleWithBranch('FIX-13');
+  // The feedback round that failed its gate, as the engine would have left it.
+  const parent = createRun({ kind: 'pr_feedback', subjectKind: 'dev_cycle', subjectId: String(cycle.id), steps: [{ key: 'gather_feedback', label: 'G', status: 'done', detail: null }, { key: 'apply_feedback', label: 'A', status: 'done', detail: null }, { key: 'verify_locally', label: 'V', status: 'failed', detail: null }, { key: 'post_replies', label: 'P', status: 'pending', detail: null }], state: { cycleId: cycle.id, round: 1 } });
+  tryTransitionRun(parent.id, ['queued'], 'running');
+  tryTransitionRun(parent.id, ['running'], 'failed', 'gate failed');
+  t.mock.method(prFeedbackModule, 'watchDevCyclePr', async () => ({ kind: 'open', threads: [] }) as any);
+
+  const fixRun = { id: 0, kind: 'dev_cycle_fix', subjectKind: 'dev_cycle', subjectId: String(cycle.id), status: 'done', steps: [], state: { cycleId: cycle.id, round: 1, source: { localFailure: { summary: 's', failingTests: [], output: '', modules: [] } } }, currentStep: 'build_and_test', error: null, createdAt: '', updatedAt: '', resolvedAt: null } as any;
+  await devCycleFixRunDefinition.finalize!(fixRun, 'done', null);
+  const resumed = getLatestDevCycleRun<any>(cycle.id)!;
+  assert.equal(resumed.kind, 'pr_feedback');
+  assert.notEqual(resumed.id, parent.id);
+  assert.deepEqual(resumed.steps.filter((s) => s.status === 'done').map((s) => s.key).slice(0, 2), ['gather_feedback', 'apply_feedback'].filter((k) => resumed.steps.some((s) => s.key === k && s.status === 'done')));
+  await cancelRun(resumed.id);
+  tryTransitionRun(resumed.id, ['cancelled'], 'failed', 'gate failed again');
+
+  await devCycleFixRunDefinition.finalize!({ ...fixRun, status: 'failed', currentStep: 'fix', state: { ...fixRun.state, round: 2 } }, 'failed', 'Claude Code agent finished with no file changes.');
+  const retried = getLatestDevCycleRun<any>(cycle.id)!;
+  assert.equal(retried.kind, 'pr_feedback');
+  assert.equal(retried.state.fixRoundBase, 2);
+  await cancelRun(retried.id);
 });

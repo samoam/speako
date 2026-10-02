@@ -6,7 +6,7 @@ import { pollJenkinsBuilds } from '../../dev/jenkinsMonitor';
 import { getTestReport } from '../../integrations/jenkinsClient';
 import { buildFixPrompt, buildLocalFixPrompt } from '../../dev/buildFixPrompt';
 import { BuildFailureAnalysis } from '../../dev/buildFailureClassification';
-import { registerRunKind, startRun, cancelRun, emitEvent, INTERRUPTED_ERROR } from '../engine';
+import { registerRunKind, startRun, cancelRun, retryRun, emitEvent, INTERRUPTED_ERROR } from '../engine';
 import { startDevCycleRun } from './devCycleRun';
 import { RunDefinition, StepEntry } from '../types';
 import {
@@ -20,6 +20,7 @@ import {
   dispatchClaudeChange,
   ensureCycleWorktree,
   getLatestDevCycleRun,
+  parentRunOfFixes,
   pushStep,
   startPrDraftAfterGreenBuild,
   verifyLocallyStep,
@@ -159,8 +160,13 @@ export const devCycleFixRunDefinition: RunDefinition<DevCycleFixRunState> = {
   kind: DEV_CYCLE_FIX_RUN_KIND,
   steps,
   async finalize(run, outcome, error) {
+    const parent = parentRunOfFixes(run.state.cycleId);
     if (outcome === 'done') {
-      await startPrDraftAfterGreenBuild(run.state.cycleId);
+      // A fix for a review-feedback round's failure: the round itself still
+      // has its replies to post (and the build it skipped), so it resumes
+      // from where it failed; the main pipeline's green build drafts the PR.
+      if (parent?.kind === 'pr_feedback' && parent.status === 'failed') retryRun(parent.id);
+      else await startPrDraftAfterGreenBuild(run.state.cycleId);
       return;
     }
     if (outcome !== 'failed' || error === INTERRUPTED_ERROR) return;
@@ -170,7 +176,8 @@ export const devCycleFixRunDefinition: RunDefinition<DevCycleFixRunState> = {
     // again, the next round's number keeps the loop bounded.
     if (run.currentStep === 'fix' && /finished with no file changes/.test(error ?? '')) {
       console.log(`[dev-cycle] cycle ${run.state.cycleId}: fix round ${run.state.round} found nothing to fix — re-running the ${run.state.source.localFailure ? 'local gate' : 'build'}.`);
-      await startDevCycleRun(run.state.cycleId, { completedThrough: run.state.source.localFailure ? 'apply' : 'push', fixRoundBase: run.state.round });
+      if (parent?.kind === 'pr_feedback' && parent.status === 'failed') retryRun(parent.id, { fixRoundBase: run.state.round });
+      else await startDevCycleRun(run.state.cycleId, { completedThrough: run.state.source.localFailure ? 'apply' : 'push', fixRoundBase: run.state.round });
       return;
     }
     const next: FixSource | null = run.state.localFailure ? { localFailure: run.state.localFailure } : run.state.failedBuild ? { failedBuild: run.state.failedBuild } : null;
