@@ -196,6 +196,12 @@ export async function startClaudeCodeTask(prompt: string, repoPath: string, mode
   trustClaudeWorkspace(repoPath);
   const baseArgs = [
     '--bg', prompt,
+    // No MCP servers (same as runClaudeCodeReview): a code-change agent only
+    // needs the checked-out code and its build tool, every MCP tool call is
+    // its own permission prompt — fix round 8 parked on "jenkins-acceo —
+    // Jenkins Search Jobs" looking up the ticket — and without this every
+    // agent also starts all of the user's configured servers (22 seen live).
+    '--strict-mcp-config',
     ...(options.useWorktree === false ? [] : ['--worktree']),
     ...(options.extraDirs ?? []).flatMap((dir) => ['--add-dir', dir]),
     // Confirmed live that --bg accepts --model (a background session
