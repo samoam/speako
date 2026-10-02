@@ -33,12 +33,16 @@ const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)'];
  * remove the problem entirely but `--bg` refuses it until the user has
  * accepted its disclaimer once interactively (confirmed live).
  */
-const ALLOWED_TOOLS = [
-  'Write', 'Edit', 'Read', 'Grep', 'Glob',
-  'Bash(cd:*)', 'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)', 'Bash(tail:*)', 'Bash(wc:*)', 'Bash(find:*)', 'Bash(grep:*)', 'Bash(rg:*)',
-  'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git branch:*)', 'Bash(git fetch:*)', 'Bash(git rev-parse:*)', 'Bash(git ls-files:*)', 'Bash(git grep:*)', 'Bash(git blame:*)',
-  'Bash(mvn:*)', 'Bash(./mvnw:*)', 'Bash(mvnw:*)', 'Bash(gradle:*)', 'Bash(./gradlew:*)', 'Bash(npm test:*)', 'Bash(npm run:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(java:*)', 'Bash(javac:*)',
-];
+// Plain `Bash` (every shell command) rather than per-command patterns: a
+// pattern list was tried first and a compound command with pipes and a
+// quoted `\|` regex still prompted (seen live, round 2 of the same fix) —
+// the CLI's command matcher is conservative with shell syntax it can't
+// parse safely, and an agent blocked once is a failed run. Confirmed live
+// (2026-10-02, through startClaudeCodeTask): with this list the same
+// compound command runs unprompted, and `git commit` is REFUSED outright by
+// the deny rule below rather than prompting — the only restriction that
+// actually matters inside a disposable worktree.
+const ALLOWED_TOOLS = ['Write', 'Edit', 'Read', 'Grep', 'Glob', 'Bash'];
 
 const SPAWN_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 30_000;
@@ -137,22 +141,39 @@ function trustClaudeWorkspace(dirPath: string): void {
  */
 export type ClaudeAgentModel = 'opus' | 'sonnet' | 'haiku';
 
+/**
+ * `claude --bg` returns only once the session is registered, and before
+ * that it may have to start the background service ("Starting background
+ * service…", seen live after a server restart) and `--worktree` has to
+ * `git worktree add` the repo (≈1 min for the 15k-file officercc clone). At
+ * the generic 20s SPAWN_TIMEOUT_MS that combination timed out on our side
+ * while the agent still started — an orphan nobody polled.
+ */
+const BG_SPAWN_TIMEOUT_MS = 3 * 60 * 1000;
+
 export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel): Promise<ClaudeCodeTaskHandle> {
   trustClaudeWorkspace(repoPath);
-  const { stdout } = await execFileAsync(
-    'claude',
-    [
-      '--bg', prompt, '--worktree',
-      // Confirmed live that --bg accepts --model (a background session
-      // started and completed with it); the session listing doesn't report
-      // which model actually ran.
-      ...(model ? ['--model', model] : []),
-      '--permission-mode', 'acceptEdits',
-      '--allowedTools', ...ALLOWED_TOOLS,
-      '--disallowedTools', ...DISALLOWED_TOOLS,
-    ],
-    { cwd: repoPath, timeout: SPAWN_TIMEOUT_MS }
-  );
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      'claude',
+      [
+        '--bg', prompt, '--worktree',
+        // Confirmed live that --bg accepts --model (a background session
+        // started and completed with it); the session listing doesn't report
+        // which model actually ran.
+        ...(model ? ['--model', model] : []),
+        '--permission-mode', 'acceptEdits',
+        '--allowedTools', ...ALLOWED_TOOLS,
+        '--disallowedTools', ...DISALLOWED_TOOLS,
+      ],
+      { cwd: repoPath, timeout: BG_SPAWN_TIMEOUT_MS }
+    ));
+  } catch (err: any) {
+    // The prompt is argv, so the raw "Command failed: claude --bg <whole prompt>…" message is useless; say what actually happened.
+    const detail = err?.killed ? `did not register a session within ${BG_SPAWN_TIMEOUT_MS / 1000}s` : String(err?.stderr || err?.message || err).trim().split('\n').slice(-3).join(' | ').slice(0, 400);
+    throw new Error(`claude --bg failed to start: ${detail}`);
+  }
   const match = stdout.match(/backgrounded\s*[·:]\s*(\S+)/);
   if (!match) {
     throw new Error(`Could not parse a session id from Claude Code's output: ${stdout.slice(0, 300)}`);
@@ -216,10 +237,12 @@ export async function removeAgentScratchWorktree(agentCwd: string, anyWorktreeOf
     // can still hold the directory for a moment (confirmed live: a single
     // immediate remove failed with "Permission denied" on Windows).
     await removeWorktree(agentCwd, anyWorktreeOfRepo);
-    await git(['branch', '-D', `worktree-${match[1]}`], anyWorktreeOfRepo).catch(() => undefined);
   } catch (err: any) {
-    console.error(`[claudeCodeCli] failed to remove agent worktree ${agentCwd}:`, err.message);
+    // `claude stop` of a finished agent sometimes removes its own worktree
+    // first (confirmed live: "is not a working tree") — that's the goal, not an error.
+    if (!/is not a working tree/.test(err.message ?? '')) console.error(`[claudeCodeCli] failed to remove agent worktree ${agentCwd}:`, err.message);
   }
+  await git(['branch', '-D', `worktree-${match[1]}`], anyWorktreeOfRepo).catch(() => undefined);
 }
 
 export async function git(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
