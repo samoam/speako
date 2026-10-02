@@ -123,8 +123,20 @@ export type ChangeOutcome = { request: CodeChangeRequest; status: 'ready' | 'fai
  * — `--bg` has no streaming onProgress, so the tail is the only way to show
  * what the agent is doing rather than "Agent state: running" for minutes.
  */
+/**
+ * Prepended to every background agent prompt. `--worktree` drops the agent
+ * in a scratch checkout of the branch under a throwaway name, and an agent
+ * told "branch X" went looking for it with `git fetch`/`git branch` (seen
+ * live) — pointless, and one prompt away from parking forever. It also
+ * can't commit, so it must leave its edits in the working tree for Speako
+ * to capture, and should prove them with the project's own tests.
+ */
+const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already contains the branch's current code at the right commit. Do not fetch, check out, switch or create branches, and do not commit — leave your edits uncommitted in the working tree; they are captured from there. Before you finish, run the project's relevant tests for the files you changed (e.g. the Maven module's tests) and make them pass.
+
+`;
+
 export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, cycle: DevCycle, prompt: string, worktreePath: string, origin: CodeChangeOrigin): Promise<ChangeOutcome> {
-  const { cliSessionId } = await startClaudeCodeTask(prompt, worktreePath, 'sonnet');
+  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, worktreePath, 'sonnet');
   const request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
   let tailingStopped = false;
   let lastLoggedLength = 0;

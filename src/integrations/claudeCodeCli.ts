@@ -20,15 +20,25 @@ const execFileAsync = promisify(execFile);
 const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)'];
 
 /**
- * `--permission-mode acceptEdits` alone was confirmed flaky for brand-new
- * file creation in a live smoke test: it sometimes silently auto-accepted
- * a `Write` for a new file and sometimes left the agent hung forever on an
- * interactive "Do you want to create X?" prompt it can never answer in
- * `--bg` (headless, no TTY to respond to). Explicitly allowing Write/Edit
- * closed that race in repeated reruns — worth keeping even though
- * acceptEdits should, in principle, already cover this.
+ * A `--bg` agent is headless: any tool call its permission rules don't
+ * cover parks it forever on a "This command requires approval" prompt
+ * nobody can answer (seen live 2026-10-02: a fix agent blocked on its first
+ * command, `cd … && git branch …; git fetch origin …`, and its run failed
+ * with "no file changes"). `--permission-mode acceptEdits` alone was also
+ * confirmed flaky for brand-new file creation (sometimes a hung "create X?"
+ * prompt), hence Write/Edit listed explicitly. So every read-only git
+ * command, the usual file/search commands and the build/test tools an
+ * implementation needs are allowed up front; commit/push stay denied (the
+ * cycle commits and pushes itself, after approval). bypassPermissions would
+ * remove the problem entirely but `--bg` refuses it until the user has
+ * accepted its disclaimer once interactively (confirmed live).
  */
-const ALLOWED_TOOLS = ['Write', 'Edit'];
+const ALLOWED_TOOLS = [
+  'Write', 'Edit', 'Read', 'Grep', 'Glob',
+  'Bash(cd:*)', 'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)', 'Bash(tail:*)', 'Bash(wc:*)', 'Bash(find:*)', 'Bash(grep:*)', 'Bash(rg:*)',
+  'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git branch:*)', 'Bash(git fetch:*)', 'Bash(git rev-parse:*)', 'Bash(git ls-files:*)', 'Bash(git grep:*)', 'Bash(git blame:*)',
+  'Bash(mvn:*)', 'Bash(./mvnw:*)', 'Bash(mvnw:*)', 'Bash(gradle:*)', 'Bash(./gradlew:*)', 'Bash(npm test:*)', 'Bash(npm run:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(java:*)', 'Bash(javac:*)',
+];
 
 const SPAWN_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 30_000;
@@ -167,6 +177,8 @@ export interface ClaudeCodeAgentInfo {
   cwd: string;
   state: string; // e.g. 'running', 'done', 'blocked', 'stopped' — confirmed empirically, not officially enumerated by the CLI's --help
   name: string;
+  /** What a 'blocked' agent is waiting on (confirmed live: "permission prompt"); null otherwise. */
+  waitingFor: string | null;
 }
 
 /** `claude agents --json --all` lists every background/interactive session this machine knows about — filtered here to the one Speako started. Returns null if the CLI has since forgotten about it (e.g. after a `claude rm`). */
@@ -174,7 +186,40 @@ export async function getTaskInfo(cliSessionId: string): Promise<ClaudeCodeAgent
   const { stdout } = await execFileAsync('claude', ['agents', '--json', '--all'], { timeout: SPAWN_TIMEOUT_MS });
   const agents: any[] = JSON.parse(stdout);
   const found = agents.find((a) => a.id === cliSessionId);
-  return found ? { id: found.id, cwd: found.cwd, state: found.state, name: found.name } : null;
+  // waitingFor (confirmed live: "permission prompt") says what a 'blocked' agent is stuck on.
+  return found ? { id: found.id, cwd: found.cwd, state: found.state, name: found.name, waitingFor: found.waitingFor ?? null } : null;
+}
+
+/** Stops a background agent (best-effort — it may already be gone). */
+export async function stopBackgroundTask(cliSessionId: string): Promise<void> {
+  try {
+    await execFileAsync('claude', ['stop', cliSessionId], { timeout: SPAWN_TIMEOUT_MS });
+  } catch (err: any) {
+    console.error(`[claudeCodeCli] stop ${cliSessionId} failed (may have already finished):`, err.message);
+  }
+}
+
+/**
+ * Removes the scratch worktree `--worktree` created for a background agent
+ * (always under the repo's .claude/worktrees/) and its `worktree-*` branch,
+ * once its diff has been captured or it failed. Seen live: seven of these
+ * had accumulated in the user's repo, two of them with zombie agents still
+ * parked on permission prompts. Anything that isn't such a scratch worktree
+ * (e.g. the cycle's own worktree) is left alone.
+ */
+export async function removeAgentScratchWorktree(agentCwd: string, anyWorktreeOfRepo: string): Promise<void> {
+  const normalized = agentCwd.replace(/\\/g, '/');
+  const match = normalized.match(/\/\.claude\/worktrees\/([^/]+)$/);
+  if (!match) return;
+  try {
+    // removeWorktree retries: right after `claude stop` the agent's process
+    // can still hold the directory for a moment (confirmed live: a single
+    // immediate remove failed with "Permission denied" on Windows).
+    await removeWorktree(agentCwd, anyWorktreeOfRepo);
+    await git(['branch', '-D', `worktree-${match[1]}`], anyWorktreeOfRepo).catch(() => undefined);
+  } catch (err: any) {
+    console.error(`[claudeCodeCli] failed to remove agent worktree ${agentCwd}:`, err.message);
+  }
 }
 
 export async function git(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promise<string> {

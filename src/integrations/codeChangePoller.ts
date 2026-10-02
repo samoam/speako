@@ -1,4 +1,4 @@
-import { getTaskInfo, getWorktreeDiff } from './claudeCodeCli';
+import { getTaskInfo, getWorktreeDiff, stopBackgroundTask, removeAgentScratchWorktree } from './claudeCodeCli';
 import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCodeChangeFailed } from '../storage/codeChangeRequestRepository';
 
 /**
@@ -20,7 +20,6 @@ import { getCodeChangeRequest, appendCodeChangeLog, markCodeChangeReady, markCod
 export async function pollCodeChangeRequest(requestId: number, broadcast: (event: Record<string, unknown>) => void): Promise<void> {
   const POLL_INTERVAL_MS = 10_000;
   const MAX_ATTEMPTS = 120; // 20 minutes
-  const MAYBE_DONE_STATES = ['done', 'blocked'];
   const FAILURE_STATES = ['stopped', 'failed', 'error'];
 
   const request = getCodeChangeRequest(requestId);
@@ -68,29 +67,44 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
       log(`Still working… (${Math.round(((attempt + 1) * POLL_INTERVAL_MS) / 60_000)}m elapsed)`);
     }
 
-    if (MAYBE_DONE_STATES.includes(info.state)) {
+    if (info.state === 'blocked') {
+      // Headless, so nobody will ever answer — seen live: an agent parked on
+      // a "This command requires approval" prompt for hours, its half-done
+      // work read as "finished". Stop it and fail with what it wanted.
+      const error = `Claude Code agent is stuck on ${info.waitingFor ? `a ${info.waitingFor}` : 'a prompt'} it cannot answer headlessly — check \`claude logs ${request.cliSessionId}\` for the command; see claudeCodeCli.ts's ALLOWED_TOOLS.`;
+      log(error);
+      await stopBackgroundTask(request.cliSessionId);
+      await removeAgentScratchWorktree(info.cwd, request.repoPath);
+      markCodeChangeFailed(requestId, error);
+      broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
+      return;
+    }
+    if (info.state === 'done') {
       try {
         const diff = await getWorktreeDiff(info.cwd);
         if (!diff.trim()) {
-          const error = `Claude Code agent ended in state "${info.state}" with no file changes — check \`claude logs ${request.cliSessionId}\` for details.`;
+          const error = `Claude Code agent finished with no file changes — check \`claude logs ${request.cliSessionId}\` for what it concluded.`;
           log(error);
           markCodeChangeFailed(requestId, error);
           broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
-          return;
+        } else {
+          log('Agent finished — changes captured, ready for review.');
+          markCodeChangeReady(requestId, info.cwd, diff);
+          broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId });
         }
-        log('Agent finished — changes captured, ready for review.');
-        markCodeChangeReady(requestId, info.cwd, diff);
-        broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId });
       } catch (err: any) {
         log(`Failed to capture diff: ${err.message}`);
         markCodeChangeFailed(requestId, err.message);
         broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error: err.message });
       }
+      // The diff is in the DB now; the agent's scratch worktree has served its purpose.
+      await removeAgentScratchWorktree(info.cwd, request.repoPath);
       return;
     }
     if (FAILURE_STATES.includes(info.state)) {
       const error = `Claude Code agent ended in state "${info.state}" — check \`claude logs ${request.cliSessionId}\` for details.`;
       log(error);
+      await removeAgentScratchWorktree(info.cwd, request.repoPath);
       markCodeChangeFailed(requestId, error);
       broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error });
       return;
