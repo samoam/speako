@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { analyzeChangedFiles, detectJdkHome, extractFailingTests } from '../src/dev/localVerify';
+import { analyzeChangedFiles, detectJdkHome, extractFailingTests, toBashPath, isToolingFailure } from '../src/dev/localVerify';
 
 const isModule = (dir: string) => ['officercc5-service', 'officercc4db', 'officercc-common'].includes(dir);
 
@@ -75,4 +75,17 @@ test('detectJdkHome: picks the JDK whose release file matches the major version 
     if (prev === undefined) delete process.env.SPEAKO_TEST_JDK;
     else process.env.SPEAKO_TEST_JDK = prev;
   }
+});
+
+test('toBashPath: Windows separators become the forward slashes Git Bash accepts', () => {
+  assert.equal(toBashPath('C:\\Users\\madadi\\wt\\.claude\\runASingleUnitTest.sh'), 'C:/Users/madadi/wt/.claude/runASingleUnitTest.sh');
+  assert.equal(toBashPath('/already/posix'), '/already/posix');
+});
+
+test('isToolingFailure: a runner bash could not find is a gate problem, a failing test is not', () => {
+  assert.equal(isToolingFailure(127, ''), true);
+  assert.equal(isToolingFailure(1, '/bin/bash: C:UsersmadadiAppDataLocalTempwt.clauderunASingleUnitTest.sh: No such file or directory\n'), true);
+  assert.equal(isToolingFailure(1, 'bash: mvn: command not found\n'), true);
+  assert.equal(isToolingFailure(1, 'Tests run: 3, Failures: 1\n1) run(com.gtechna.T)\n'), false);
+  assert.equal(isToolingFailure(0, ''), false);
 });

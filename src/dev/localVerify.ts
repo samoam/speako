@@ -93,6 +93,23 @@ export interface LocalVerifyResult {
   /** The tail of the build/test output — what a fix agent gets to read. */
   output: string;
   modules: string[];
+  /** The gate itself could not run (a runner not found, a missing tool) — not the code's fault, so no fix round; fix the machine and retry. */
+  toolingFailure?: boolean;
+}
+
+/**
+ * Git Bash drops the backslashes of a Windows path given as an argument
+ * (confirmed live: `bash C:\...\runASingleUnitTest.sh` → "bash:
+ * C:Usersmadadi...: No such file or directory", exit 127), while the
+ * same path with forward slashes works.
+ */
+export function toBashPath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** Exit 127 is bash's "command/script not found" — the runner never ran, so nothing about the code was tested. */
+export function isToolingFailure(code: number | null, output: string): boolean {
+  return code === 127 || /^(\/bin\/)?bash: .*: No such file or directory/m.test(output) || /^(\/bin\/)?bash: .*: command not found/m.test(output);
 }
 
 const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
@@ -195,10 +212,13 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
       log(`Running ${classes.length} unit test class(es) in ${module}…`);
       const outcome =
         fs.existsSync(script) && jdk17
-          ? await run('bash', [script, module, ...classes, '--offline'], worktreePath, env, signal, onLine)
+          ? await run('bash', [toBashPath(script), module, ...classes, '--offline'], worktreePath, env, signal, onLine)
           : await run(mvn, ['-q', '-pl', module, `-Dtest=${classes.join(',')}`, '-DfailIfNoTests=false', '-Dsurefire.failIfNoSpecifiedTests=false', 'test'], worktreePath, env, signal, onLine);
       output += outcome.output;
       ran.push(...classes);
+      if (isToolingFailure(outcome.code, outcome.output)) {
+        return { ok: false, summary: `The local gate could not run the unit tests in ${module} (runner not found) — see the output.`, failingTests: [], output: tail(output), modules: changed.modules, toolingFailure: true };
+      }
       if (outcome.code !== 0) {
         const failing = extractFailingTests(outcome.output);
         return { ok: false, summary: `Unit tests failed in ${module}: ${failing.length ? failing.join(', ') : classes.join(', ')}.`, failingTests: failing.length ? failing : classes, output: tail(output), modules: changed.modules };
@@ -213,9 +233,12 @@ export async function runLocalVerify(worktreePath: string, baseBranch: string, l
     if (configDir && fs.existsSync(configDir) && fs.existsSync(script) && jdk17) {
       for (const t of changed.integrationTests) {
         log(`Running integration test ${t.fqcn} against ${configDir}…`);
-        const outcome = await run('bash', [script, t.module, t.fqcn, '--config-dir', configDir, '--offline'], worktreePath, { ...env, GTI_APP_CONFIG_PATH: configDir }, signal, onLine);
+        const outcome = await run('bash', [toBashPath(script), t.module, t.fqcn, '--config-dir', toBashPath(configDir), '--offline'], worktreePath, { ...env, GTI_APP_CONFIG_PATH: configDir }, signal, onLine);
         output += outcome.output;
         ran.push(t.fqcn);
+        if (isToolingFailure(outcome.code, outcome.output)) {
+          return { ok: false, summary: `The local gate could not run the integration test ${t.fqcn} (runner not found) — see the output.`, failingTests: [], output: tail(output), modules: changed.modules, toolingFailure: true };
+        }
         if (outcome.code !== 0) {
           const failing = extractFailingTests(outcome.output);
           return { ok: false, summary: `Integration test failed: ${failing.length ? failing.join(', ') : t.fqcn}.`, failingTests: failing.length ? failing : [t.fqcn], output: tail(output), modules: changed.modules };

@@ -139,6 +139,7 @@ import {
 import {
   createCodeChangeRequest,
   getCodeChangeRequest,
+  getCodeChangeRequestsForDevCycle,
   getLatestCodeChangeRequestForActionItem,
   markCodeChangeFailed,
   markCodeChangeApplied,
@@ -3100,6 +3101,21 @@ export class InterfaceServer {
         }
         res.json({ started: true });
         await startDevCycleRun(cycle.id, { completedThrough: 'push' });
+        return;
+      }
+      // The local gate again from the committed diff — for a gate that
+      // failed on the machine's account (a runner it could not start) once
+      // that is fixed, when Retry would only repeat the last fix round.
+      if (step === 'verify_locally') {
+        // The latest *landed* change, not the latest request — a failed fix
+        // round's request is newer than the committed merge diff it followed.
+        const change = getCodeChangeRequestsForDevCycle(cycle.id).find((c) => ['dev_cycle_merge', 'jenkins_fix', 'pr_feedback'].includes(c.origin) && ['applied', 'pushed'].includes(c.status));
+        if (!change) {
+          res.status(400).json({ error: 'No committed diff to verify — approve the diff first.' });
+          return;
+        }
+        res.json({ started: true });
+        await startDevCycleRun(cycle.id, { completedThrough: 'apply' });
         return;
       }
       res.status(400).json({ error: `Cannot manually rerun step "${step}".` });

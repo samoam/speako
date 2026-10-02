@@ -250,7 +250,10 @@ export function verifyLocallyStep<S extends DevCycleBaseState>(options: { skipWh
       const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
       const result = await runLocalVerify(worktreePath, cycle.baseBranch, ctx.log, ctx.signal);
       if (!result.ok) {
-        ctx.state.localFailure = { summary: result.summary, failingTests: result.failingTests, output: result.output, modules: result.modules };
+        // A gate that could not run is not a code failure: no fix round
+        // (seen live: a fix agent correctly found nothing to fix and the
+        // round failed), the step fails for the developer to retry.
+        if (!result.toolingFailure) ctx.state.localFailure = { summary: result.summary, failingTests: result.failingTests, output: result.output, modules: result.modules };
         throw new Error(result.summary);
       }
       ctx.log(result.summary);
