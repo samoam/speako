@@ -72,3 +72,36 @@ test('pollCodeChangeRequest: a finished agent with no changes fails with what it
   assert.equal(after.status, 'failed');
   assert.match(after.error ?? '', /finished with no file changes — it concluded: I cannot fix this safely without the surefire output\. Send me the output for those tests\./);
 });
+
+test('pollCodeChangeRequest: an agent still working at the time limit is stopped and the changes it made so far are kept', { timeout: 30_000 }, async (t) => {
+  const request = createCodeChangeRequest({ origin: 'dev_cycle_implement', repoName: 'r', repoPath: 'C:\cycle-wt', cliSessionId: 'slow-1' });
+  mock.method(claudeCodeCliModule, 'getTaskInfo', async () => ({ id: 'slow-1', cwd: 'C:\tmp\speako-dev-cycle-agent-slow', state: 'working', name: 'x', waitingFor: null }));
+  mock.method(claudeCodeCliModule, 'getWorktreeDiff', async () => 'diff --git a/w b/w\n+partial');
+  const stop = mock.method(claudeCodeCliModule, 'stopBackgroundTask', async () => {});
+  const remove = mock.method(claudeCodeCliModule, 'removeAgentScratchWorktree', async () => {});
+  t.after(() => mock.restoreAll());
+
+  const events: any[] = [];
+  await pollCodeChangeRequest(request.id, (e) => events.push(e), { maxWaitMs: 10_000 });
+  const after = getCodeChangeRequest(request.id)!;
+  assert.equal(after.status, 'ready');
+  assert.equal(after.diff, 'diff --git a/w b/w\n+partial');
+  assert.equal(stop.mock.callCount(), 1, 'no orphan agent is left running');
+  assert.equal(remove.mock.callCount(), 1);
+  assert.ok(after.log.some((l: string) => /Stopped the Claude Code agent at the 0-minute limit/.test(l)));
+  assert.ok(events.some((e) => e.type === 'code-change-ready'));
+});
+
+test('pollCodeChangeRequest: an agent still working at the time limit with nothing changed fails with the timeout', { timeout: 30_000 }, async (t) => {
+  const request = createCodeChangeRequest({ origin: 'dev_cycle_implement', repoName: 'r', repoPath: 'C:\cycle-wt', cliSessionId: 'slow-2' });
+  mock.method(claudeCodeCliModule, 'getTaskInfo', async () => ({ id: 'slow-2', cwd: 'C:\tmp\speako-dev-cycle-agent-slow2', state: 'working', name: 'x', waitingFor: null }));
+  mock.method(claudeCodeCliModule, 'getWorktreeDiff', async () => '');
+  mock.method(claudeCodeCliModule, 'stopBackgroundTask', async () => {});
+  mock.method(claudeCodeCliModule, 'removeAgentScratchWorktree', async () => {});
+  t.after(() => mock.restoreAll());
+
+  await pollCodeChangeRequest(request.id, () => {}, { maxWaitMs: 10_000 });
+  const after = getCodeChangeRequest(request.id)!;
+  assert.equal(after.status, 'failed');
+  assert.match(after.error ?? '', /Timed out waiting for the Claude Code agent after 0 minutes/);
+});

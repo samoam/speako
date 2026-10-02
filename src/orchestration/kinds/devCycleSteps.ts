@@ -35,6 +35,8 @@ import { StepContext, StepDefinition } from '../types';
 export const DEV_CYCLE_SUBJECT_KIND = 'dev_cycle';
 
 const PUSH_TIMEOUT_MS = 10 * 60 * 1000;
+/** How long a change agent may work before it is stopped and its changes so far kept — a medium refactor (13 files, compiling and running tests in between) was still going at 20 minutes, seen live on ETICK-10173. */
+const AGENT_WAIT_MS = 90 * 60 * 1000;
 /** A cold compile of the changed modules plus their upstream reactor siblings, then the changed tests — the big reactor can take a while from a fresh worktree. */
 const LOCAL_VERIFY_TIMEOUT_MS = 45 * 60 * 1000;
 /** The integration job runs the whole suite (~3,200 tests, ~20 min seen live) and may wait for an executor first. */
@@ -178,7 +180,7 @@ export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, 
       }
     }
   })();
-  await pollCodeChangeRequest(request.id, emitEvent);
+  await pollCodeChangeRequest(request.id, emitEvent, { maxWaitMs: AGENT_WAIT_MS });
   tailingStopped = true;
   await tail;
   const finished = getCodeChangeRequest(request.id)!;

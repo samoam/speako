@@ -77,10 +77,15 @@ async function describeAgentConclusion(cliSessionId: string): Promise<string> {
   }
 }
 
-export async function pollCodeChangeRequest(requestId: number, broadcast: (event: Record<string, unknown>) => void): Promise<void> {
+export async function pollCodeChangeRequest(requestId: number, broadcast: (event: Record<string, unknown>) => void, options: { maxWaitMs?: number } = {}): Promise<void> {
   const POLL_INTERVAL_MS = 10_000;
-  const MAX_ATTEMPTS = 120; // 20 minutes
+  // 20 minutes suits a one-file fix; a dev-cycle implementation passes its
+  // own budget (seen live: a 13-file refactor was still compiling and
+  // testing at the 20-minute mark and got cut off).
+  const maxWaitMs = options.maxWaitMs ?? 20 * 60 * 1000;
+  const MAX_ATTEMPTS = Math.max(1, Math.ceil(maxWaitMs / POLL_INTERVAL_MS));
   const FAILURE_STATES = ['stopped', 'failed', 'error'];
+  let lastInfo: Awaited<ReturnType<typeof getTaskInfo>> = null;
 
   const request = getCodeChangeRequest(requestId);
   if (!request) return;
@@ -117,6 +122,7 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
     }
     consecutiveFailures = 0;
     if (!info) continue; // not registered yet, or briefly missing — keep polling
+    lastInfo = info;
 
     if (info.state !== lastState) {
       log(`Agent state: ${info.state}`);
@@ -184,7 +190,28 @@ export async function pollCodeChangeRequest(requestId: number, broadcast: (event
     // else: still running (or an unrecognized-but-non-terminal status) — keep polling
   }
 
-  const timeoutError = 'Timed out waiting for the Claude Code agent after 20 minutes.';
+  // Out of time with the agent still going. Its work so far is worth more
+  // than nothing: stop it and keep whatever it changed (the reviewer sees
+  // the note, and the local gate catches an unfinished refactor), rather
+  // than leaving an orphan agent running and failing with empty hands.
+  const minutes = Math.round(maxWaitMs / 60_000);
+  await stopBackgroundTask(request.cliSessionId);
+  let diff = '';
+  if (lastInfo) {
+    try {
+      diff = await getWorktreeDiff(lastInfo.cwd);
+    } catch (err: any) {
+      log(`Failed to capture the diff at the time limit: ${err.message}`);
+    }
+    await removeAgentScratchWorktree(lastInfo.cwd, request.repoPath);
+  }
+  if (diff.trim()) {
+    log(`Stopped the Claude Code agent at the ${minutes}-minute limit — keeping the changes it made so far; they may be incomplete.`);
+    markCodeChangeReady(requestId, lastInfo!.cwd, diff);
+    broadcast({ type: 'code-change-ready', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId });
+    return;
+  }
+  const timeoutError = `Timed out waiting for the Claude Code agent after ${minutes} minutes.`;
   log(timeoutError);
   markCodeChangeFailed(requestId, timeoutError);
   broadcast({ type: 'code-change-failed', actionItemId: request.actionItemId, taskId: request.taskId, devCycleId: request.devCycleId, requestId, error: timeoutError });
