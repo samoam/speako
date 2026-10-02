@@ -199,6 +199,8 @@ export function applyStep<S extends DevCycleBaseState>(options: {
   /** The change to land — looked up at run time so a retry sees the same row. */
   request: (state: S) => CodeChangeRequest | undefined;
   commitMessage: (cycle: DevCycle, ticketSummary: string | null, state: S) => string;
+  /** A round may legitimately have no code change (review feedback answered with replies only) — then this step is a no-op rather than a failure. */
+  changeOptional?: boolean;
 }): StepDefinition<S> {
   return {
     key: options.key,
@@ -208,6 +210,10 @@ export function applyStep<S extends DevCycleBaseState>(options: {
     async run(ctx) {
       const cycle = cycleOf(ctx);
       const request = options.request(ctx.state);
+      if (!request && options.changeOptional) {
+        ctx.log('No code change this round.');
+        return 'No code change this round.';
+      }
       if (!request || !['ready', 'applied', 'pushed'].includes(request.status) || !cycle.branchName) throw new Error('No change ready to apply.');
       const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
       if (request.status === 'ready') {
@@ -230,12 +236,14 @@ export function applyStep<S extends DevCycleBaseState>(options: {
  * failure records the evidence in state.localFailure and fails the run, so
  * the fix loop can take over without a Jenkins round.
  */
-export function verifyLocallyStep<S extends DevCycleBaseState>(): StepDefinition<S> {
+export function verifyLocallyStep<S extends DevCycleBaseState>(options: { skipWhen?: (state: S) => string | null } = {}): StepDefinition<S> {
   return {
     key: 'verify_locally',
     label: 'Build & test locally',
     timeoutMs: LOCAL_VERIFY_TIMEOUT_MS,
     async run(ctx) {
+      const skip = options.skipWhen?.(ctx.state);
+      if (skip) return skip;
       const cycle = cycleOf(ctx);
       const worktreePath = await ensureCycleWorktree(cycle, ctx.log);
       const result = await runLocalVerify(worktreePath, cycle.baseBranch, ctx.log, ctx.signal);
@@ -250,12 +258,14 @@ export function verifyLocallyStep<S extends DevCycleBaseState>(): StepDefinition
 }
 
 /** Pushes the branch once the local gate passed. Resumable like applyStep: a change already marked pushed is not pushed again. */
-export function pushStep<S extends DevCycleBaseState>(options: { request: (state: S) => CodeChangeRequest | undefined }): StepDefinition<S> {
+export function pushStep<S extends DevCycleBaseState>(options: { request: (state: S) => CodeChangeRequest | undefined; skipWhen?: (state: S) => string | null }): StepDefinition<S> {
   return {
     key: 'push',
     label: 'Push',
     timeoutMs: PUSH_TIMEOUT_MS,
     async run(ctx) {
+      const skip = options.skipWhen?.(ctx.state);
+      if (skip) return skip;
       const cycle = cycleOf(ctx);
       const request = options.request(ctx.state);
       if (!request || !cycle.branchName) throw new Error('No committed change to push.');
@@ -292,12 +302,14 @@ export function pushStep<S extends DevCycleBaseState>(options: { request: (state
  * failed in `state.failedBuild` before throwing, so the run's finalize can
  * start a fix round. Skipped (not failed) when no job is configured.
  */
-export function buildAndTestStep<S extends DevCycleBaseState>(): StepDefinition<S> {
+export function buildAndTestStep<S extends DevCycleBaseState>(options: { skipWhen?: (state: S) => string | null } = {}): StepDefinition<S> {
   return {
     key: 'build_and_test',
     label: 'Build & test on Jenkins',
     timeoutMs: BUILD_TIMEOUT_MS,
     async run(ctx) {
+      const skip = options.skipWhen?.(ctx.state);
+      if (skip) return skip;
       const cycle = cycleOf(ctx);
       if (!config.jenkinsTestJob) return 'Skipped — no build & test job configured (Settings > Jenkins).';
       if (!cycle.branchName) throw new Error('This cycle has no branch to build.');

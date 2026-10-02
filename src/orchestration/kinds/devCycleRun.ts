@@ -355,7 +355,7 @@ export function devCycleStepsThrough(through: DevCycleStepKey): DevCycleStepKey[
 }
 
 /** The human gates across the cycle's run kinds; a resume that already includes a gate's step implies its approval, since that step only ever ran after a human approved. */
-const GATE_STEPS = ['branch_and_worktrees', 'apply', 'apply_fix'] as const;
+const GATE_STEPS = ['branch_and_worktrees', 'apply', 'apply_fix', 'apply_feedback'] as const;
 export type DevCycleGate = (typeof GATE_STEPS)[number];
 
 /**
@@ -393,7 +393,7 @@ export function isDevCycleAwaitingPlanApproval(cycleId: number): boolean {
 /** True while a diff (the merged implementation, or a fix round's change) waits for the human — both land through the same approve. */
 export function isDevCycleAwaitingChangeApproval(cycleId: number): boolean {
   const gate = devCycleAwaitingGate(cycleId);
-  return gate === 'apply' || gate === 'apply_fix';
+  return gate === 'apply' || gate === 'apply_fix' || gate === 'apply_feedback';
 }
 
 /** Resumes the run from whichever gate it's parked on (the routes check which one first). */
@@ -416,6 +416,8 @@ export interface DevCycleRunSummary {
   error: string | null;
   /** Fix rounds only. */
   fixRound: number | null;
+  /** Review-feedback rounds only. */
+  feedbackRound: number | null;
   awaitingGate: DevCycleGate | null;
 }
 
@@ -429,6 +431,7 @@ export function devCycleRunSummary(cycleId: number): DevCycleRunSummary | null {
     currentStep: run.currentStep,
     error: run.error,
     fixRound: run.kind === DEV_CYCLE_FIX_RUN_KIND ? run.state.round ?? null : null,
+    feedbackRound: run.kind === 'pr_feedback' ? run.state.round ?? null : null,
     awaitingGate: devCycleAwaitingGate(cycleId),
   };
 }

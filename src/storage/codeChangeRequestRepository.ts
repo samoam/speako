@@ -2,7 +2,7 @@ import { db } from './db';
 import { stampLogLine } from './logLine';
 
 export type CodeChangeStatus = 'running' | 'ready' | 'applied' | 'pushed' | 'discarded' | 'failed';
-export type CodeChangeOrigin = 'action_item' | 'task' | 'dev_plan' | 'jenkins_fix' | 'dev_cycle_implement' | 'dev_cycle_merge';
+export type CodeChangeOrigin = 'action_item' | 'task' | 'dev_plan' | 'jenkins_fix' | 'dev_cycle_implement' | 'dev_cycle_merge' | 'pr_feedback';
 
 export interface CodeChangeRequest {
   id: number;

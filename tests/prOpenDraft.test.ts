@@ -218,6 +218,7 @@ test('prOpenDraft.execute: opens the PR, records it on the cycle, and refuses a 
     const updated = getDevCycle(cycle.id)!;
     assert.equal(updated.prId, 101);
     assert.equal(updated.prUrl, 'https://bitbucket/pr/101');
+    assert.equal(updated.status, 'active', 'the cycle stays open for the review-feedback loop until the PR is merged');
 
     await assert.rejects(() => prOpenDraft.execute('open', { draft: {} as any, subject: updated, content }), /already has an open PR/);
   } finally {

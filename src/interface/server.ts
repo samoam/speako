@@ -153,6 +153,8 @@ import { setRunBroadcast, reconcileRunsOnStartup, isRunActive, cancelRun } from 
 import { startPrReviewRun, prReviewRequestView } from '../orchestration/kinds/prReviewRun';
 import { startDevCycleRun, retryDevCycleRun, approveDevCycleGate, isDevCycleAwaitingPlanApproval, isDevCycleAwaitingChangeApproval, logDevCycle, devCycleView, devCycleRunSummary, getLatestDevCycleRun } from '../orchestration/kinds/devCycleRun';
 import { startDevCycleFixRun } from '../orchestration/kinds/devCycleFixRun';
+import { startPrFeedbackRun, syncDevCyclePrFeedback } from '../orchestration/kinds/prFeedbackRun';
+import { getFeedbackForCycle } from '../storage/devCycleFeedbackRepository';
 import { hasTextProvider, NO_TEXT_PROVIDER_MESSAGE } from '../ai/aiRouter';
 import { getAiUsageSince } from '../storage/aiUsageRepository';
 import { getBuildsForDevCycle } from '../storage/jenkinsBuildRepository';
@@ -2937,13 +2939,14 @@ export class InterfaceServer {
       }
       const implementations = getDevCycleImplementationsForCycle(cycle.id, cycle.round);
       // The Diff tab shows whichever change is current: the merged
-      // implementation, or a fix round's diff once one exists.
-      const pendingChange = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
+      // implementation, a fix round's diff, or a review-feedback round's.
+      const pendingChange = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix', 'pr_feedback']);
       res.json({
         cycle: devCycleView(cycle),
         run: devCycleRunSummary(cycle.id),
         implementations,
         pendingChange: pendingChange ?? null,
+        feedback: getFeedbackForCycle(cycle.id),
         builds: getBuildsForDevCycle(cycle.id),
         buildRequests: getJenkinsBuildRequestsForCycle(cycle.id),
         testJob: config.jenkinsTestJob || null,
@@ -3122,7 +3125,7 @@ export class InterfaceServer {
         res.status(400).json({ error: 'instruction is required.' });
         return;
       }
-      const mergeRequest = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
+      const mergeRequest = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix', 'pr_feedback']);
       if (!mergeRequest || mergeRequest.status !== 'ready' || !cycle.worktreePath) {
         res.status(400).json({ error: 'No diff ready to refine.' });
         return;
@@ -3156,7 +3159,7 @@ export class InterfaceServer {
         res.status(409).json({ error: 'This cycle is not waiting on a diff approval.' });
         return;
       }
-      const change = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix']);
+      const change = getLatestCodeChangeRequestForDevCycle(cycle.id, ['dev_cycle_merge', 'jenkins_fix', 'pr_feedback']);
       if (!change || change.status !== 'ready' || !cycle.branchName) {
         res.status(400).json({ error: 'No diff ready to apply.' });
         return;
@@ -3201,6 +3204,59 @@ export class InterfaceServer {
       const round = latest?.kind === 'dev_cycle_fix' ? (latest.state.round ?? 1) + 1 : 1;
       res.json({ started: true, round });
       await startDevCycleFixRun(cycle.id, { failedBuild }, round);
+    });
+
+    // Looks at the cycle's PR right now instead of waiting for the next
+    // Bitbucket sync: picks up reviewer threads and starts a feedback round
+    // when there is anything to answer (or notices the merge).
+    app.post('/api/jira-implement/:id/feedback/check', async (req, res) => {
+      const cycle = getDevCycle(Number(req.params.id));
+      if (!cycle) {
+        res.status(404).json({ error: 'Unknown dev cycle.' });
+        return;
+      }
+      if (!cycle.prId) {
+        res.status(400).json({ error: 'This cycle has no pull request yet.' });
+        return;
+      }
+      try {
+        res.json({ outcome: await syncDevCyclePrFeedback(cycle.id) });
+      } catch (err: any) {
+        res.status(502).json({ error: err.message });
+      }
+    });
+
+    // Starts a feedback round by hand even when the sync would not (e.g. the
+    // previous round failed and the threads are still open).
+    app.post('/api/jira-implement/:id/feedback/start', async (req, res) => {
+      const cycle = getDevCycle(Number(req.params.id));
+      if (!cycle) {
+        res.status(404).json({ error: 'Unknown dev cycle.' });
+        return;
+      }
+      if (!cycle.prId || cycle.status !== 'active') {
+        res.status(400).json({ error: 'This cycle has no open pull request.' });
+        return;
+      }
+      const run = await startPrFeedbackRun(cycle.id);
+      res.json({ started: true, runId: run.id });
+    });
+
+    // A feedback round's gate covers the replies and the code change
+    // together; unlike the merge gate it may have no diff at all (every
+    // thread answered with a reply), so it is approved here, not through
+    // /merge/approve.
+    app.post('/api/jira-implement/:id/feedback/approve', (req, res) => {
+      const cycle = getDevCycle(Number(req.params.id));
+      if (!cycle) {
+        res.status(404).json({ error: 'Unknown dev cycle.' });
+        return;
+      }
+      if (devCycleRunSummary(cycle.id)?.awaitingGate !== 'apply_feedback') {
+        res.status(409).json({ error: 'This cycle is not waiting on review-feedback approval.' });
+        return;
+      }
+      res.json({ applied: approveDevCycleGate(cycle.id) });
     });
 
     app.post('/api/jira-implement/:id/discard', async (req, res) => {

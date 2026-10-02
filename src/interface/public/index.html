@@ -372,6 +372,13 @@
     .pr-review-phase-failed .pr-review-phase-icon { background: rgba(220,80,80,0.2); color: #f0a3a3; }
     .pr-review-phase-skipped .pr-review-phase-icon { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px dashed var(--border); }
     .pr-review-phase-skipped .pr-review-phase-label { color: var(--muted); text-decoration: line-through; }
+    .jira-implement-feedback-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+    .jira-implement-feedback-item.status-answered { opacity: 0.7; }
+    .jira-implement-feedback-head { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .jira-implement-feedback-text { white-space: pre-wrap; }
+    .jira-implement-feedback-triage { margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .jira-implement-feedback-reply { white-space: pre-wrap; border-left: 3px solid var(--border); padding-left: 10px; margin-top: 4px; }
+    .jira-implement-feedback-instruction { white-space: pre-wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
     .pr-review-phase-failed .pr-review-phase-detail { color: #e08a8a; }
     #taskDetailPrReviewSummaryRow { display: flex; align-items: flex-start; gap: 0.6rem; background: #1f1f23; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     #taskDetailPrReviewSummary { flex: 1; font-size: 0.9rem; line-height: 1.5; }
@@ -1918,6 +1925,7 @@
               <button class="jira-implement-tab" data-tab="diff" type="button">Diff</button>
               <button class="jira-implement-tab" data-tab="pr" type="button">Open PR</button>
               <button class="jira-implement-tab" data-tab="tests" type="button">Build &amp; tests</button>
+              <button class="jira-implement-tab" data-tab="feedback" type="button">Review feedback</button>
               <button class="jira-implement-tab" data-tab="docs" type="button">Document</button>
             </div>
             <div class="jira-implement-content">
@@ -1971,6 +1979,17 @@
               </div>
               <div class="jira-implement-tab-panel" id="jiraImplementTestsSection" hidden>
                 <div id="jiraImplementTestsBody"></div>
+              </div>
+              <!-- Reviewer threads on the cycle's PR and what the feedback
+                   round made of each (reply / code change) — the one place to
+                   approve a round's replies when it produced no diff. -->
+              <div class="jira-implement-tab-panel" id="jiraImplementFeedbackSection" hidden>
+                <div id="jiraImplementFeedbackBody"></div>
+                <div class="jira-implement-refine-row">
+                  <button id="jiraImplementFeedbackCheckBtn" class="tool-btn" type="button">Check the PR now</button>
+                  <button id="jiraImplementFeedbackStartBtn" class="tool-btn" type="button" hidden>Address feedback</button>
+                  <button id="jiraImplementFeedbackApproveBtn" class="tool-btn" type="button" hidden>Approve replies &amp; changes</button>
+                </div>
               </div>
             </div>
           </div>
@@ -6322,6 +6341,14 @@
     const jiraImplementDocsSection = document.getElementById('jiraImplementDocsSection');
     const jiraImplementDocsBody = document.getElementById('jiraImplementDocsBody');
     const jiraImplementTestsSection = document.getElementById('jiraImplementTestsSection');
+    const jiraImplementFeedbackSection = document.getElementById('jiraImplementFeedbackSection');
+    const jiraImplementFeedbackBody = document.getElementById('jiraImplementFeedbackBody');
+    const jiraImplementFeedbackCheckBtn = document.getElementById('jiraImplementFeedbackCheckBtn');
+    jiraImplementFeedbackCheckBtn.addEventListener('click', () => jiraImplementFeedbackAction(jiraImplementFeedbackCheckBtn, 'feedback/check'));
+    const jiraImplementFeedbackStartBtn = document.getElementById('jiraImplementFeedbackStartBtn');
+    jiraImplementFeedbackStartBtn.addEventListener('click', () => jiraImplementFeedbackAction(jiraImplementFeedbackStartBtn, 'feedback/start'));
+    const jiraImplementFeedbackApproveBtn = document.getElementById('jiraImplementFeedbackApproveBtn');
+    jiraImplementFeedbackApproveBtn.addEventListener('click', () => jiraImplementFeedbackAction(jiraImplementFeedbackApproveBtn, 'feedback/approve'));
     const jiraImplementTestsBody = document.getElementById('jiraImplementTestsBody');
     // Wired right here next to its const (not near the renderer below) — see
     // the TDZ note on index.html script ordering: a listener attached before
@@ -6561,9 +6588,12 @@
     function renderJiraImplementMerge(cycle, change, run) {
       if (!change) return;
       const isFix = change.origin === 'jenkins_fix';
+      const isFeedback = change.origin === 'pr_feedback';
       jiraImplementMergeBody.textContent =
         change.status === 'ready'
-          ? isFix
+          ? isFeedback
+            ? 'Changes from review feedback ready — approve to commit, verify, push and reply on the PR, or ask for changes below.'
+            : isFix
             ? `Fix${jiraImplementFailedBuildLabel(run)} ready — approve to commit, push and rebuild, or ask for changes below.`
             : 'Ready for review — approve to commit, push and build on Jenkins, or ask for changes below.'
           : `Status: ${change.status}`;
@@ -6575,7 +6605,7 @@
       selectJiraImplementDiffFile(pathToSelect);
       // Approve/refine only while the run is actually parked on this diff's
       // gate — afterwards the tab still shows it for reference, actions hidden.
-      const editable = run?.awaitingGate === 'apply' || run?.awaitingGate === 'apply_fix';
+      const editable = run?.awaitingGate === 'apply' || run?.awaitingGate === 'apply_fix' || run?.awaitingGate === 'apply_feedback';
       jiraImplementMergeApproveBtn.hidden = !editable;
       jiraImplementMergeRefineBtn.hidden = !editable;
       jiraImplementMergeRefineInput.hidden = !editable;
@@ -6589,7 +6619,7 @@
       return run?.fixRound ? ` (fix round ${run.fixRound})` : '';
     }
 
-    const JIRA_IMPLEMENT_TAB_ORDER = ['log', 'context', 'plan', 'diff', 'pr', 'tests', 'docs'];
+    const JIRA_IMPLEMENT_TAB_ORDER = ['log', 'context', 'plan', 'diff', 'pr', 'tests', 'feedback', 'docs'];
     const JIRA_IMPLEMENT_TAB_PANELS = {
       log: jiraImplementLogPanel,
       context: jiraImplementAnalyzeSection,
@@ -6597,6 +6627,7 @@
       diff: jiraImplementMergeSection,
       pr: jiraImplementPrSection,
       tests: jiraImplementTestsSection,
+      feedback: jiraImplementFeedbackSection,
       docs: jiraImplementDocsSection,
     };
     let activeJiraImplementTab = 'log';
@@ -6617,6 +6648,7 @@
         pr: !!currentJiraImplementPrDraft || cycle.currentStep === 'done',
         docs: !!currentJiraImplementDocsDraft || cycle.currentStep === 'done',
         tests: !!cycle.branchName,
+        feedback: !!cycle.prId,
       };
     }
 
@@ -6874,7 +6906,7 @@
       }
     });
 
-    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft, builds, buildRequests, testJob, run) {
+    function renderJiraImplement(cycle, implementations, mergeRequest, prDraft, docsDraft, builds, buildRequests, testJob, run, feedback) {
       jiraImplementTitle.textContent = cycle.ticketKey;
       jiraImplementMeta.textContent = jiraImplementMetaText(cycle, run);
       // A red build the runs didn't (or can't any more) fix on their own —
@@ -6888,6 +6920,7 @@
       renderJiraImplementPr(prDraft);
       renderJiraImplementDocs(docsDraft);
       jiraImplementTestsBody.innerHTML = cycle.branchName ? jiraImplementTestsHtml(cycle, builds, buildRequests, testJob) : '';
+      renderJiraImplementFeedback(cycle, feedback, run);
       renderJiraImplementTabs(cycle, mergeRequest);
       // "New requirement added to the ticket" is only meaningful once
       // there's a plan to redo, and once the cycle isn't already finished.
@@ -6901,7 +6934,7 @@
         fetchJiraImplementDraft(cycleId, 'confluence_dev_cycle_update'),
       ]);
       if (body.error) return;
-      renderJiraImplement(body.cycle, body.implementations, body.pendingChange, prDraft, docsDraft, body.builds, body.buildRequests, body.testJob, body.run);
+      renderJiraImplement(body.cycle, body.implementations, body.pendingChange, prDraft, docsDraft, body.builds, body.buildRequests, body.testJob, body.run, body.feedback || []);
     }
 
     /** Entry point for the "Implement ticket…" button — a dev cycle started
@@ -7018,12 +7051,58 @@
     // regenerates the plan from scratch under a bumped round, leaving any
     // already-created branch/worktrees in place to be reused once the new
     // plan is re-approved.
+    const JIRA_IMPLEMENT_FEEDBACK_STATUS = { open: 'Waiting for triage', triaged: 'Ready to post', answered: 'Answered' };
+
+    function renderJiraImplementFeedback(cycle, feedback, run) {
+      if (!cycle.prId) {
+        jiraImplementFeedbackBody.innerHTML = '';
+        return;
+      }
+      const awaiting = run?.awaitingGate === 'apply_feedback';
+      const busy = run && !['done', 'failed', 'cancelled'].includes(run.status) && !awaiting;
+      const open = feedback.filter((f) => f.status !== 'answered');
+      const intro = !feedback.length
+        ? 'No reviewer threads need a response yet. The PR is checked on every Bitbucket sync; a round starts on its own when a reviewer comments.'
+        : awaiting
+          ? 'Review the replies below (and the diff, if there is one), then approve to post them and update the branch.'
+          : open.length
+            ? `${open.length} thread(s) waiting for a response.`
+            : 'Every reviewer thread has been answered.';
+      const items = feedback
+        .map((f) => {
+          const where = f.anchorPath ? `${escapeHtml(f.anchorPath)}${f.anchorLine ? ':' + f.anchorLine : ''}` : 'general comment';
+          const triage = f.action
+            ? `<div class="jira-implement-feedback-triage"><strong>${f.action === 'change' ? 'Change' : 'Answer'}</strong>${f.resolved ? ' · resolved' : ''}</div><div class="jira-implement-feedback-reply">${escapeHtml(f.reply || '')}</div>${f.changeInstruction ? `<div class="jira-implement-feedback-instruction">${escapeHtml(f.changeInstruction)}</div>` : ''}`
+            : '';
+          return `<div class="jira-implement-feedback-item status-${f.status}"><div class="jira-implement-feedback-head"><strong>${escapeHtml(f.author)}</strong> · ${where} · round ${f.round} · ${JIRA_IMPLEMENT_FEEDBACK_STATUS[f.status] || f.status}</div><div class="jira-implement-feedback-text">${escapeHtml(f.text)}</div>${triage}</div>`;
+        })
+        .join('');
+      jiraImplementFeedbackBody.innerHTML = `<p>${intro}</p>${items}`;
+      jiraImplementFeedbackApproveBtn.hidden = !awaiting;
+      jiraImplementFeedbackStartBtn.hidden = !(open.length && !busy && !awaiting);
+      jiraImplementFeedbackCheckBtn.disabled = !!busy;
+    }
+
+    async function jiraImplementFeedbackAction(btn, action) {
+      if (!currentJiraImplementCycleId) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/jira-implement/${currentJiraImplementCycleId}/${action}`, { method: 'POST' }).then((r) => r.json());
+        if (res.error) alert(res.error);
+        else if (res.outcome === 'merged') alert('The pull request has been merged — the cycle is done.');
+        else if (res.outcome === 'idle') alert('No reviewer threads are waiting for a response.');
+        await loadJiraImplement(currentJiraImplementCycleId);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     /** The rail's one-line status: what the current run is doing, in the user's terms, rather than just the branch name. */
     function jiraImplementMetaText(cycle, run) {
       if (!run) return cycle.branchName ? `Branch: ${cycle.branchName}` : 'Gathering context…';
-      const round = run.kind === 'dev_cycle_fix' ? `Fix round ${run.fixRound} — ` : '';
+      const round = run.kind === 'dev_cycle_fix' ? `Fix round ${run.fixRound} — ` : run.kind === 'pr_feedback' ? `Review feedback round ${run.feedbackRound} — ` : '';
       if (run.status === 'waiting_approval') {
-        const what = run.awaitingGate === 'branch_and_worktrees' ? 'the plan (Plan tab)' : 'the diff (Diff tab)';
+        const what = run.awaitingGate === 'branch_and_worktrees' ? 'the plan (Plan tab)' : run.awaitingGate === 'apply_feedback' ? 'the replies and changes (Review feedback tab)' : 'the diff (Diff tab)';
         return `${round}Waiting for your approval of ${what}`;
       }
       if (run.status === 'failed') return `${round}Failed — ${run.error ? run.error.split('\n')[0].slice(0, 120) : 'see the step list'}`;

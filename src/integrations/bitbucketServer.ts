@@ -456,6 +456,23 @@ export async function addPullRequestComment(pr: PrRef, input: BitbucketCommentIn
   return { id: raw.id, version: raw.version };
 }
 
+/**
+ * Marks a comment thread resolved. Bitbucket Data Center (10.2 here) only
+ * lets *blocker* comments carry a state, so a normal comment is left as is
+ * (false) — the reply is the response in that case. NOT yet confirmed live
+ * on this instance: the shape follows the REST docs (GET the comment for
+ * its `version`, PUT `{version, state: 'RESOLVED'}`); callers treat a
+ * failure as non-fatal.
+ */
+export async function resolvePullRequestComment(pr: PrRef, commentId: number): Promise<boolean> {
+  const base = `/rest/api/1.0/projects/${encodeURIComponent(pr.projectKey)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/comments/${commentId}`;
+  const comment = await apiGet(base);
+  if (comment?.severity !== 'BLOCKER') return false;
+  if (comment.state === 'RESOLVED') return true;
+  await apiSend(base, 'PUT', { version: comment.version, state: 'RESOLVED' });
+  return true;
+}
+
 export type PullRequestParticipantStatus = 'APPROVED' | 'UNAPPROVED' | 'NEEDS_WORK';
 
 /**

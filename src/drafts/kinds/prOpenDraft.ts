@@ -1,5 +1,5 @@
 import { config } from '../../config';
-import { DevCycle, getDevCycle, setDevCyclePr, closeDevCycle } from '../../storage/devCycleRepository';
+import { DevCycle, getDevCycle, setDevCyclePr } from '../../storage/devCycleRepository';
 import { getLatestDraftForSubject } from '../../storage/draftRepository';
 import { getJiraIssueDetail } from '../../integrations/jiraMcp';
 import { getBranchDiffStat, branchExistsOnRemote } from '../../integrations/gitBranches';
@@ -121,15 +121,16 @@ export const prOpenDraft: DraftHandler<DevCycle> = {
       reviewerUsernames: content.reviewers,
     });
     setDevCyclePr(cycle.id, { projectKey: content.projectKey, repoSlug: content.repoSlug, prId: pr.id, prUrl: pr.link });
-    // The PR is the cycle's deliverable: close it as done here (nothing else
-    // ever did, so cycles stayed 'active' forever — polled by Jenkins, their
-    // worktrees never removed, and a restart of the same ticket got the old
-    // cycle back). The worktrees are disposable; jenkinsFixDraft re-creates
-    // one if a fix is needed after this point.
+    // The cycle stays active until the PR is merged or declined: the review
+    // feedback loop (src/dev/prFeedback.ts, driven by the Bitbucket sync)
+    // answers reviewer threads and updates the branch in the meantime, and
+    // closes the cycle itself. Before that loop existed the cycle was closed
+    // here, otherwise cycles stayed 'active' forever. The worktrees are
+    // disposable — a feedback or fix round re-creates one when it needs it
+    // (ensureCycleWorktree).
     for (const worktree of [cycle.worktreePath, cycle.worktreePathGemini]) {
       if (worktree) await removeWorktree(worktree, cycle.repoPath).catch((err: any) => console.error(`[pr-open] failed to remove worktree ${worktree}:`, err.message));
     }
-    closeDevCycle(cycle.id, 'done');
     return { projectKey: content.projectKey, repoSlug: content.repoSlug, prId: pr.id, prUrl: pr.link };
   },
   legacyBroadcast(draft) {

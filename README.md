@@ -25,7 +25,7 @@ src/
   suggestions/     category-specific prompts generating proactive suggestions
   storage/         SQLite schema and all persistence (transcript/summary/etc.)
   drafts/          draft-gate: AI-proposed external writes reviewed/approved before executing
-  orchestration/   run engine + the multi-step pipelines built on it (PR review, Jira implement)
+  orchestration/   run engine + the multi-step pipelines built on it (PR review, Jira implement, its fix and review-feedback rounds)
   dev/             dev-cycle building blocks (planning, branch naming, merge, Jenkins, lifecycle)
   interface/        Express + WebSocket live transcript view
   session.ts       wires every live pipeline stage together

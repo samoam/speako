@@ -626,6 +626,33 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, id);
 
+  -- Reviewer comment threads on a dev cycle's pull request and what the
+  -- feedback loop (src/orchestration/kinds/prFeedbackRun.ts) did with each:
+  -- the triage decision, the reply it posted, whether the thread was resolved.
+  -- One row per thread (root comment) per cycle — a reviewer's follow-up on
+  -- an already-answered thread re-opens that row (status back to 'open',
+  -- new text) rather than creating another.
+  -- status: 'open' (needs a response) | 'triaged' | 'answered'.
+  CREATE TABLE IF NOT EXISTS dev_cycle_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_cycle_id INTEGER NOT NULL REFERENCES dev_cycles(id),
+    root_comment_id INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    text TEXT NOT NULL,
+    anchor_path TEXT,
+    anchor_line INTEGER,
+    round INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    action TEXT,
+    reply TEXT,
+    change_instruction TEXT,
+    reply_comment_id INTEGER,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    handled_at TEXT,
+    UNIQUE(dev_cycle_id, root_comment_id)
+  );
+
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];

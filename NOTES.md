@@ -2105,3 +2105,39 @@ service…" after a restart, plus `git worktree add` of the 15k-file repo) —
 its spawn timeout is 3 min; and the fix agent needs Jenkins' test-report
 messages/stack traces in its prompt — without them it concluded "send me
 the surefire output" and changed nothing.
+
+## Dev cycle: the review-feedback loop (2026-10-02)
+
+After the PR is open the cycle keeps going until it is merged. The
+Bitbucket sync (`syncBitbucket` → `syncDevCyclePullRequests` in
+`src/orchestrator/taskSync.ts`) looks at every active cycle's PR:
+
+- **MERGED** → `closeDevCycle('done')` + a gated `jira_transition` draft to
+  "QA Ready" (subject `<cycleId>:QA Ready`, same draft the lifecycle uses).
+- **DECLINED** → `closeDevCycle('abandoned')`.
+- **OPEN** → the threads *waiting on the author* (`threadsNeedingResponse`
+  in `src/dev/prFeedback.ts`: root comment by someone else, and someone
+  else had the last word — a reply by `bitbucketServerUsername` closes a
+  thread for this purpose, a reviewer follow-up re-opens it) are upserted
+  into `dev_cycle_feedback` (one row per root comment per cycle; a changed
+  thread text re-opens the row) and a `pr_feedback` run starts when there
+  is something new and nothing else is running for the cycle.
+
+The run (`src/orchestration/kinds/prFeedbackRun.ts`): gather_feedback →
+triage (read-only `claude -p` with a JSON schema: per thread `change` |
+`answer`, the reply, change instructions) → implement_feedback (the usual
+background change agent, origin `pr_feedback`; skipped when every thread is
+an answer) → **apply_feedback** (the one gate: replies + diff together;
+`POST /api/jira-implement/:id/feedback/approve`, or the Diff tab's approve
+when there is a diff) → verify_locally → push → post_replies
+(`addPullRequestComment` with `parentId`; `change` threads get
+`resolvePullRequestComment`, which only works for BLOCKER-severity
+comments on Bitbucket 10.2.7 — a non-blocker just stays open with the
+reply) → build_and_test. verify/push/build are skipped when the round
+produced no diff. A red build or local failure hands off to the existing
+fix loop. The UI is the "Review feedback" tab of the Jira-implement view
+(threads, triage, "Check the PR now", "Address feedback", approve).
+
+Unverified as of writing: `resolvePullRequestComment`'s PUT shape
+(`{version, state:'RESOLVED'}`) has not been run against a real blocker
+comment yet — it is wrapped so a failure only logs.

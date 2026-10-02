@@ -1,4 +1,6 @@
 import { isJiraConfigured, getMyOpenJiraIssues, getJiraCommentMentions, JiraTaskMatch } from '../integrations/jiraMcp';
+import { getActiveDevCycles } from '../storage/devCycleRepository';
+import { syncDevCyclePrFeedback } from '../orchestration/kinds/prFeedbackRun';
 import { config } from '../config';
 import { isBitbucketConfigured } from '../integrations/bitbucketServer';
 import { getPullRequestActivity } from '../integrations/bitbucketReviews';
@@ -206,8 +208,21 @@ export function deriveReviewState(pr: Pick<BitbucketPullRequest, 'myApprovalStat
   return 'NEW';
 }
 
+/** Every active dev cycle with an open PR: pick up reviewer threads (start a feedback round) and notice a merge/decline. Per cycle try/catch — one PR's hiccup must not stall the sync. */
+async function syncDevCyclePullRequests(): Promise<void> {
+  for (const cycle of getActiveDevCycles().filter((c) => c.prId)) {
+    try {
+      const outcome = await syncDevCyclePrFeedback(cycle.id);
+      if (outcome !== 'idle') console.log(`[pr-feedback] cycle ${cycle.id} (${cycle.ticketKey}, PR #${cycle.prId}): ${outcome}`);
+    } catch (err: any) {
+      console.error(`[pr-feedback] failed to check PR #${cycle.prId} for cycle ${cycle.id}:`, err.message);
+    }
+  }
+}
+
 async function syncBitbucket(): Promise<void> {
   if (!isBitbucketConfigured()) return;
+  await syncDevCyclePullRequests();
   const activity = await getPullRequestActivity();
   const refs: string[] = [];
   const reviewStateByPr = new Map<string, ReviewState>();
