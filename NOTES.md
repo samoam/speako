@@ -2067,3 +2067,41 @@ the value if disconnects are more/less frequent than expected.
   red build fails the run, the Tests tab shows jenkinsMonitor's
   classification, and /retry re-runs only the build. The step is skipped
   (not failed) when `jenkinsTestJob` is unset.
+
+## Headless `claude --bg` agents: everything that parked one (2026-10-02)
+
+Found by running the dev cycle's fix loop live on ETICK-10176 and dumping
+each agent's terminal (`claude logs <id>` — only readable while the agent
+is alive) before stopping it. The agents registry (`claude agents --json
+--all`) reports `state: blocked` for two unrelated situations:
+- **a permission prompt** (`waitingFor: "permission prompt"`) — a dead end
+  headlessly; the poller stops the agent and fails with the dialog text;
+- **an idle agent that finished its turn** (`waitingFor` empty) — i.e.
+  done, possibly with "I can't fix this without X" as its last message.
+  The poller treats this as finished (diff captured, or failed with the
+  agent's conclusion).
+Each of these prompted an agent at least once, each is now prevented:
+- a Bash command not covered by a per-command allow pattern (compound
+  commands with pipes and a quoted `\|` regex prompted even when every
+  part was listed) → `Bash` is allowed outright; `git commit`/`git push`
+  stay denied and are REFUSED, not prompted (confirmed live);
+- `--worktree` putting the agent under `<main repo>/.claude/worktrees`
+  while launched from a cycle worktree under %TEMP% — the agent's own
+  `cd` and first Edit needed approval → Speako creates a detached scratch
+  worktree itself and launches the agent in it (launch dir == working dir);
+- the repo's project skill (`.claude/skills/run-integration-test`): a
+  per-directory trust dialog ("Claude may use instructions, code, or files
+  from this Skill … don't ask again for <skill> in <dir>") that no tool
+  allow-list satisfies, and a scratch worktree is a new dir every time →
+  `Skill` denied; the preamble tells the agent to run Maven directly;
+- an MCP tool call (`jenkins-acceo — Jenkins Search Jobs`) →
+  `--strict-mcp-config`; the agent then reports no MCP tools (confirmed).
+- `--dangerously-skip-permissions` with `--bg` is refused until the user
+  has accepted the disclaimer once interactively ("--bg with
+  bypassPermissions requires accepting the disclaimer first"); the launcher
+  tries it first and falls back, so accepting it once removes the whole class.
+Also: `claude --bg` can take > 20 s to return (cold "Starting background
+service…" after a restart, plus `git worktree add` of the 15k-file repo) —
+its spawn timeout is 3 min; and the fix agent needs Jenkins' test-report
+messages/stack traces in its prompt — without them it concluded "send me
+the surefire output" and changed nothing.
