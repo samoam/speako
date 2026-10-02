@@ -131,7 +131,7 @@ export type ChangeOutcome = { request: CodeChangeRequest; status: 'ready' | 'fai
  * can't commit, so it must leave its edits in the working tree for Speako
  * to capture, and should prove them with the project's own tests.
  */
-const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already contains the branch's current code at the right commit. Do not fetch, check out, switch or create branches, and do not commit — leave your edits uncommitted in the working tree; they are captured from there. Before you finish, run the project's relevant tests for the files you changed (e.g. the Maven module's tests) and make them pass.
+const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already contains the branch's current code at the right commit. Do not fetch, check out, switch or create branches, and do not commit — leave your edits uncommitted in the working tree; they are captured from there. Project skills are not available in this session; run the build tool directly (e.g. \`mvn -q -pl <module> -Dtest=<TestClass> test\`) to run the relevant tests for the files you changed before you finish, and make them pass.
 
 `;
 

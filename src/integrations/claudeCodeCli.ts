@@ -17,7 +17,14 @@ const execFileAsync = promisify(execFile);
  * later step (applyCodeChangeToRepo/pushRepo below) that Speako's own code
  * runs, never something the agent does on its own.
  */
-const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)'];
+// `Skill` is denied, not allowed: a repo's own skills (.claude/skills/ —
+// officercc ships run-integration-test) are gated by a per-directory trust
+// dialog ("Claude may use instructions, code, or files from this Skill …
+// don't ask again for <skill> in <dir>") that no tool allow-list covers, and
+// an agent's scratch worktree is a new directory every time, so it would
+// always ask (seen live, fix rounds 6 and 7 — round 7 with Skill allowed).
+// Denied, the agent runs Maven/npm itself through Bash instead.
+const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)', 'Skill'];
 
 /**
  * A `--bg` agent is headless: any tool call its permission rules don't
@@ -42,12 +49,7 @@ const DISALLOWED_TOOLS = ['Bash(git commit:*)', 'Bash(git push:*)'];
 // compound command runs unprompted, and `git commit` is REFUSED outright by
 // the deny rule below rather than prompting — the only restriction that
 // actually matters inside a disposable worktree.
-// `Skill` too: a repo can ship project skills (.claude/skills/ — officercc
-// has run-integration-test), the agent reaches for them to run the tests
-// it's asked to run, and invoking a skill is its own permission ("Claude
-// may use instructions, code, or files from this Skill") that neither Bash
-// nor acceptEdits covers — confirmed live, fix round 6 parked on exactly that.
-const ALLOWED_TOOLS = ['Write', 'Edit', 'Read', 'Grep', 'Glob', 'Bash', 'Skill'];
+const ALLOWED_TOOLS = ['Write', 'Edit', 'Read', 'Grep', 'Glob', 'Bash'];
 
 const SPAWN_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 30_000;

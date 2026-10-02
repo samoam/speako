@@ -23,7 +23,7 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
     const lines = (await getBackgroundTaskLogs(cliSessionId)).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
     let idx = -1;
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (/requires approval|Do you want to proceed|Do you want to/i.test(lines[i])) {
+      if (/requires approval|Do you want to proceed|Do you want to|may use instructions, code, or files from this Skill|don.t ask again for/i.test(lines[i])) {
         idx = i;
         break;
       }
@@ -34,7 +34,9 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
     // the rows around the "requires approval" line (tool name, command box),
     // minus box-drawing rules, spinners and the echoed prompt.
     const window = lines.slice(Math.max(0, idx - 14), Math.min(lines.length, idx + 8));
-    const dontAsk = window.map((l) => /don.t ask again for:\s*(.+)$/i.exec(l)?.[1]).find(Boolean);
+    // Two dialog shapes seen live: "don't ask again for: git fetch *" (tool
+    // rule) and "don't ask again for run-integration-test in <dir>" (skill trust).
+    const dontAsk = window.map((l) => /don.t ask again for:?\s*(.+)$/i.exec(l)?.[1]).find(Boolean);
     const context = window
       .filter((l) => !/^[─━═│┃╌╍┄┅\s]*$/u.test(l) && !/^[✻✽✶✳✢·*]\s/u.test(l) && !/Tip:|Esc to cancel|^❯ |^\d\. (Yes|No)/.test(l))
       .map((l) => l.replace(/^[│┃]\s*/, '').replace(/[─━═╌]{3,}/g, '').trim())
