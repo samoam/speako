@@ -159,25 +159,60 @@ const BG_SPAWN_TIMEOUT_MS = 3 * 60 * 1000;
  * very first `cd <own cwd> && …` then needs approval nobody can give (seen
  * live, fix round 4). Passing the main repo root here keeps it inside.
  */
-export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel, extraDirs: string[] = []): Promise<ClaudeCodeTaskHandle> {
+export interface StartClaudeCodeTaskOptions {
+  /** Directories the agent may touch beyond its launch directory (`--add-dir`). */
+  extraDirs?: string[];
+  /**
+   * Let the CLI create a scratch worktree (`--worktree`, the default) or run
+   * the agent right where it's launched. The dev cycle passes false: it
+   * makes the scratch worktree itself, because `--worktree` puts the agent
+   * under <main repo>/.claude/worktrees while the cycle launches from a
+   * worktree under %TEMP%, and `acceptEdits` only auto-accepts edits inside
+   * the launch directory — so the agent's first file edit parked it on a
+   * prompt (seen live, fix round 5, even with --add-dir for the main repo).
+   */
+  useWorktree?: boolean;
+}
+
+/**
+ * Once the user has accepted the CLI's bypass disclaimer (one interactive
+ * `claude --dangerously-skip-permissions`), headless agents run with no
+ * permission prompts at all — the only state in which "a prompt parked the
+ * agent" can't happen. Until then `--bg` refuses that mode with this exact
+ * message (confirmed live), and the launcher falls back to acceptEdits +
+ * the allow-list. Remembered per process so the refusal is paid once.
+ */
+let bypassRefused = false;
+const BYPASS_DISCLAIMER_RE = /requires accepting the disclaimer/i;
+
+export async function startClaudeCodeTask(prompt: string, repoPath: string, model?: ClaudeAgentModel, options: StartClaudeCodeTaskOptions = {}): Promise<ClaudeCodeTaskHandle> {
   trustClaudeWorkspace(repoPath);
+  const baseArgs = [
+    '--bg', prompt,
+    ...(options.useWorktree === false ? [] : ['--worktree']),
+    ...(options.extraDirs ?? []).flatMap((dir) => ['--add-dir', dir]),
+    // Confirmed live that --bg accepts --model (a background session
+    // started and completed with it); the session listing doesn't report
+    // which model actually ran.
+    ...(model ? ['--model', model] : []),
+    // Kept under bypass too: deny rules are what keep the agent from committing/pushing.
+    '--disallowedTools', ...DISALLOWED_TOOLS,
+  ];
+  const launch = (permissionArgs: string[]) => execFileAsync('claude', [...baseArgs, ...permissionArgs], { cwd: repoPath, timeout: BG_SPAWN_TIMEOUT_MS });
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(
-      'claude',
-      [
-        '--bg', prompt, '--worktree',
-        ...extraDirs.flatMap((dir) => ['--add-dir', dir]),
-        // Confirmed live that --bg accepts --model (a background session
-        // started and completed with it); the session listing doesn't report
-        // which model actually ran.
-        ...(model ? ['--model', model] : []),
-        '--permission-mode', 'acceptEdits',
-        '--allowedTools', ...ALLOWED_TOOLS,
-        '--disallowedTools', ...DISALLOWED_TOOLS,
-      ],
-      { cwd: repoPath, timeout: BG_SPAWN_TIMEOUT_MS }
-    ));
+    if (!bypassRefused) {
+      try {
+        ({ stdout } = await launch(['--dangerously-skip-permissions']));
+      } catch (err: any) {
+        if (!BYPASS_DISCLAIMER_RE.test(String(err?.stderr || err?.stdout || err?.message || ''))) throw err;
+        bypassRefused = true;
+        console.warn('[claudeCodeCli] background agents run with permission prompts possible — run `claude --dangerously-skip-permissions` once interactively and accept the disclaimer to let them run unprompted.');
+        ({ stdout } = await launch(['--permission-mode', 'acceptEdits', '--allowedTools', ...ALLOWED_TOOLS]));
+      }
+    } else {
+      ({ stdout } = await launch(['--permission-mode', 'acceptEdits', '--allowedTools', ...ALLOWED_TOOLS]));
+    }
   } catch (err: any) {
     // The prompt is argv, so the raw "Command failed: claude --bg <whole prompt>…" message is useless; say what actually happened.
     const detail = err?.killed ? `did not register a session within ${BG_SPAWN_TIMEOUT_MS / 1000}s` : String(err?.stderr || err?.message || err).trim().split('\n').slice(-3).join(' | ').slice(0, 400);
@@ -240,7 +275,14 @@ export async function stopBackgroundTask(cliSessionId: string): Promise<void> {
 export async function removeAgentScratchWorktree(agentCwd: string, anyWorktreeOfRepo: string): Promise<void> {
   const normalized = agentCwd.replace(/\\/g, '/');
   const match = normalized.match(/\/\.claude\/worktrees\/([^/]+)$/);
-  if (!match) return;
+  // The dev cycle's own scratch worktrees (addWorktreeForExistingBranch with
+  // the 'agent' label) are detached checkouts under %TEMP% — no branch to delete.
+  const speakoScratch = /\/speako-dev-cycle-agent-[^/]+$/.test(normalized);
+  if (!match && !speakoScratch) return;
+  if (speakoScratch || !match) {
+    await removeWorktree(agentCwd, anyWorktreeOfRepo).catch((err: any) => console.error(`[claudeCodeCli] failed to remove agent worktree ${agentCwd}:`, err.message));
+    return;
+  }
   try {
     // removeWorktree retries: right after `claude stop` the agent's process
     // can still hold the directory for a moment (confirmed live: a single

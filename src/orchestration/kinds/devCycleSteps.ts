@@ -136,9 +136,14 @@ const AGENT_PREAMBLE = `You are working in a dedicated git worktree that already
 `;
 
 export async function dispatchClaudeChange(ctx: StepContext<DevCycleBaseState>, cycle: DevCycle, prompt: string, worktreePath: string, origin: CodeChangeOrigin): Promise<ChangeOutcome> {
-  // The cycle worktree lives under %TEMP%; the agent's --worktree scratch
-  // checkout lands under the main repo, so the main repo must be in scope.
-  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, worktreePath, 'sonnet', [cycle.repoPath]);
+  // The agent gets its own detached scratch worktree at the branch's
+  // commit and is launched *in* it — never in `worktreePath` (the cycle's
+  // worktree, where the approved diff is later applied) and never via the
+  // CLI's --worktree (see StartClaudeCodeTaskOptions.useWorktree). The diff
+  // is captured from there and the scratch worktree removed afterwards.
+  ctx.log('Preparing a scratch worktree for the agent…');
+  const agentWorktree = await addWorktreeForExistingBranch(cycle.repoPath, cycle.branchName!, 'agent');
+  const { cliSessionId } = await startClaudeCodeTask(AGENT_PREAMBLE + prompt, agentWorktree, 'sonnet', { useWorktree: false });
   const request = createCodeChangeRequest({ taskId: cycle.taskId ?? undefined, devCycleId: cycle.id, origin, repoName: cycle.repoName, repoPath: worktreePath, cliSessionId });
   let tailingStopped = false;
   let lastLoggedLength = 0;

@@ -29,9 +29,15 @@ async function describeBlockedPrompt(cliSessionId: string): Promise<string> {
       }
     }
     if (idx === -1) return '';
-    // The command box precedes the "requires approval" line; its rows start with "│".
-    const box = lines.slice(Math.max(0, idx - 8), idx).filter((l) => /^│/.test(l)).map((l) => l.replace(/^│\s*/, ''));
-    return (box.join(' ') || lines[idx]).slice(0, 300);
+    // The prompt's own rows (tool name, "Run shell command"/"Edit file", the
+    // command box) precede the "requires approval" line; box-drawing rules
+    // and spinner lines in between carry nothing.
+    const context = lines
+      .slice(Math.max(0, idx - 14), idx)
+      .filter((l) => !/^[─━═│┃╌╍┄┅\s]*$/u.test(l) && !/^[✻✽✶✳✢·*]\s/u.test(l) && !/Tip:/.test(l))
+      .map((l) => l.replace(/^[│┃]\s*/, '').replace(/[─━═╌]{3,}/g, '').trim())
+      .filter(Boolean);
+    return context.join(' | ').slice(0, 600);
   } catch {
     return '';
   }
